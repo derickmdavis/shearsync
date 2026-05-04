@@ -185,6 +185,12 @@ export const stylistsService = {
     };
   },
 
+  assertPublicBookingEnabled(stylist: Row): void {
+    if (!stylist.booking_enabled) {
+      throw new ApiError(400, "Online booking is not enabled for this stylist");
+    }
+  },
+
   async upsertForUser(userId: string, payload: Row): Promise<Row> {
     const existing = await this.getByUserId(userId);
     const cleanedPayload = sanitizeStylistPayload(payload);

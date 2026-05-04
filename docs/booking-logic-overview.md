@@ -63,16 +63,18 @@ Staff can place appointments almost anywhere, as long as they do not overlap ano
 
 ## Public Booking Logic
 
-Public booking uses the public slots endpoint and the final public booking create endpoint.
+Public booking uses intake, client-aware service/slot loading, and the final public booking create endpoint.
 
 ### Public slot generation
 
-The public booking page first requests available slots.
+The public booking page should first run booking intake, then request services and slots with the returned booking context token.
 
 Current behavior:
 
 - requires online booking to be enabled
 - requires the selected service to be active
+- accepts a short-lived booking context token from intake
+- defaults to new-client rules when no booking context token is supplied
 - loads weekly availability windows for the target day
 - generates 15-minute slot starts inside those windows
 - removes slots that violate public booking rules
@@ -156,14 +158,12 @@ Internal booking does not use these windows.
 
 This is intentional, but it means staff can create off-hours bookings unless the UI makes that clear.
 
-### 2. Public slot generation is conservative for returning clients
-
-Public slot generation currently applies new-client slot filtering before the system has fully confirmed whether the guest is returning.
+### 2. Public services and slots depend on intake context
 
 Product impact:
 
-- a returning client may see fewer slots than they should
-- final booking logic can still succeed later if they are matched as returning
+- when the frontend passes the intake token, returning clients get returning-client service and slot behavior
+- when the frontend skips intake or omits the token, the backend intentionally falls back to new-client filtering
 
 ### 3. Overlap protection is enforced in service logic, not by a full DB time-range exclusion rule
 

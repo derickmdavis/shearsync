@@ -1,5 +1,7 @@
 import { ApiError } from "../lib/errors";
 import { maskPhone, normalizePhone } from "../lib/phone";
+import { createPublicBookingContextToken } from "../lib/publicBookingContext";
+import type { PublicBookingIntakeResponse } from "../types/api";
 import type { Row } from "./db";
 import { bookingRulesService } from "./bookingRulesService";
 import { clientsService } from "./clientsService";
@@ -16,31 +18,14 @@ interface BookingBehaviorPreview {
   message: string;
 }
 
-interface BookingIntakeResponse {
+interface BookingIntakeResponse extends PublicBookingIntakeResponse {
   matchStatus: MatchStatus;
-  clientFound: boolean;
-  isExistingClient: boolean;
-  bookingEnabled: boolean;
-  candidateCount?: number;
-  client: {
-    id?: string;
-    firstName: string;
-    lastName: string;
-    email: string | null;
-    phoneMasked: string;
-  };
-  submittedContact: {
-    fullName: string;
-    phoneNormalized: string;
-    email: string | null;
-  };
   recommendedService: {
     serviceId: string;
     serviceName: string;
     reason: RecommendedServiceReason;
   } | null;
   bookingBehavior: BookingBehaviorPreview;
-  nextStep?: "collect_email_or_name";
 }
 
 const normalizeEmail = (value: string | undefined): string | undefined => {
@@ -102,6 +87,7 @@ export const publicBookingIntakeService = {
     const email = normalizeEmail(input.email as string | undefined);
     const parsedName = splitFullName(fullName);
     const userId = stylist.user_id as string;
+    const stylistSlug = stylist.slug as string;
     const bookingRules = await bookingRulesService.getByUserId(userId);
     const requiresNewClientApproval = bookingRules.newClientApprovalRequired;
     const phoneMasked = maskPhone(normalizedPhone);
@@ -111,6 +97,10 @@ export const publicBookingIntakeService = {
         matchStatus: "not_found",
         clientFound: false,
         isExistingClient: false,
+        bookingContextToken: createPublicBookingContextToken({
+          stylistSlug,
+          isExistingClient: false
+        }),
         bookingEnabled,
         client: {
           firstName: parsedName.firstName,
@@ -138,6 +128,10 @@ export const publicBookingIntakeService = {
         matchStatus: "ambiguous",
         clientFound: false,
         isExistingClient: false,
+        bookingContextToken: createPublicBookingContextToken({
+          stylistSlug,
+          isExistingClient: false
+        }),
         bookingEnabled,
         candidateCount: matches.length,
         client: {
@@ -164,6 +158,10 @@ export const publicBookingIntakeService = {
         matchStatus: "not_found",
         clientFound: false,
         isExistingClient: false,
+        bookingContextToken: createPublicBookingContextToken({
+          stylistSlug,
+          isExistingClient: false
+        }),
         bookingEnabled,
         client: {
           firstName: parsedName.firstName,
@@ -188,6 +186,10 @@ export const publicBookingIntakeService = {
       matchStatus: "matched",
       clientFound: true,
       isExistingClient: true,
+      bookingContextToken: createPublicBookingContextToken({
+        stylistSlug,
+        isExistingClient: true
+      }),
       bookingEnabled,
       client: {
         id: matchedClient.id as string,

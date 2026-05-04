@@ -25,6 +25,7 @@ const timeOfDaySchema = z
 const availabilityTimeSchema = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Availability times must use HH:MM");
+const availabilityAudienceSchema = z.enum(["all", "new", "returning"]);
 
 const maxReschedulesSchema = z.union([z.number().int().min(0), z.literal("unlimited"), z.null()]);
 
@@ -70,7 +71,8 @@ export const updateBookingRulesSchema = z.object(
 
 const availabilityWindowSchema = z.object({
   startTime: availabilityTimeSchema,
-  endTime: availabilityTimeSchema
+  endTime: availabilityTimeSchema,
+  clientAudience: availabilityAudienceSchema.default("all")
 });
 
 const availabilityDaySchema = z.object({

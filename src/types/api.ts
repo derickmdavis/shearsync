@@ -10,6 +10,7 @@ export type ReminderChannel = "sms" | "email";
 export type ReminderType = "appointment_reminder" | "follow_up" | "general";
 export type PhotoType = "before" | "after" | "inspiration" | "other";
 export type BookingSettingsMaxReschedules = number | "unlimited";
+export type AvailabilityClientAudience = "all" | "new" | "returning";
 
 export interface BookingCreatedActivityMetadata {
   client_name: string;
@@ -113,6 +114,7 @@ export interface ProfileOverviewDaySummary {
 export interface AvailabilityWindowInput {
   startTime: string;
   endTime: string;
+  clientAudience: AvailabilityClientAudience;
 }
 
 export interface AvailabilityDaySettings {
@@ -210,6 +212,7 @@ export interface PublicBookingIntakeResponse {
   matchStatus: "matched" | "not_found" | "ambiguous";
   clientFound: boolean;
   isExistingClient: boolean;
+  bookingContextToken: string;
   bookingEnabled: boolean;
   candidateCount?: number;
   client: {

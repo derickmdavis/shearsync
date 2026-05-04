@@ -1,7 +1,9 @@
 import { ApiError, requireFound } from "../lib/errors";
+import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 import { supabaseAdmin } from "../lib/supabase";
 import type { ServiceCatalogItem } from "../types/api";
 import type { Row, RowList } from "./db";
+import { bookingRulesService } from "./bookingRulesService";
 import { handleSupabaseError } from "./db";
 import { stylistsService } from "./stylistsService";
 
@@ -64,8 +66,14 @@ const getNextSortOrder = async (userId: string): Promise<number> => {
 };
 
 export const servicesService = {
-  async listActiveByStylistSlug(slug: string): Promise<RowList> {
+  async listActiveByStylistSlug(
+    slug: string,
+    options?: {
+      bookingContextToken?: string;
+    }
+  ): Promise<RowList> {
     const stylist = await stylistsService.getBySlug(slug);
+    stylistsService.assertPublicBookingEnabled(stylist);
 
     const { data, error } = await supabaseAdmin
       .from("services")
@@ -77,7 +85,19 @@ export const servicesService = {
       .order("name", { ascending: true });
 
     handleSupabaseError(error, "Unable to load services");
-    return data ?? [];
+    const services = data ?? [];
+    const bookingContext = resolvePublicBookingContextToken(options?.bookingContextToken, slug);
+
+    if (bookingContext?.isExistingClient) {
+      return services;
+    }
+
+    const bookingRules = await bookingRulesService.getByUserId(stylist.user_id as string);
+    if (!bookingRules.restrictServicesForNewClients || bookingRules.restrictedServiceIds.length === 0) {
+      return services;
+    }
+
+    return services.filter((service) => !bookingRules.restrictedServiceIds.includes(service.id as string));
   },
 
   async getActiveForStylist(userId: string, serviceId: string): Promise<Row | null> {

@@ -155,6 +155,7 @@ create table if not exists public.availability (
   day_of_week integer not null check (day_of_week between 0 and 6),
   start_time time not null,
   end_time time not null,
+  client_audience text not null default 'all' check (client_audience in ('all', 'new', 'returning')),
   is_active boolean default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -173,6 +174,7 @@ create index if not exists booking_rules_user_id_idx on public.booking_rules(use
 create index if not exists services_user_id_active_idx on public.services(user_id, is_active);
 create index if not exists services_user_id_sort_order_idx on public.services(user_id, sort_order);
 create index if not exists availability_user_id_day_idx on public.availability(user_id, day_of_week);
+create index if not exists availability_user_id_day_audience_idx on public.availability(user_id, day_of_week, client_audience);
 create index if not exists activity_events_stylist_occurred_at_idx on public.activity_events(stylist_id, occurred_at desc, id desc);
 create index if not exists activity_events_appointment_id_idx on public.activity_events(appointment_id);
 create index if not exists activity_events_client_id_idx on public.activity_events(client_id);

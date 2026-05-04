@@ -13,12 +13,20 @@ export const publicController = {
   },
 
   async getServices(req: Request, res: Response) {
-    const services = await servicesService.listActiveByStylistSlug(getRequiredParam(req, "slug"));
+    const services = await servicesService.listActiveByStylistSlug(getRequiredParam(req, "slug"), {
+      bookingContextToken: typeof req.query.booking_context_token === "string"
+        ? req.query.booking_context_token
+        : undefined
+    });
     res.json({ data: services });
   },
 
   async getAvailability(req: Request, res: Response) {
-    const availability = await availabilityService.listActiveByStylistSlug(getRequiredParam(req, "slug"));
+    const availability = await availabilityService.listActiveByStylistSlug(getRequiredParam(req, "slug"), {
+      bookingContextToken: typeof req.query.booking_context_token === "string"
+        ? req.query.booking_context_token
+        : undefined
+    });
     res.json({ data: availability });
   },
 
@@ -26,7 +34,10 @@ export const publicController = {
     const availability = await availabilityService.getBookableSlotsByStylistSlug(
       getRequiredParam(req, "slug"),
       req.query.service_id as string,
-      req.query.date as string
+      req.query.date as string,
+      typeof req.query.booking_context_token === "string"
+        ? req.query.booking_context_token
+        : undefined
     );
     res.json({ data: availability });
   },

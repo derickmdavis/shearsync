@@ -11,8 +11,10 @@ import {
   zonedDateTimeToUtc
 } from "../lib/timezone";
 import { ApiError } from "../lib/errors";
+import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 import { supabaseAdmin } from "../lib/supabase";
 import type {
+  AvailabilityClientAudience,
   AvailabilityDaySettings,
   AvailabilitySettingsResponse,
   AvailabilityWindowInput,
@@ -32,6 +34,11 @@ const timeToMinutes = (time: string): number => {
 };
 
 const SLOT_INTERVAL_MINUTES = 15;
+const availabilityAudienceOrder: Record<AvailabilityClientAudience, number> = {
+  all: 0,
+  new: 1,
+  returning: 2
+};
 
 const formatTimeText = (minutes: number): { hour: number; minute: number } => ({
   hour: Math.floor(minutes / 60),
@@ -72,6 +79,7 @@ interface AvailabilityWindow extends Row {
   start_time: string;
   end_time: string;
   is_active?: boolean;
+  client_audience?: AvailabilityClientAudience | null;
 }
 
 interface AppointmentSummary extends Row {
@@ -83,32 +91,51 @@ const dayIndexes = [0, 1, 2, 3, 4, 5, 6];
 
 const formatTimeForApi = (time: string): string => time.slice(0, 5);
 
+const normalizeAvailabilityAudience = (value: unknown): AvailabilityClientAudience =>
+  value === "new" || value === "returning" ? value : "all";
+
+const getAllowedAudiences = (isExistingClient: boolean): AvailabilityClientAudience[] =>
+  isExistingClient ? ["all", "returning"] : ["all", "new"];
+
+const filterWindowsForAudience = (
+  rows: AvailabilityWindow[],
+  isExistingClient: boolean
+): AvailabilityWindow[] => {
+  const allowedAudiences = new Set(getAllowedAudiences(isExistingClient));
+  return rows.filter((row) => allowedAudiences.has(normalizeAvailabilityAudience(row.client_audience)));
+};
+
 const normalizeWindow = (window: AvailabilityWindowInput): AvailabilityWindowInput => ({
   startTime: formatTimeForApi(window.startTime),
-  endTime: formatTimeForApi(window.endTime)
+  endTime: formatTimeForApi(window.endTime),
+  clientAudience: normalizeAvailabilityAudience(window.clientAudience)
 });
 
 const assertValidWindows = (dayOfWeek: number, windows: AvailabilityWindowInput[]) => {
   const normalizedWindows = windows
     .map(normalizeWindow)
-    .sort((left, right) => left.startTime.localeCompare(right.startTime));
+    .sort((left, right) =>
+      availabilityAudienceOrder[left.clientAudience] - availabilityAudienceOrder[right.clientAudience]
+      || left.startTime.localeCompare(right.startTime)
+    );
 
-  for (let index = 0; index < normalizedWindows.length; index += 1) {
-    const window = normalizedWindows[index];
+  const perAudience = new Map<AvailabilityClientAudience, AvailabilityWindowInput[]>();
+
+  for (const window of normalizedWindows) {
+    const audienceWindows = perAudience.get(window.clientAudience) ?? [];
 
     if (timeToMinutes(window.startTime) >= timeToMinutes(window.endTime)) {
       throw new ApiError(400, `Availability window start must be before end for day ${dayOfWeek}`);
     }
 
-    if (index === 0) {
-      continue;
+    const previous = audienceWindows[audienceWindows.length - 1];
+
+    if (previous && timeToMinutes(window.startTime) < timeToMinutes(previous.endTime)) {
+      throw new ApiError(400, `Availability windows cannot overlap for day ${dayOfWeek} and audience ${window.clientAudience}`);
     }
 
-    const previous = normalizedWindows[index - 1];
-
-    if (timeToMinutes(window.startTime) < timeToMinutes(previous.endTime)) {
-      throw new ApiError(400, `Availability windows cannot overlap for day ${dayOfWeek}`);
-    }
+    audienceWindows.push(window);
+    perAudience.set(window.clientAudience, audienceWindows);
   }
 
   return normalizedWindows;
@@ -123,7 +150,10 @@ export const mapAvailabilityRowsToSettings = (
     .sort((left, right) => {
       const leftDay = Number(left.day_of_week ?? 0);
       const rightDay = Number(right.day_of_week ?? 0);
-      return leftDay - rightDay || left.start_time.localeCompare(right.start_time);
+      return leftDay - rightDay
+        || left.start_time.localeCompare(right.start_time)
+        || availabilityAudienceOrder[normalizeAvailabilityAudience(left.client_audience)]
+          - availabilityAudienceOrder[normalizeAvailabilityAudience(right.client_audience)];
     });
 
   const grouped = new Map<number, AvailabilityWindow[]>();
@@ -138,7 +168,8 @@ export const mapAvailabilityRowsToSettings = (
   const days: AvailabilityDaySettings[] = dayIndexes.map((dayOfWeek) => {
     const windows = (grouped.get(dayOfWeek) ?? []).map((row) => ({
       startTime: formatTimeForApi(row.start_time),
-      endTime: formatTimeForApi(row.end_time)
+      endTime: formatTimeForApi(row.end_time),
+      clientAudience: normalizeAvailabilityAudience(row.client_audience)
     }));
 
     return {
@@ -155,8 +186,14 @@ export const mapAvailabilityRowsToSettings = (
 };
 
 export const availabilityService = {
-  async listActiveByStylistSlug(slug: string): Promise<RowList> {
+  async listActiveByStylistSlug(
+    slug: string,
+    options?: {
+      bookingContextToken?: string;
+    }
+  ): Promise<RowList> {
     const stylist = await stylistsService.getBySlug(slug);
+    stylistsService.assertPublicBookingEnabled(stylist);
 
     const { data, error } = await supabaseAdmin
       .from("availability")
@@ -167,10 +204,18 @@ export const availabilityService = {
       .order("start_time", { ascending: true });
 
     handleSupabaseError(error, "Unable to load availability");
-    return data ?? [];
+    const bookingContext = resolvePublicBookingContextToken(options?.bookingContextToken, slug);
+    const isExistingClient = bookingContext?.isExistingClient ?? false;
+    return filterWindowsForAudience((data ?? []) as AvailabilityWindow[], isExistingClient);
   },
 
-  async listActiveForUserOnDay(userId: string, dayOfWeek: number): Promise<AvailabilityWindow[]> {
+  async listActiveForUserOnDay(
+    userId: string,
+    dayOfWeek: number,
+    options?: {
+      isExistingClient?: boolean;
+    }
+  ): Promise<AvailabilityWindow[]> {
     const { data, error } = await supabaseAdmin
       .from("availability")
       .select("*")
@@ -180,7 +225,12 @@ export const availabilityService = {
       .order("start_time", { ascending: true });
 
     handleSupabaseError(error, "Unable to validate availability");
-    return (data ?? []) as AvailabilityWindow[];
+    const rows = (data ?? []) as AvailabilityWindow[];
+    if (options?.isExistingClient === undefined) {
+      return rows;
+    }
+
+    return filterWindowsForAudience(rows, options.isExistingClient);
   },
 
   async getWeeklyForUser(userId: string): Promise<AvailabilitySettingsResponse> {
@@ -200,7 +250,14 @@ export const availabilityService = {
 
   async replaceWeeklyForUser(userId: string, days: AvailabilityDaySettings[]): Promise<AvailabilitySettingsResponse> {
     const dayMap = new Map(days.map((day) => [day.dayOfWeek, day]));
-    const rowsToInsert: Array<{ user_id: string; day_of_week: number; start_time: string; end_time: string; is_active: boolean }> = [];
+    const rowsToInsert: Array<{
+      user_id: string;
+      day_of_week: number;
+      start_time: string;
+      end_time: string;
+      is_active: boolean;
+      client_audience: AvailabilityClientAudience;
+    }> = [];
 
     for (const dayOfWeek of dayIndexes) {
       const day = dayMap.get(dayOfWeek) ?? {
@@ -224,7 +281,8 @@ export const availabilityService = {
           day_of_week: dayOfWeek,
           start_time: window.startTime,
           end_time: window.endTime,
-          is_active: true
+          is_active: true,
+          client_audience: window.clientAudience
         });
       }
     }
@@ -254,12 +312,17 @@ export const availabilityService = {
     return (data ?? []) as AppointmentSummary[];
   },
 
-  async isRequestedTimeAvailable(userId: string, requestedDateTime: string, durationMinutes: number): Promise<boolean> {
+  async isRequestedTimeAvailable(
+    userId: string,
+    requestedDateTime: string,
+    durationMinutes: number,
+    isExistingClient = false
+  ): Promise<boolean> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
     const dayOfWeek = getLocalDayOfWeekForInstant(requestedDateTime, timeZone);
     const requestedMinutes = getMinutesSinceMidnightForInstant(requestedDateTime, timeZone);
     const requestedEndMinutes = requestedMinutes + durationMinutes;
-    const windows = await this.listActiveForUserOnDay(userId, dayOfWeek);
+    const windows = await this.listActiveForUserOnDay(userId, dayOfWeek, { isExistingClient });
 
     return windows.some((window) => {
       const start = timeToMinutes(window.start_time);
@@ -268,8 +331,14 @@ export const availabilityService = {
     });
   },
 
-  async getBookableSlotsByStylistSlug(slug: string, serviceId: string, dateText: string): Promise<PublicAvailabilitySlotsResponse> {
+  async getBookableSlotsByStylistSlug(
+    slug: string,
+    serviceId: string,
+    dateText: string,
+    bookingContextToken?: string
+  ): Promise<PublicAvailabilitySlotsResponse> {
     const stylist = await stylistsService.getBySlug(slug);
+    stylistsService.assertPublicBookingEnabled(stylist);
     const userId = stylist.user_id as string;
     const timeZone = await businessTimeZoneService.getForUser(userId);
     const service = await servicesService.getActiveForStylist(userId, serviceId);
@@ -281,7 +350,9 @@ export const availabilityService = {
     const bookingRules = await bookingRulesService.getByUserId(userId);
     const localDayOfWeek = getLocalDayOfWeekForDate(dateText, timeZone);
     const today = getCurrentLocalDate(timeZone);
-    const windows = await this.listActiveForUserOnDay(userId, localDayOfWeek);
+    const bookingContext = resolvePublicBookingContextToken(bookingContextToken, slug);
+    const isExistingClient = bookingContext?.isExistingClient ?? false;
+    const windows = await this.listActiveForUserOnDay(userId, localDayOfWeek, { isExistingClient });
     const appointments = await this.listActiveAppointmentsForLocalDate(userId, dateText, timeZone);
     const serviceDuration = Number(service.duration_minutes ?? 0);
     const slotStarts = new Set<string>();
@@ -289,7 +360,6 @@ export const availabilityService = {
     const now = new Date();
     const currentLocalDate = getCurrentLocalDate(timeZone, now);
     const currentLocalMinutes = getMinutesSinceMidnightForInstant(now.toISOString(), timeZone);
-    const isExistingClient = false;
 
     for (const window of windows) {
       const windowStart = timeToMinutes(window.start_time);

@@ -152,14 +152,27 @@ Activity metadata is also normalized server-side so the mobile app can inspect t
 Public booking routes:
 
 - `GET /api/public/stylists/:slug`
-- `GET /api/public/services/:slug`
-- `GET /api/public/availability/:slug`
-- `GET /api/public/availability/:slug/slots`
+- `GET /api/public/services/:slug?booking_context_token=...`
+- `GET /api/public/availability/:slug?booking_context_token=...`
+- `GET /api/public/availability/:slug/slots?service_id=...&date=YYYY-MM-DD&booking_context_token=...`
+- `POST /api/public/booking-intake`
 - `POST /api/public/bookings`
 
 ## Public Booking Flow
 
-`POST /api/public/bookings`:
+Recommended public flow:
+
+1. `GET /api/public/stylists/:slug` and read `booking_enabled`.
+2. If `booking_enabled` is `false`, stop the booking flow and show an "online booking unavailable" state.
+3. `POST /api/public/booking-intake` with guest contact details.
+4. Read `isExistingClient`, `bookingContextToken`, and `bookingEnabled` from the response.
+5. If `bookingEnabled` is `false`, stop the booking flow and show an "online booking unavailable" state.
+6. Pass `booking_context_token` into `GET /api/public/services/:slug` so the backend can filter service visibility using returning-client vs new-client rules.
+7. If the UI needs raw weekly windows, pass the same `booking_context_token` into `GET /api/public/availability/:slug` so audience-specific windows are filtered the same way.
+8. Pass the same `booking_context_token` into `GET /api/public/availability/:slug/slots` so slot generation uses the same client-specific rules and client-specific availability windows.
+9. Submit the final booking through `POST /api/public/bookings`.
+
+`POST /api/public/bookings` still re-checks the real client match and booking rules server-side:
 
 1. Finds the stylist by `stylist_slug`.
 2. Confirms online booking is enabled.
@@ -169,6 +182,12 @@ Public booking routes:
 6. Creates a scheduled or pending appointment, depending on booking rules.
 7. Returns a confirmation payload.
 
+The public read endpoints also enforce booking availability now:
+
+- `GET /api/public/services/:slug` returns `400` when `booking_enabled=false`.
+- `GET /api/public/availability/:slug` returns `400` when `booking_enabled=false`.
+- `GET /api/public/availability/:slug/slots` returns `400` when `booking_enabled=false`.
+
 This is intentionally MVP-safe. There is no calendar sync, payment collection, waitlist, or advanced collision logic beyond rejecting an exact appointment datetime conflict.
 
 ## Availability Settings
@@ -177,9 +196,11 @@ The authenticated availability settings API is the source of truth for a stylist
 
 - `GET /api/settings/availability` returns a normalized 7-day weekly schedule plus the business timezone.
 - `PUT /api/settings/availability` replaces the full weekly schedule in one request.
-- `GET /api/public/availability/:slug/slots` uses these stored hours, plus booking rules and existing appointments, to generate bookable public slots.
+- Each saved availability window now includes a `clientAudience` of `all`, `new`, or `returning`.
+- `GET /api/public/availability/:slug/slots` uses these stored hours, plus booking rules, booking context, and existing appointments, to generate bookable public slots.
 
 See [docs/frontend-availability-integration.md](docs/frontend-availability-integration.md) for the full frontend contract and UI integration notes.
+See [docs/frontend-public-booking-client-context-handoff.md](docs/frontend-public-booking-client-context-handoff.md) for the intake token flow the web booking app should use for client-aware services and slots.
 
 See [docs/tiers-overview.md](docs/tiers-overview.md) for the full plan/tier entitlement contract.
 

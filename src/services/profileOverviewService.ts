@@ -36,6 +36,7 @@ interface AvailabilityRow extends Row {
   start_time: string;
   end_time: string;
   is_active: boolean;
+  client_audience?: "all" | "new" | "returning" | null;
 }
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -307,11 +308,11 @@ const buildAvailabilitySummary = (availability: AvailabilityRow[]): ProfileOverv
     return [];
   }
 
-  const perDay = new Map<number, string[]>();
+  const perDay = new Map<number, Set<string>>();
 
   for (const row of activeRows) {
-    const dayHours = perDay.get(row.day_of_week) ?? [];
-    dayHours.push(formatHoursRange(row.start_time, row.end_time));
+    const dayHours = perDay.get(row.day_of_week) ?? new Set<string>();
+    dayHours.add(formatHoursRange(row.start_time, row.end_time));
     perDay.set(row.day_of_week, dayHours);
   }
 
@@ -319,7 +320,7 @@ const buildAvailabilitySummary = (availability: AvailabilityRow[]): ProfileOverv
   const groups: Array<{ startDay: number; endDay: number; hours: string }> = [];
 
   for (const [day, hoursList] of orderedDays) {
-    const hours = hoursList.join(", ");
+    const hours = [...hoursList].join(", ");
     const previous = groups[groups.length - 1];
 
     if (previous && previous.endDay + 1 === day && previous.hours === hours) {

@@ -21,6 +21,12 @@ Use the authenticated availability settings API as the editable source of truth.
 
 Public booking availability is derived from these saved hours. There is no separate public-hours table.
 
+Each availability window now also has a `clientAudience`:
+
+- `all` = bookable for both new and returning clients
+- `new` = bookable only for new clients
+- `returning` = bookable only for returning clients
+
 ## Authentication
 
 These endpoints require the normal authenticated bearer token used by the rest of the private API.
@@ -53,14 +59,14 @@ Returns a full 7-day weekly schedule in normalized order, even if the user has n
         "dayOfWeek": 1,
         "isOpen": true,
         "windows": [
-          { "startTime": "09:00", "endTime": "12:00" },
-          { "startTime": "13:00", "endTime": "17:00" }
+          { "startTime": "09:00", "endTime": "12:00", "clientAudience": "all" },
+          { "startTime": "13:00", "endTime": "17:00", "clientAudience": "returning" }
         ]
       },
-      { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-      { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-      { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-      { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
+      { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "new" }] },
+      { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+      { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+      { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
       { "dayOfWeek": 6, "isOpen": false, "windows": [] }
     ]
   }
@@ -80,17 +86,17 @@ Frontend rule: always send all 7 days.
   "days": [
     { "dayOfWeek": 0, "isOpen": false, "windows": [] },
     {
-      "dayOfWeek": 1,
-      "isOpen": true,
-      "windows": [
-        { "startTime": "09:00", "endTime": "12:00" },
-        { "startTime": "13:00", "endTime": "17:00" }
-      ]
-    },
-    { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-    { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-    { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-    { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
+        "dayOfWeek": 1,
+        "isOpen": true,
+        "windows": [
+          { "startTime": "09:00", "endTime": "12:00", "clientAudience": "all" },
+          { "startTime": "13:00", "endTime": "17:00", "clientAudience": "returning" }
+        ]
+      },
+    { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "new" }] },
+    { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+    { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+    { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
     { "dayOfWeek": 6, "isOpen": false, "windows": [] }
   ]
 }
@@ -107,10 +113,12 @@ The backend enforces the following rules:
 - The request must include exactly 7 day objects.
 - Each `dayOfWeek` must appear exactly once.
 - `startTime` and `endTime` must use 24-hour `HH:MM`.
+- `clientAudience` must be one of `all`, `new`, or `returning`.
 - `isOpen: false` requires `windows: []`.
 - `isOpen: true` requires at least one window.
 - Each window must have `startTime < endTime`.
-- Windows for the same day cannot overlap.
+- Windows for the same day and same `clientAudience` cannot overlap.
+- Overlapping windows are allowed when they belong to different `clientAudience` values.
 - Back-to-back windows are allowed.
 
 ### Example Invalid Payload
@@ -123,8 +131,8 @@ The backend enforces the following rules:
       "dayOfWeek": 1,
       "isOpen": true,
       "windows": [
-        { "startTime": "09:00", "endTime": "12:00" },
-        { "startTime": "11:30", "endTime": "14:00" }
+        { "startTime": "09:00", "endTime": "12:00", "clientAudience": "all" },
+        { "startTime": "11:30", "endTime": "14:00", "clientAudience": "all" }
       ]
     },
     { "dayOfWeek": 2, "isOpen": false, "windows": [] },
@@ -141,7 +149,7 @@ The backend enforces the following rules:
 ```json
 {
   "error": {
-    "message": "Availability windows cannot overlap for day 1"
+    "message": "Availability windows cannot overlap for day 1 and audience all"
   }
 }
 ```
@@ -170,11 +178,11 @@ It now also returns the normalized editable structure:
       "timezone": "America/Denver",
       "days": [
         { "dayOfWeek": 0, "isOpen": false, "windows": [] },
-        { "dayOfWeek": 1, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-        { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-        { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-        { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
-        { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00" }] },
+        { "dayOfWeek": 1, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+        { "dayOfWeek": 2, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+        { "dayOfWeek": 3, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+        { "dayOfWeek": 4, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
+        { "dayOfWeek": 5, "isOpen": true, "windows": [{ "startTime": "09:00", "endTime": "17:00", "clientAudience": "all" }] },
         { "dayOfWeek": 6, "isOpen": false, "windows": [] }
       ]
     }
@@ -202,6 +210,7 @@ type AvailabilityDay = {
   windows: Array<{
     startTime: string; // HH:MM
     endTime: string;   // HH:MM
+    clientAudience: "all" | "new" | "returning";
   }>;
 };
 ```
@@ -210,8 +219,9 @@ Good UI behavior:
 
 - Toggle day open/closed with `isOpen`
 - Allow multiple windows per day
+- Allow audience selection per window
 - Sort windows before save
-- Prevent overlaps client-side before submit
+- Prevent overlaps within the same audience client-side before submit
 - Prevent empty open days client-side before submit
 - Preserve `HH:MM` formatting exactly
 
@@ -227,6 +237,7 @@ Slot generation also filters by:
 - same-day cutoff rules
 - maximum booking window rules
 - new-client booking restrictions
+- client-audience-specific availability windows
 
 That means:
 
@@ -251,4 +262,3 @@ That means:
 - `src/services/profileOverviewService.ts`
 - `src/validators/settingsValidators.ts`
 - `src/types/api.ts`
-

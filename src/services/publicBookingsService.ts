@@ -157,10 +157,7 @@ const validateBookingRules = async ({
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
-
-    if (!stylist.booking_enabled) {
-      throw new ApiError(400, "Online booking is not enabled for this stylist");
-    }
+    stylistsService.assertPublicBookingEnabled(stylist);
 
     const userId = stylist.user_id as string;
     const service = await servicesService.getActiveForStylist(userId, payload.service_id as string);
@@ -193,7 +190,8 @@ export const publicBookingsService = {
     const isAvailable = await availabilityService.isRequestedTimeAvailable(
       userId,
       requestedDateTime,
-      serviceDurationMinutes
+      serviceDurationMinutes,
+      isExistingClient
     );
 
     if (!isAvailable) {

@@ -13,6 +13,7 @@ process.env.AUTH_MODE = process.env.AUTH_MODE ?? "production";
 process.env.SUPABASE_URL = process.env.SUPABASE_URL ?? "https://example.supabase.co";
 process.env.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
+process.env.SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET ?? "test-public-booking-secret";
 
 const { env } = require("../config/env") as typeof import("../config/env");
 const { installMockSupabase } = require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
@@ -31,7 +32,13 @@ const { normalizePhone } = require("../lib/phone") as typeof import("../lib/phon
 const { errorHandler } = require("../middleware/errorHandler") as typeof import("../middleware/errorHandler");
 const { requireAuth } = require("../middleware/auth") as typeof import("../middleware/auth");
 const { validate } = require("../middleware/validate") as typeof import("../middleware/validate");
-const { createPublicBookingIntakeSchema, createPublicBookingSchema, getPublicAvailabilitySlotsSchema } =
+const {
+  createPublicBookingIntakeSchema,
+  createPublicBookingSchema,
+  getPublicAvailabilitySchema,
+  getPublicAvailabilitySlotsSchema,
+  getPublicServicesSchema
+} =
   require("../validators/publicBookingValidators") as typeof import("../validators/publicBookingValidators");
 const { createServiceSchema, reorderServicesSchema, updateServiceSchema } =
   require("../validators/serviceValidators") as typeof import("../validators/serviceValidators");
@@ -155,6 +162,19 @@ const createMockRequest = (overrides: Partial<Request> = {}): Request =>
     },
     ...overrides
   }) as Request;
+
+const withBookingContextTokenPlaceholder = <T extends { data: { bookingContextToken: string } }>(payload: T): T => {
+  assert.equal(typeof payload.data.bookingContextToken, "string");
+  assert.ok(payload.data.bookingContextToken.length > 20);
+
+  return {
+    ...payload,
+    data: {
+      ...payload.data,
+      bookingContextToken: "booking-context-token"
+    }
+  };
+};
 
 const runWithErrorHandler = async (
   callback: (req: Request, res: Response, next: NextFunction) => Promise<void> | void,
@@ -981,6 +1001,170 @@ describe("API handlers", () => {
     }
   });
 
+  it("still returns the public stylist profile when online booking is disabled", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "America/Denver"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: false
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({ params: { slug: "maya-johnson" } });
+      const response = await runWithErrorHandler((request, res) => publicController.getStylist(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        data: {
+          id: "stylist-1",
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          bio: null,
+          cover_photo_url: null,
+          booking_enabled: false,
+          business_name: "Maya Johnson Hair",
+          phone_number: null,
+          timezone: "America/Denver"
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects public services when online booking is disabled", async () => {
+    const supabase = installMockSupabase({
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: false
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        params: { slug: "maya-johnson" },
+        query: getPublicServicesSchema.parse({})
+      });
+      const response = await runWithErrorHandler((request, res) => publicController.getServices(request, res), req);
+
+      assert.equal(response.statusCode, 400);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Online booking is not enabled for this stylist",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects raw public availability when online booking is disabled", async () => {
+    const supabase = installMockSupabase({
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: false
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "17:00:00",
+          is_active: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({ params: { slug: "maya-johnson" } });
+      const response = await runWithErrorHandler((request, res) => publicController.getAvailability(request, res), req);
+
+      assert.equal(response.statusCode, 400);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Online booking is not enabled for this stylist",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects public slots when online booking is disabled", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const supabase = installMockSupabase({
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: false
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        params: { slug: "maya-johnson" },
+        query: getPublicAvailabilitySlotsSchema.parse({
+          service_id: ownedServiceId,
+          date: monday
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => publicController.getAvailabilitySlots(request, res), req);
+
+      assert.equal(response.statusCode, 400);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Online booking is not enabled for this stylist",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("returns backend-generated public slots that fit availability and avoid overlaps", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
@@ -1097,6 +1281,329 @@ describe("API handlers", () => {
     }
   });
 
+  it("filters public services using the booking context token", async () => {
+    const supabase = installMockSupabase({
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: true,
+          restricted_service_ids: [ownedServiceId]
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        },
+        {
+          id: "service-2",
+          user_id: userId,
+          name: "Consultation",
+          duration_minutes: 30,
+          price: 25,
+          is_active: true,
+          is_default: false,
+          sort_order: 2
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ]
+    });
+
+    try {
+      const newClientIntakeRequest = createMockRequest({
+        body: createPublicBookingIntakeSchema.parse({
+          stylist_slug: "maya-johnson",
+          full_name: "New Guest",
+          phone: "(720) 555-0199",
+          email: "new@example.com"
+        })
+      });
+      const newClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        newClientIntakeRequest
+      );
+      const newClientToken = (
+        newClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const returningClientIntakeRequest = createMockRequest({
+        body: createPublicBookingIntakeSchema.parse({
+          stylist_slug: "maya-johnson",
+          full_name: "Jane Smith",
+          phone: "(720) 555-0103",
+          email: "jane@example.com"
+        })
+      });
+      const returningClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        returningClientIntakeRequest
+      );
+      const returningClientToken = (
+        returningClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const newClientServicesResponse = await runWithErrorHandler(
+        (request, res) => publicController.getServices(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicServicesSchema.parse({
+            booking_context_token: newClientToken
+          })
+        })
+      );
+
+      assert.equal(newClientServicesResponse.statusCode, 200);
+      assert.deepEqual(newClientServicesResponse.body, {
+        data: [
+          {
+            id: "service-2",
+            user_id: userId,
+            name: "Consultation",
+            duration_minutes: 30,
+            price: 25,
+            is_active: true,
+            is_default: false,
+            sort_order: 2
+          }
+        ]
+      });
+
+      const returningClientServicesResponse = await runWithErrorHandler(
+        (request, res) => publicController.getServices(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicServicesSchema.parse({
+            booking_context_token: returningClientToken
+          })
+        })
+      );
+
+      assert.equal(returningClientServicesResponse.statusCode, 200);
+      assert.deepEqual(returningClientServicesResponse.body, {
+        data: [
+          {
+            id: ownedServiceId,
+            user_id: userId,
+            name: "Silk Press",
+            duration_minutes: 60,
+            price: 95,
+            is_active: true,
+            is_default: false,
+            sort_order: 1
+          },
+          {
+            id: "service-2",
+            user_id: userId,
+            name: "Consultation",
+            duration_minutes: 30,
+            price: 25,
+            is_active: true,
+            is_default: false,
+            sort_order: 2
+          }
+        ]
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("filters raw public availability using the booking context token", async () => {
+    const supabase = installMockSupabase({
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "10:00:00",
+          is_active: true,
+          client_audience: "all"
+        },
+        {
+          id: "availability-2",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "10:00:00",
+          end_time: "11:00:00",
+          is_active: true,
+          client_audience: "new"
+        },
+        {
+          id: "availability-3",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "11:00:00",
+          end_time: "12:00:00",
+          is_active: true,
+          client_audience: "returning"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ]
+    });
+
+    try {
+      const newClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "New Guest",
+            phone: "(720) 555-0199",
+            email: "new@example.com"
+          })
+        })
+      );
+      const newClientToken = (
+        newClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const returningClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "Jane Smith",
+            phone: "(720) 555-0103",
+            email: "jane@example.com"
+          })
+        })
+      );
+      const returningClientToken = (
+        returningClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const newClientAvailabilityResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailability(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySchema.parse({
+            booking_context_token: newClientToken
+          })
+        })
+      );
+
+      assert.equal(newClientAvailabilityResponse.statusCode, 200);
+      assert.deepEqual(newClientAvailabilityResponse.body, {
+        data: [
+          {
+            id: "availability-1",
+            user_id: userId,
+            day_of_week: 1,
+            start_time: "09:00:00",
+            end_time: "10:00:00",
+            is_active: true,
+            client_audience: "all"
+          },
+          {
+            id: "availability-2",
+            user_id: userId,
+            day_of_week: 1,
+            start_time: "10:00:00",
+            end_time: "11:00:00",
+            is_active: true,
+            client_audience: "new"
+          }
+        ]
+      });
+
+      const returningClientAvailabilityResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailability(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySchema.parse({
+            booking_context_token: returningClientToken
+          })
+        })
+      );
+
+      assert.equal(returningClientAvailabilityResponse.statusCode, 200);
+      assert.deepEqual(returningClientAvailabilityResponse.body, {
+        data: [
+          {
+            id: "availability-1",
+            user_id: userId,
+            day_of_week: 1,
+            start_time: "09:00:00",
+            end_time: "10:00:00",
+            is_active: true,
+            client_audience: "all"
+          },
+          {
+            id: "availability-3",
+            user_id: userId,
+            day_of_week: 1,
+            start_time: "11:00:00",
+            end_time: "12:00:00",
+            is_active: true,
+            client_audience: "returning"
+          }
+        ]
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
 
   it("blocks overlapping appointments instead of only exact timestamp collisions", async () => {
     const appointmentDate = "2026-05-05T10:00:00.000Z";
@@ -1376,6 +1883,551 @@ describe("API handlers", () => {
           ]
         }
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("uses the booking context token to apply returning-client slot rules", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 3650,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: true,
+          restricted_service_ids: [ownedServiceId]
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ]
+    });
+
+    try {
+      const newClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "New Guest",
+            phone: "(720) 555-0199",
+            email: "new@example.com"
+          })
+        })
+      );
+      const newClientToken = (
+        newClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const returningClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "Jane Smith",
+            phone: "(720) 555-0103",
+            email: "jane@example.com"
+          })
+        })
+      );
+      const returningClientToken = (
+        returningClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const newClientSlotsResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailabilitySlots(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySlotsSchema.parse({
+            service_id: ownedServiceId,
+            date: monday,
+            booking_context_token: newClientToken
+          })
+        })
+      );
+
+      assert.equal(newClientSlotsResponse.statusCode, 200);
+      assert.deepEqual(newClientSlotsResponse.body, {
+        data: {
+          date: monday,
+          timezone: "UTC",
+          service: {
+            id: ownedServiceId,
+            name: "Silk Press",
+            duration_minutes: 60,
+            price: 95
+          },
+          slots: []
+        }
+      });
+
+      const returningClientSlotsResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailabilitySlots(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySlotsSchema.parse({
+            service_id: ownedServiceId,
+            date: monday,
+            booking_context_token: returningClientToken
+          })
+        })
+      );
+
+      assert.equal(returningClientSlotsResponse.statusCode, 200);
+      assert.deepEqual(returningClientSlotsResponse.body, {
+        data: {
+          date: monday,
+          timezone: "UTC",
+          service: {
+            id: ownedServiceId,
+            name: "Silk Press",
+            duration_minutes: 60,
+            price: 95
+          },
+          slots: [
+            {
+              start: `${monday}T09:00:00+00:00`,
+              end: `${monday}T10:00:00+00:00`
+            },
+            {
+              start: `${monday}T09:15:00+00:00`,
+              end: `${monday}T10:15:00+00:00`
+            },
+            {
+              start: `${monday}T09:30:00+00:00`,
+              end: `${monday}T10:30:00+00:00`
+            },
+            {
+              start: `${monday}T09:45:00+00:00`,
+              end: `${monday}T10:45:00+00:00`
+            },
+            {
+              start: `${monday}T10:00:00+00:00`,
+              end: `${monday}T11:00:00+00:00`
+            },
+            {
+              start: `${monday}T10:15:00+00:00`,
+              end: `${monday}T11:15:00+00:00`
+            },
+            {
+              start: `${monday}T10:30:00+00:00`,
+              end: `${monday}T11:30:00+00:00`
+            },
+            {
+              start: `${monday}T10:45:00+00:00`,
+              end: `${monday}T11:45:00+00:00`
+            },
+            {
+              start: `${monday}T11:00:00+00:00`,
+              end: `${monday}T12:00:00+00:00`
+            }
+          ]
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("uses audience-specific availability windows for new versus returning clients", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 3650,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "10:00:00",
+          is_active: true,
+          client_audience: "all"
+        },
+        {
+          id: "availability-2",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "10:00:00",
+          end_time: "11:00:00",
+          is_active: true,
+          client_audience: "new"
+        },
+        {
+          id: "availability-3",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "11:00:00",
+          end_time: "12:00:00",
+          is_active: true,
+          client_audience: "returning"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ]
+    });
+
+    try {
+      const newClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "New Guest",
+            phone: "(720) 555-0199",
+            email: "new@example.com"
+          })
+        })
+      );
+      const newClientToken = (
+        newClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const returningClientIntakeResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBookingIntake(request, res),
+        createMockRequest({
+          body: createPublicBookingIntakeSchema.parse({
+            stylist_slug: "maya-johnson",
+            full_name: "Jane Smith",
+            phone: "(720) 555-0103",
+            email: "jane@example.com"
+          })
+        })
+      );
+      const returningClientToken = (
+        returningClientIntakeResponse.body as { data: { bookingContextToken: string } }
+      ).data.bookingContextToken;
+
+      const newClientSlotsResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailabilitySlots(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySlotsSchema.parse({
+            service_id: ownedServiceId,
+            date: monday,
+            booking_context_token: newClientToken
+          })
+        })
+      );
+
+      assert.equal(newClientSlotsResponse.statusCode, 200);
+      assert.deepEqual(newClientSlotsResponse.body, {
+        data: {
+          date: monday,
+          timezone: "UTC",
+          service: {
+            id: ownedServiceId,
+            name: "Silk Press",
+            duration_minutes: 60,
+            price: 95
+          },
+          slots: [
+            {
+              start: `${monday}T09:00:00+00:00`,
+              end: `${monday}T10:00:00+00:00`
+            },
+            {
+              start: `${monday}T10:00:00+00:00`,
+              end: `${monday}T11:00:00+00:00`
+            }
+          ]
+        }
+      });
+
+      const returningClientSlotsResponse = await runWithErrorHandler(
+        (request, res) => publicController.getAvailabilitySlots(request, res),
+        createMockRequest({
+          params: { slug: "maya-johnson" },
+          query: getPublicAvailabilitySlotsSchema.parse({
+            service_id: ownedServiceId,
+            date: monday,
+            booking_context_token: returningClientToken
+          })
+        })
+      );
+
+      assert.equal(returningClientSlotsResponse.statusCode, 200);
+      assert.deepEqual(returningClientSlotsResponse.body, {
+        data: {
+          date: monday,
+          timezone: "UTC",
+          service: {
+            id: ownedServiceId,
+            name: "Silk Press",
+            duration_minutes: 60,
+            price: 95
+          },
+          slots: [
+            {
+              start: `${monday}T09:00:00+00:00`,
+              end: `${monday}T10:00:00+00:00`
+            },
+            {
+              start: `${monday}T11:00:00+00:00`,
+              end: `${monday}T12:00:00+00:00`
+            }
+          ]
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("applies audience-specific availability rules during final public booking creation", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const returningOnlySlotIso = zonedDateTimeToUtc(monday, "UTC", 11, 0, 0, 0).toISOString();
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "10:00:00",
+          is_active: true,
+          client_audience: "all"
+        },
+        {
+          id: "availability-2",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "11:00:00",
+          end_time: "12:00:00",
+          is_active: true,
+          client_audience: "returning"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const newClientResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBooking(request, res),
+        createMockRequest({
+          body: createPublicBookingSchema.parse({
+            stylist_slug: "maya-johnson",
+            service_id: ownedServiceId,
+            requested_datetime: returningOnlySlotIso,
+            guest_first_name: "New",
+            guest_last_name: "Guest",
+            guest_email: "new@example.com",
+            guest_phone: "(720) 555-0199"
+          })
+        })
+      );
+
+      assert.equal(newClientResponse.statusCode, 409);
+      assert.deepEqual(newClientResponse.body, {
+        error: {
+          message: "Requested time is no longer available",
+          details: undefined
+        }
+      });
+
+      const returningClientResponse = await runWithErrorHandler(
+        (request, res) => publicController.createBooking(request, res),
+        createMockRequest({
+          body: createPublicBookingSchema.parse({
+            stylist_slug: "maya-johnson",
+            service_id: ownedServiceId,
+            requested_datetime: returningOnlySlotIso,
+            guest_first_name: "Jane",
+            guest_last_name: "Smith",
+            guest_email: "jane@example.com",
+            guest_phone: "(720) 555-0103"
+          })
+        })
+      );
+
+      assert.equal(returningClientResponse.statusCode, 201);
+      assert.equal((returningClientResponse.body as { data: { appointment_date: string } }).data.appointment_date, returningOnlySlotIso);
     } finally {
       supabase.restore();
     }
@@ -1769,11 +2821,12 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBookingIntake(request, res), req);
 
       assert.equal(response.statusCode, 200);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withBookingContextTokenPlaceholder(response.body as { data: { bookingContextToken: string } }), {
         data: {
           matchStatus: "matched",
           clientFound: true,
           isExistingClient: true,
+          bookingContextToken: "booking-context-token",
           bookingEnabled: true,
           client: {
             id: "client-1",
@@ -1855,11 +2908,12 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBookingIntake(request, res), req);
 
       assert.equal(response.statusCode, 200);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withBookingContextTokenPlaceholder(response.body as { data: { bookingContextToken: string } }), {
         data: {
           matchStatus: "not_found",
           clientFound: false,
           isExistingClient: false,
+          bookingContextToken: "booking-context-token",
           bookingEnabled: true,
           client: {
             firstName: "Jane",
@@ -1951,11 +3005,12 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBookingIntake(request, res), req);
 
       assert.equal(response.statusCode, 200);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withBookingContextTokenPlaceholder(response.body as { data: { bookingContextToken: string } }), {
         data: {
           matchStatus: "ambiguous",
           clientFound: false,
           isExistingClient: false,
+          bookingContextToken: "booking-context-token",
           bookingEnabled: true,
           candidateCount: 2,
           client: {
@@ -3678,9 +4733,33 @@ describe("API handlers", () => {
         }
       ],
       availability: [
-        { id: "a1", user_id: userId, day_of_week: 1, start_time: "09:00:00", end_time: "12:00:00", is_active: true },
-        { id: "a2", user_id: userId, day_of_week: 1, start_time: "13:00:00", end_time: "17:00:00", is_active: true },
-        { id: "a3", user_id: userId, day_of_week: 6, start_time: "10:00:00", end_time: "14:00:00", is_active: true }
+        {
+          id: "a1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true,
+          client_audience: "all"
+        },
+        {
+          id: "a2",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "13:00:00",
+          end_time: "17:00:00",
+          is_active: true,
+          client_audience: "returning"
+        },
+        {
+          id: "a3",
+          user_id: userId,
+          day_of_week: 6,
+          start_time: "10:00:00",
+          end_time: "14:00:00",
+          is_active: true,
+          client_audience: "new"
+        }
       ]
     });
 
@@ -3698,8 +4777,8 @@ describe("API handlers", () => {
               dayOfWeek: 1,
               isOpen: true,
               windows: [
-                { startTime: "09:00", endTime: "12:00" },
-                { startTime: "13:00", endTime: "17:00" }
+                { startTime: "09:00", endTime: "12:00", clientAudience: "all" },
+                { startTime: "13:00", endTime: "17:00", clientAudience: "returning" }
               ]
             },
             { dayOfWeek: 2, isOpen: false, windows: [] },
@@ -3709,7 +4788,7 @@ describe("API handlers", () => {
             {
               dayOfWeek: 6,
               isOpen: true,
-              windows: [{ startTime: "10:00", endTime: "14:00" }]
+              windows: [{ startTime: "10:00", endTime: "14:00", clientAudience: "new" }]
             }
           ]
         }
@@ -3738,11 +4817,18 @@ describe("API handlers", () => {
       const payload = {
         days: [
           { dayOfWeek: 0, isOpen: false, windows: [] },
-          { dayOfWeek: 1, isOpen: true, windows: [{ startTime: "08:30", endTime: "12:00" }] },
-          { dayOfWeek: 2, isOpen: true, windows: [{ startTime: "09:00", endTime: "17:00" }] },
+          {
+            dayOfWeek: 1,
+            isOpen: true,
+            windows: [
+              { startTime: "08:30", endTime: "12:00" },
+              { startTime: "12:00", endTime: "15:00", clientAudience: "returning" }
+            ]
+          },
+          { dayOfWeek: 2, isOpen: true, windows: [{ startTime: "09:00", endTime: "17:00", clientAudience: "new" }] },
           { dayOfWeek: 3, isOpen: true, windows: [{ startTime: "11:00", endTime: "18:00" }] },
           { dayOfWeek: 4, isOpen: false, windows: [] },
-          { dayOfWeek: 5, isOpen: true, windows: [{ startTime: "10:00", endTime: "15:00" }] },
+          { dayOfWeek: 5, isOpen: true, windows: [{ startTime: "10:00", endTime: "15:00", clientAudience: "returning" }] },
           { dayOfWeek: 6, isOpen: false, windows: [] }
         ]
       };
@@ -3767,17 +4853,20 @@ describe("API handlers", () => {
             day_of_week: row.day_of_week,
             start_time: row.start_time,
             end_time: row.end_time,
-            is_active: row.is_active
+            is_active: row.is_active,
+            client_audience: row.client_audience
           }))
           .sort((left, right) =>
             Number(left.day_of_week) - Number(right.day_of_week) ||
-            String(left.start_time).localeCompare(String(right.start_time))
+            String(left.start_time).localeCompare(String(right.start_time)) ||
+            String(left.client_audience).localeCompare(String(right.client_audience))
           ),
         [
-          { day_of_week: 1, start_time: "08:30", end_time: "12:00", is_active: true },
-          { day_of_week: 2, start_time: "09:00", end_time: "17:00", is_active: true },
-          { day_of_week: 3, start_time: "11:00", end_time: "18:00", is_active: true },
-          { day_of_week: 5, start_time: "10:00", end_time: "15:00", is_active: true }
+          { day_of_week: 1, start_time: "08:30", end_time: "12:00", is_active: true, client_audience: "all" },
+          { day_of_week: 1, start_time: "12:00", end_time: "15:00", is_active: true, client_audience: "returning" },
+          { day_of_week: 2, start_time: "09:00", end_time: "17:00", is_active: true, client_audience: "new" },
+          { day_of_week: 3, start_time: "11:00", end_time: "18:00", is_active: true, client_audience: "all" },
+          { day_of_week: 5, start_time: "10:00", end_time: "15:00", is_active: true, client_audience: "returning" }
         ]
       );
     } finally {
@@ -3824,10 +4913,67 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 400);
       assert.deepEqual(response.body, {
         error: {
-          message: "Availability windows cannot overlap for day 1",
+          message: "Availability windows cannot overlap for day 1 and audience all",
           details: undefined
         }
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows overlapping availability windows during replacement when audiences differ", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          timezone: "UTC"
+        }
+      ],
+      availability: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: {
+          days: [
+            { dayOfWeek: 0, isOpen: false, windows: [] },
+            {
+              dayOfWeek: 1,
+              isOpen: true,
+              windows: [
+                { startTime: "09:00", endTime: "12:00", clientAudience: "new" },
+                { startTime: "09:00", endTime: "12:00", clientAudience: "returning" }
+              ]
+            },
+            { dayOfWeek: 2, isOpen: false, windows: [] },
+            { dayOfWeek: 3, isOpen: false, windows: [] },
+            { dayOfWeek: 4, isOpen: false, windows: [] },
+            { dayOfWeek: 5, isOpen: false, windows: [] },
+            { dayOfWeek: 6, isOpen: false, windows: [] }
+          ]
+        }
+      });
+      const response = await runWithErrorHandler((request, res) => settingsController.replaceAvailability(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(
+        supabase.state.availability
+          .filter((row) => row.user_id === userId)
+          .map((row) => ({
+            day_of_week: row.day_of_week,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            client_audience: row.client_audience
+          }))
+          .sort((left, right) => String(left.client_audience).localeCompare(String(right.client_audience))),
+        [
+          { day_of_week: 1, start_time: "09:00", end_time: "12:00", client_audience: "new" },
+          { day_of_week: 1, start_time: "09:00", end_time: "12:00", client_audience: "returning" }
+        ]
+      );
     } finally {
       supabase.restore();
     }
