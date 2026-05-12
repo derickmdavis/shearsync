@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { getRequiredParam } from "../lib/request";
 import { availabilityService } from "../services/availabilityService";
 import { publicBookingIntakeService } from "../services/publicBookingIntakeService";
+import { publicAppointmentManagementService } from "../services/publicAppointmentManagementService";
 import { publicBookingsService } from "../services/publicBookingsService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
@@ -50,5 +51,23 @@ export const publicController = {
   async createBooking(req: Request, res: Response) {
     const confirmation = await publicBookingsService.create(req.body);
     res.status(201).json({ data: confirmation });
+  },
+
+  async getManagedAppointment(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.getManagedAppointment(getRequiredParam(req, "token"));
+    res.json({ data: appointment });
+  },
+
+  async cancelManagedAppointment(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.cancelManagedAppointment(getRequiredParam(req, "token"));
+    res.json({ data: appointment });
+  },
+
+  async rescheduleManagedAppointment(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.rescheduleManagedAppointment(
+      getRequiredParam(req, "token"),
+      req.body
+    );
+    res.json({ data: appointment });
   }
 };

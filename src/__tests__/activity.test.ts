@@ -541,6 +541,90 @@ describe("Activity handlers", () => {
     }
   });
 
+  it("enriches booking activity with current appointment status", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-12T20:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          status: "pending",
+          client_id: clientId,
+          appointment_date: "2026-05-12T15:00:00.000Z"
+        }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          stylist_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "booking_created",
+          title: "Sarah booked Balayage",
+          description: "Appointment scheduled for 3:00 PM",
+          occurred_at: "2026-05-12T18:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Balayage",
+            appointment_start_time: "2026-05-12T15:00:00.000Z"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({}) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as { data: unknown }).data;
+      activityFeedResponseSchema.parse(payload);
+      assert.deepEqual(payload, {
+        groups: [
+          {
+            date: "2026-05-12",
+            label: "Today",
+            summary: {
+              new_bookings: 1,
+              cancellations: 0,
+              reschedules: 0,
+              reminders_sent: 0
+            },
+            events: [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                activity_type: "booking_created",
+                title: "Sarah booked Balayage",
+                description: "Appointment scheduled for 3:00 PM",
+                occurred_at: "2026-05-12T18:00:00.000Z",
+                client_id: clientId,
+                appointment_id: appointmentId,
+                current_appointment_status: "pending",
+                metadata: {
+                  client_name: "Sarah Miller",
+                  service_name: "Balayage",
+                  appointment_start_time: "2026-05-12T15:00:00.000Z",
+                  current_appointment_status: "pending"
+                }
+              }
+            ]
+          }
+        ],
+        next_cursor: null
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
   it("paginates the activity feed with a cursor", async () => {
     const supabase = installMockSupabase({
       users: [

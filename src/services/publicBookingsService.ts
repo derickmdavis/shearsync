@@ -18,6 +18,7 @@ import { servicesService } from "./servicesService";
 import { stylistsService } from "./stylistsService";
 import { usersService } from "./usersService";
 import { publicBookingIntakeService } from "./publicBookingIntakeService";
+import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 
 const timeToMinutes = (time: string): number => {
   const [hours, minutes] = time.split(":").map(Number);
@@ -154,6 +155,40 @@ const validateBookingRules = async ({
   return nextStatus;
 };
 
+const queuePublicBookingEmail = async (
+  userId: string,
+  appointment: Row,
+  recipientEmail?: string | null
+): Promise<void> => {
+  const status = appointment.status as string | undefined;
+
+  if (status === "scheduled") {
+    await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_scheduled", {
+      recipientEmail
+    });
+  }
+
+  if (status === "pending") {
+    await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_pending", {
+      recipientEmail
+    });
+  }
+};
+
+const persistGuestEmailIfMissing = async (
+  userId: string,
+  client: Row,
+  guestEmail?: string
+): Promise<Row> => {
+  const storedEmail = typeof client.email === "string" ? client.email.trim() : "";
+
+  if (!guestEmail || storedEmail.length > 0) {
+    return client;
+  }
+
+  return clientsService.update(userId, client.id as string, { email: guestEmail });
+};
+
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
@@ -198,13 +233,14 @@ export const publicBookingsService = {
       throw new ApiError(409, "Requested time is no longer available");
     }
 
-    const client = matchedClient ?? await clientsService.findOrCreateForBooking(userId, {
+    const resolvedClient = matchedClient ?? await clientsService.findOrCreateForBooking(userId, {
       first_name: payload.guest_first_name,
       last_name: payload.guest_last_name,
       email: normalizedGuestEmail,
       phone: payload.guest_phone,
       notes: payload.notes
     });
+    const client = await persistGuestEmailIfMissing(userId, resolvedClient, normalizedGuestEmail);
 
     try {
       const appointment = await appointmentsService.createForBooking(userId, {
@@ -217,6 +253,8 @@ export const publicBookingsService = {
         status: bookingStatus,
         booking_source: "public"
       });
+
+      await queuePublicBookingEmail(userId, appointment, normalizedGuestEmail);
 
       return buildConfirmation({
         appointment,
@@ -240,6 +278,8 @@ export const publicBookingsService = {
       if (!existingAppointment) {
         throw error;
       }
+
+      await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
 
       return buildConfirmation({
         appointment: existingAppointment,

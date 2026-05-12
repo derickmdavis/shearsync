@@ -46,7 +46,8 @@ export const listActivityQuerySchema = z.object({
 const bookingCreatedMetadataSchema = z.object({
   client_name: z.string().min(1),
   service_name: z.string().min(1),
-  appointment_start_time: isoDateTimeSchema
+  appointment_start_time: isoDateTimeSchema,
+  current_appointment_status: z.enum(["pending", "scheduled", "completed", "cancelled", "no_show"]).optional()
 });
 
 const appointmentCancelledMetadataSchema = z.object({
@@ -76,7 +77,8 @@ const activityEventBaseSchema = z.object({
   description: z.string().nullable(),
   occurred_at: isoDateTimeSchema,
   client_id: z.string().uuid().nullable(),
-  appointment_id: z.string().uuid().nullable()
+  appointment_id: z.string().uuid().nullable(),
+  current_appointment_status: z.enum(["pending", "scheduled", "completed", "cancelled", "no_show"]).optional()
 });
 
 export const activityEventItemSchema = z.discriminatedUnion("activity_type", [

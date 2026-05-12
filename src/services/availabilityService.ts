@@ -25,6 +25,7 @@ import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { bookingRulesService } from "./bookingRulesService";
+import { offDaysService } from "./offDaysService";
 import { servicesService } from "./servicesService";
 import { stylistsService } from "./stylistsService";
 
@@ -319,6 +320,12 @@ export const availabilityService = {
     isExistingClient = false
   ): Promise<boolean> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
+    const localDate = getLocalDateForInstant(requestedDateTime, timeZone);
+
+    if (await offDaysService.isOffDay(userId, localDate)) {
+      return false;
+    }
+
     const dayOfWeek = getLocalDayOfWeekForInstant(requestedDateTime, timeZone);
     const requestedMinutes = getMinutesSinceMidnightForInstant(requestedDateTime, timeZone);
     const requestedEndMinutes = requestedMinutes + durationMinutes;
@@ -352,9 +359,25 @@ export const availabilityService = {
     const today = getCurrentLocalDate(timeZone);
     const bookingContext = resolvePublicBookingContextToken(bookingContextToken, slug);
     const isExistingClient = bookingContext?.isExistingClient ?? false;
+    const isOffDay = await offDaysService.isOffDay(userId, dateText);
+    const serviceDuration = Number(service.duration_minutes ?? 0);
+
+    if (isOffDay) {
+      return {
+        date: dateText,
+        timezone: timeZone,
+        service: {
+          id: service.id as string,
+          name: service.name as string,
+          duration_minutes: serviceDuration,
+          price: Number(service.price ?? 0)
+        },
+        slots: []
+      };
+    }
+
     const windows = await this.listActiveForUserOnDay(userId, localDayOfWeek, { isExistingClient });
     const appointments = await this.listActiveAppointmentsForLocalDate(userId, dateText, timeZone);
-    const serviceDuration = Number(service.duration_minutes ?? 0);
     const slotStarts = new Set<string>();
     const slots: PublicAvailabilitySlot[] = [];
     const now = new Date();

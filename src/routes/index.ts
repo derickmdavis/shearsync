@@ -9,6 +9,8 @@ import { clientActionsRouter } from "./clientActionsRoutes";
 import { clientRouter } from "./clientRoutes";
 import { dashboardRouter } from "./dashboardRoutes";
 import { healthRouter } from "./healthRoutes";
+import { internalRouter } from "./internalRoutes";
+import { offDayRouter } from "./offDayRoutes";
 import { photoRouter } from "./photoRoutes";
 import { profileRouter } from "./profileRoutes";
 import { publicRouter } from "./publicRoutes";
@@ -20,6 +22,7 @@ export const apiRouter = Router();
 
 apiRouter.use(healthRouter);
 apiRouter.use("/api/public", publicRouter);
+apiRouter.use("/internal", internalRouter);
 apiRouter.use("/me", requireAuth);
 apiRouter.use("/api", requireAuth);
 
@@ -33,6 +36,7 @@ apiRouter.use("/api/calendar", calendarRouter);
 apiRouter.use("/api/photos", photoRouter);
 apiRouter.use("/api/reminders", reminderRouter);
 apiRouter.use("/api/dashboard", dashboardRouter);
+apiRouter.use("/api/off-days", offDayRouter);
 apiRouter.use("/api/profile", profileRouter);
 apiRouter.use("/api/services", serviceRouter);
 apiRouter.use("/api/settings", settingsRouter);

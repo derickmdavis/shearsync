@@ -90,6 +90,28 @@ create table if not exists public.activity_events (
   check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent'))
 );
 
+create table if not exists public.appointment_email_events (
+  id uuid primary key default gen_random_uuid(),
+  stylist_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id) on delete cascade,
+  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  email_type text not null,
+  recipient_email text not null,
+  status text not null default 'queued',
+  idempotency_key text not null,
+  provider text,
+  provider_message_id text,
+  template_data jsonb not null default '{}'::jsonb,
+  error text,
+  attempt_count integer not null default 0,
+  last_attempt_at timestamptz,
+  sent_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled')),
+  check (status in ('queued', 'sending', 'sent', 'failed', 'skipped'))
+);
+
 create table if not exists public.stylists (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.users(id) on delete cascade,
@@ -161,6 +183,18 @@ create table if not exists public.availability (
   updated_at timestamptz default now()
 );
 
+create table if not exists public.stylist_off_days (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  date date not null,
+  label text,
+  reason text,
+  is_recurring boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint stylist_off_days_user_date_unique unique (user_id, date)
+);
+
 create index if not exists clients_user_id_idx on public.clients(user_id);
 create index if not exists clients_user_phone_normalized_idx on public.clients(user_id, phone_normalized);
 create index if not exists appointments_user_id_date_idx on public.appointments(user_id, appointment_date);
@@ -175,11 +209,19 @@ create index if not exists services_user_id_active_idx on public.services(user_i
 create index if not exists services_user_id_sort_order_idx on public.services(user_id, sort_order);
 create index if not exists availability_user_id_day_idx on public.availability(user_id, day_of_week);
 create index if not exists availability_user_id_day_audience_idx on public.availability(user_id, day_of_week, client_audience);
+create index if not exists stylist_off_days_user_id_idx on public.stylist_off_days(user_id);
+create index if not exists stylist_off_days_user_date_idx on public.stylist_off_days(user_id, date);
 create index if not exists activity_events_stylist_occurred_at_idx on public.activity_events(stylist_id, occurred_at desc, id desc);
 create index if not exists activity_events_appointment_id_idx on public.activity_events(appointment_id);
 create index if not exists activity_events_client_id_idx on public.activity_events(client_id);
 create index if not exists activity_events_activity_type_idx on public.activity_events(activity_type);
 create unique index if not exists activity_events_stylist_dedupe_key_idx on public.activity_events(stylist_id, dedupe_key);
+create unique index if not exists appointment_email_events_idempotency_key_idx
+  on public.appointment_email_events(idempotency_key);
+create index if not exists appointment_email_events_stylist_status_idx
+  on public.appointment_email_events(stylist_id, status, created_at);
+create index if not exists appointment_email_events_appointment_id_idx
+  on public.appointment_email_events(appointment_id);
 
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
@@ -187,10 +229,12 @@ alter table public.appointments enable row level security;
 alter table public.photos enable row level security;
 alter table public.reminders enable row level security;
 alter table public.activity_events enable row level security;
+alter table public.appointment_email_events enable row level security;
 alter table public.stylists enable row level security;
 alter table public.booking_rules enable row level security;
 alter table public.services enable row level security;
 alter table public.availability enable row level security;
+alter table public.stylist_off_days enable row level security;
 
 do $$
 begin
@@ -205,6 +249,63 @@ begin
       on public.activity_events
       for select
       using (auth.uid() = stylist_id);
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'stylist_off_days'
+      and policyname = 'stylist_off_days_select_own'
+  ) then
+    create policy stylist_off_days_select_own
+      on public.stylist_off_days
+      for select
+      using (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'stylist_off_days'
+      and policyname = 'stylist_off_days_insert_own'
+  ) then
+    create policy stylist_off_days_insert_own
+      on public.stylist_off_days
+      for insert
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'stylist_off_days'
+      and policyname = 'stylist_off_days_update_own'
+  ) then
+    create policy stylist_off_days_update_own
+      on public.stylist_off_days
+      for update
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'stylist_off_days'
+      and policyname = 'stylist_off_days_delete_own'
+  ) then
+    create policy stylist_off_days_delete_own
+      on public.stylist_off_days
+      for delete
+      using (auth.uid() = user_id);
   end if;
 end
 $$;

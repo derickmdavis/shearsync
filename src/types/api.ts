@@ -16,6 +16,7 @@ export interface BookingCreatedActivityMetadata {
   client_name: string;
   service_name: string;
   appointment_start_time: string;
+  current_appointment_status?: AppointmentStatus;
 }
 
 export interface AppointmentCancelledActivityMetadata {
@@ -88,6 +89,16 @@ export interface ServiceCatalogItem {
   description?: string;
   isDefault: boolean;
   sortOrder: number;
+}
+
+export interface OffDay {
+  id: string;
+  date: string;
+  label: string | null;
+  reason: string | null;
+  isRecurring: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProfileOverviewMetric {
@@ -289,6 +300,7 @@ export interface ActivityEventItem {
   occurred_at: string;
   client_id: string | null;
   appointment_id: string | null;
+  current_appointment_status?: AppointmentStatus;
   metadata: ActivityEventMetadata | null;
 }
 

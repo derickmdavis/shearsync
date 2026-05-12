@@ -18,6 +18,7 @@ import type {
   ActivityType,
   AppointmentCancelledActivityMetadata,
   AppointmentRescheduledActivityMetadata,
+  AppointmentStatus,
   BookingCreatedActivityMetadata,
   ReminderChannel,
   ReminderSentActivityMetadata,
@@ -53,9 +54,17 @@ const isUniqueViolation = (error: { code?: string } | null): boolean => error?.c
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+const isAppointmentStatus = (value: unknown): value is AppointmentStatus =>
+  value === "pending"
+  || value === "scheduled"
+  || value === "completed"
+  || value === "cancelled"
+  || value === "no_show";
+
 const normalizeActivityMetadata = (
   activityType: ActivityType,
-  value: unknown
+  value: unknown,
+  currentAppointmentStatus?: AppointmentStatus
 ): ActivityEventMetadata | null => {
   if (!isRecord(value)) {
     return null;
@@ -71,7 +80,8 @@ const normalizeActivityMetadata = (
         return {
           client_name: value.client_name,
           service_name: value.service_name,
-          appointment_start_time: value.appointment_start_time
+          appointment_start_time: value.appointment_start_time,
+          ...(currentAppointmentStatus ? { current_appointment_status: currentAppointmentStatus } : {})
         };
       }
       return null;
@@ -127,18 +137,21 @@ const normalizeActivityMetadata = (
   }
 };
 
-const toRowActivityItem = (row: Row): ActivityEventItem => {
+const toRowActivityItem = (row: Row, appointmentStatuses = new Map<string, AppointmentStatus>()): ActivityEventItem => {
   const activityType = row.activity_type as ActivityType;
+  const appointmentId = typeof row.appointment_id === "string" ? row.appointment_id : null;
+  const currentAppointmentStatus = appointmentId ? appointmentStatuses.get(appointmentId) : undefined;
 
   return {
     id: String(row.id ?? ""),
     activity_type: activityType,
-  title: String(row.title ?? ""),
-  description: typeof row.description === "string" ? row.description : null,
-  occurred_at: String(row.occurred_at ?? ""),
-  client_id: typeof row.client_id === "string" ? row.client_id : null,
-  appointment_id: typeof row.appointment_id === "string" ? row.appointment_id : null,
-    metadata: normalizeActivityMetadata(activityType, row.metadata)
+    title: String(row.title ?? ""),
+    description: typeof row.description === "string" ? row.description : null,
+    occurred_at: String(row.occurred_at ?? ""),
+    client_id: typeof row.client_id === "string" ? row.client_id : null,
+    appointment_id: appointmentId,
+    ...(currentAppointmentStatus ? { current_appointment_status: currentAppointmentStatus } : {}),
+    metadata: normalizeActivityMetadata(activityType, row.metadata, currentAppointmentStatus)
   };
 };
 
@@ -319,6 +332,30 @@ const createReminderSentMetadata = (
   appointment_start_time: appointmentStartTime
 });
 
+const getAppointmentIds = (rows: Row[]): string[] =>
+  [...new Set(rows
+    .map((row) => row.appointment_id)
+    .filter((appointmentId): appointmentId is string => typeof appointmentId === "string"))];
+
+const getAppointmentStatuses = async (stylistId: string, rows: Row[]): Promise<Map<string, AppointmentStatus>> => {
+  const appointmentIds = getAppointmentIds(rows);
+  if (appointmentIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("appointments")
+    .select("id, status")
+    .eq("user_id", stylistId)
+    .in("id", appointmentIds);
+
+  handleSupabaseError(error, "Unable to load activity appointment statuses");
+
+  return new Map(((data ?? []) as Row[])
+    .filter((row) => typeof row.id === "string" && isAppointmentStatus(row.status))
+    .map((row) => [row.id as string, row.status as AppointmentStatus]));
+};
+
 export const activityEventsService = {
   async getFeed(stylistId: string, filters: ActivityFeedFilters): Promise<ActivityFeedResponse> {
     const timeZone = await businessTimeZoneService.getForUser(stylistId);
@@ -349,7 +386,8 @@ export const activityEventsService = {
     const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
     const filteredRows = cursor ? sortedRows.filter((row) => isBeforeCursor(row, cursor)) : sortedRows;
     const pageRows = filteredRows.slice(0, filters.limit);
-    const events = pageRows.map((row) => toRowActivityItem(row));
+    const appointmentStatuses = await getAppointmentStatuses(stylistId, pageRows);
+    const events = pageRows.map((row) => toRowActivityItem(row, appointmentStatuses));
     const nextCursor = filteredRows.length > filters.limit && events.length > 0
       ? encodeCursor(events[events.length - 1] as ActivityEventItem)
       : null;
@@ -363,7 +401,7 @@ export const activityEventsService = {
   async listByAppointment(stylistId: string, appointmentId: string): Promise<ActivityEventItem[]> {
     const { data: appointment, error: appointmentError } = await supabaseAdmin
       .from("appointments")
-      .select("id")
+      .select("id, status")
       .eq("id", appointmentId)
       .eq("user_id", stylistId)
       .maybeSingle();
@@ -380,7 +418,10 @@ export const activityEventsService = {
       .order("id", { ascending: false });
 
     handleSupabaseError(error, "Unable to load appointment activity");
-    return ((data ?? []) as Row[]).sort(compareRowsDescending).map((row) => toRowActivityItem(row));
+    const appointmentStatuses = isAppointmentStatus((appointment as Row).status)
+      ? new Map([[appointmentId, (appointment as Row).status as AppointmentStatus]])
+      : new Map<string, AppointmentStatus>();
+    return ((data ?? []) as Row[]).sort(compareRowsDescending).map((row) => toRowActivityItem(row, appointmentStatuses));
   },
 
   async recordBookingCreated(stylistId: string, appointment: Row): Promise<void> {
@@ -403,7 +444,12 @@ export const activityEventsService = {
     });
   },
 
-  async recordAppointmentCancelled(stylistId: string, before: Row, after: Row): Promise<void> {
+  async recordAppointmentCancelled(
+    stylistId: string,
+    before: Row,
+    after: Row,
+    cancelledBy: AppointmentCancelledActivityMetadata["cancelled_by"] = "stylist"
+  ): Promise<void> {
     const client = await this.getClient(stylistId, before.client_id as string);
     const timeZone = await businessTimeZoneService.getForUser(stylistId);
     const clientNames = createClientNameParts(client);
@@ -418,7 +464,7 @@ export const activityEventsService = {
       title: `${clientNames.shortName} cancelled ${serviceName}`,
       description: `Appointment was scheduled for ${formatLocalDayAndTime(appointmentDate, timeZone)}`,
       occurredAt: String(after.updated_at ?? new Date().toISOString()),
-      metadata: createAppointmentCancelledMetadata(clientNames, serviceName, appointmentDate, "stylist"),
+      metadata: createAppointmentCancelledMetadata(clientNames, serviceName, appointmentDate, cancelledBy),
       dedupeKey: getActivityEventDedupeKey("appointment_cancelled", [String(before.id ?? ""), appointmentDate])
     });
   },

@@ -2,13 +2,14 @@ import { Router } from "express";
 import { publicController } from "../controllers/publicController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
-import { slugParamSchema } from "../validators/common";
+import { publicAppointmentManagementTokenParamSchema, slugParamSchema } from "../validators/common";
 import {
   getPublicAvailabilitySchema,
   createPublicBookingIntakeSchema,
   createPublicBookingSchema,
   getPublicServicesSchema,
-  getPublicAvailabilitySlotsSchema
+  getPublicAvailabilitySlotsSchema,
+  reschedulePublicAppointmentSchema
 } from "../validators/publicBookingValidators";
 
 export const publicRouter = Router();
@@ -35,3 +36,18 @@ publicRouter.post(
   asyncHandler(publicController.createBookingIntake)
 );
 publicRouter.post("/bookings", validate({ body: createPublicBookingSchema }), asyncHandler(publicController.createBooking));
+publicRouter.get(
+  "/appointments/manage/:token",
+  validate({ params: publicAppointmentManagementTokenParamSchema }),
+  asyncHandler(publicController.getManagedAppointment)
+);
+publicRouter.post(
+  "/appointments/manage/:token/cancel",
+  validate({ params: publicAppointmentManagementTokenParamSchema }),
+  asyncHandler(publicController.cancelManagedAppointment)
+);
+publicRouter.post(
+  "/appointments/manage/:token/reschedule",
+  validate({ params: publicAppointmentManagementTokenParamSchema, body: reschedulePublicAppointmentSchema }),
+  asyncHandler(publicController.rescheduleManagedAppointment)
+);

@@ -7,6 +7,7 @@ import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import { activityEventsService } from "./activityEventsService";
+import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
 const appointmentSlotConstraintName = "appointments_user_id_appointment_date_active_idx";
@@ -54,6 +55,10 @@ const toContextTimeRange = (appointment: Row, timeZone: string): { start: string
     end: formatInstantInTimeZoneOffset(getAppointmentEndIso(appointmentDate, durationMinutes), timeZone)
   };
 };
+
+interface AppointmentUpdateOptions {
+  cancelledBy?: "client" | "stylist";
+}
 
 export const appointmentsService = {
   async findMatchingPublicBooking(
@@ -200,7 +205,12 @@ export const appointmentsService = {
     return appointment;
   },
 
-  async update(userId: string, appointmentId: string, updates: Row): Promise<Row> {
+  async update(
+    userId: string,
+    appointmentId: string,
+    updates: Row,
+    options: AppointmentUpdateOptions = {}
+  ): Promise<Row> {
     const existingAppointment = { ...(await this.getOwned(userId, appointmentId)) };
 
     if (updates.client_id) {
@@ -247,7 +257,18 @@ export const appointmentsService = {
       existingAppointment.status !== "cancelled" &&
       updatedAppointment.status === "cancelled"
     ) {
-      await activityEventsService.recordAppointmentCancelled(userId, existingAppointment, updatedAppointment);
+      await activityEventsService.recordAppointmentCancelled(
+        userId,
+        existingAppointment,
+        updatedAppointment,
+        options.cancelledBy ?? "stylist"
+      );
+      await appointmentEmailEventsService.queueAppointmentEmail(
+        userId,
+        updatedAppointment,
+        "appointment_cancelled",
+        { cancelledBy: options.cancelledBy ?? "stylist" }
+      );
       return updatedAppointment;
     }
 
@@ -316,8 +337,14 @@ export const appointmentsService = {
       throw new ApiError(400, "Only pending appointments can be accepted or rejected");
     }
 
-    return this.update(userId, appointmentId, {
+    const updatedAppointment = await this.update(userId, appointmentId, {
       status: decision === "accept" ? "scheduled" : "cancelled"
     });
+
+    if (decision === "accept") {
+      await appointmentEmailEventsService.queueAppointmentEmail(userId, updatedAppointment, "appointment_confirmed");
+    }
+
+    return updatedAppointment;
   }
 };

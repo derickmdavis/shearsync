@@ -41,3 +41,7 @@ export const getPublicAvailabilitySlotsSchema = getCalendarDaySchema.extend({
   service_id: z.string().uuid(),
   booking_context_token: bookingContextTokenSchema
 });
+
+export const reschedulePublicAppointmentSchema = z.object({
+  requested_datetime: isoDateTimeSchema
+});

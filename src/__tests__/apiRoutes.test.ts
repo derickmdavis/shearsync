@@ -53,6 +53,8 @@ const { updateAccountPlanSchema } =
 const { uuidParamSchema } = require("../validators/common") as typeof import("../validators/common");
 const { profileOverviewQuerySchema } =
   require("../validators/profileValidators") as typeof import("../validators/profileValidators");
+const { createPublicAppointmentManagementToken } =
+  require("../lib/publicAppointmentManagement") as typeof import("../lib/publicAppointmentManagement");
 
 const userId = "11111111-1111-1111-1111-111111111111";
 const otherUserId = "22222222-2222-2222-2222-222222222222";
@@ -2538,6 +2540,13 @@ describe("API handlers", () => {
       });
       assert.equal(supabase.state.appointments[0]?.status, "pending");
       assert.equal(supabase.state.clients[0]?.phone_normalized, "+17205550102");
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_pending");
+      assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "new@example.com");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.idempotency_key,
+        `appointment_pending:${supabase.state.appointments[0]?.id}`
+      );
     } finally {
       supabase.restore();
     }
@@ -3334,7 +3343,8 @@ describe("API handlers", () => {
           id: clientId,
           user_id: userId,
           first_name: "Jane",
-          last_name: "Doe"
+          last_name: "Doe",
+          email: "jane@example.com"
         }
       ],
       appointments: [
@@ -3378,6 +3388,13 @@ describe("API handlers", () => {
       assert.equal(
         supabase.state.appointments.find((appointment) => appointment.id === pendingAppointmentId)?.status,
         "scheduled"
+      );
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_confirmed");
+      assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "jane@example.com");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.idempotency_key,
+        `appointment_confirmed:${pendingAppointmentId}`
       );
 
       const rejectReq = createMockRequest({
@@ -3478,7 +3495,7 @@ describe("API handlers", () => {
           user_id: userId,
           first_name: "Jane",
           last_name: "Doe",
-          email: "jane@example.com",
+          email: "old-jane@example.com",
           phone: "720-555-0103",
           phone_normalized: "+17205550103"
         }
@@ -3523,6 +3540,834 @@ describe("API handlers", () => {
       assert.equal(supabase.state.appointments.length, 1);
       assert.equal(supabase.state.appointments[0]?.client_id, "client-1");
       assert.equal(supabase.state.appointments[0]?.booking_source, "public");
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_scheduled");
+      assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "jane@example.com");
+      assert.equal(supabase.state.clients[0]?.email, "old-jane@example.com");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.idempotency_key,
+        `appointment_scheduled:${supabase.state.appointments[0]?.id}`
+      );
+      const templateData = supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>;
+      assert.equal(templateData.business_display_name, "Maya Johnson Hair");
+      assert.equal(templateData.business_name, "Maya Johnson Hair");
+      assert.equal(templateData.stylist_display_name, "Maya Johnson");
+      assert.equal(templateData.business_email, "maya@example.com");
+      assert.equal(templateData.business_timezone, "UTC");
+      assert.equal(templateData.appointment_start_time, requestedDateTime);
+      assert.equal(templateData.appointment_end_time, `${monday}T10:00:00.000Z`);
+      assert.equal(templateData.appointment_end_display, "10:00 AM UTC");
+      assert.match(String(templateData.appointment_time_display), /Monday, .* at 9:00 AM UTC - 10:00 AM UTC/);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("uses the submitted public booking email when an existing matched client has no stored email", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const requestedDateTime = zonedDateTimeToUtc(monday, "UTC", 9, 0, 0, 0).toISOString();
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 3650,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "",
+          phone: "720-555-0103",
+          phone_normalized: "+17205550103"
+        }
+      ],
+      appointments: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.createBooking(request, res),
+        createMockRequest({
+          body: createPublicBookingSchema.parse({
+            stylist_slug: "maya-johnson",
+            service_id: ownedServiceId,
+            requested_datetime: requestedDateTime,
+            guest_first_name: "Jane",
+            guest_last_name: "Doe",
+            guest_email: "jane@example.com",
+            guest_phone: "(720) 555-0103"
+          })
+        })
+      );
+
+      assert.equal(response.statusCode, 201);
+      assert.equal(supabase.state.clients[0]?.email, "jane@example.com");
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "jane@example.com");
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_scheduled");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns a public managed appointment from a valid management token", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const appointmentStartTime = "2099-05-11T15:00:00.000Z";
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({ params: { token } });
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.getManagedAppointment(request, res),
+        req
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        data: {
+          appointment_id: appointmentId,
+          client_id: clientId,
+          stylist_id: userId,
+          stylist_slug: "maya-johnson",
+          stylist_display_name: "Maya Johnson",
+          business_name: "Maya Johnson Hair",
+          client_name: "Jane Doe",
+          service_name: "Silk Press",
+          service_duration_minutes: 60,
+          service_price: 95,
+          appointment_date: appointmentStartTime,
+          appointment_end: "2099-05-11T16:00:00+00:00",
+          business_timezone: "UTC",
+          status: "scheduled",
+          can_cancel: true,
+          can_reschedule: true
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("cancels a public managed appointment from a valid management token", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const appointmentStartTime = "2099-05-11T15:00:00.000Z";
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "pending"
+        }
+      ],
+      activity_events: []
+    });
+
+    try {
+      const req = createMockRequest({ params: { token } });
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.cancelManagedAppointment(request, res),
+        req
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { status: string; can_cancel: boolean } }).data.status, "cancelled");
+      assert.equal((response.body as { data: { status: string; can_cancel: boolean } }).data.can_cancel, false);
+      assert.equal(supabase.state.appointments[0]?.status, "cancelled");
+      assert.equal(supabase.state.activity_events[0]?.activity_type, "appointment_cancelled");
+      assert.deepEqual(supabase.state.activity_events[0]?.metadata, {
+        client_name: "Jane Doe",
+        service_name: "Silk Press",
+        appointment_start_time: appointmentStartTime,
+        cancelled_by: "client"
+      });
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_cancelled");
+      assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "jane@example.com");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.idempotency_key,
+        `appointment_cancelled:${appointmentId}`
+      );
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as { cancelled_by?: string } | undefined)?.cancelled_by,
+        "client"
+      );
+      const templateData = supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>;
+      assert.equal(templateData.business_display_name, "Maya Johnson Hair");
+      assert.equal(templateData.appointment_start_time, appointmentStartTime);
+      assert.equal(templateData.appointment_end_time, "2099-05-11T16:00:00.000Z");
+      assert.match(String(templateData.appointment_time_display), /May 11, 2099 at 3:00 PM UTC - 4:00 PM UTC/);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects expired, mismatched, and cancelled public appointment management links", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const appointmentStartTime = "2099-05-11T15:00:00.000Z";
+    const validShapeWrongClientToken = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId: otherUserId,
+      stylistId: userId,
+      appointmentStartTime
+    });
+    const expiredToken = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: "2020-05-11T15:00:00.000Z"
+    });
+    const cancelledToken = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "cancelled"
+        }
+      ]
+    });
+
+    try {
+      const expiredResponse = await runWithErrorHandler(
+        (request, res) => publicController.getManagedAppointment(request, res),
+        createMockRequest({ params: { token: expiredToken } })
+      );
+      assert.equal(expiredResponse.statusCode, 400);
+      assert.deepEqual(expiredResponse.body, {
+        error: {
+          message: "Appointment management link is invalid or expired",
+          details: undefined
+        }
+      });
+
+      const mismatchResponse = await runWithErrorHandler(
+        (request, res) => publicController.getManagedAppointment(request, res),
+        createMockRequest({ params: { token: validShapeWrongClientToken } })
+      );
+      assert.equal(mismatchResponse.statusCode, 400);
+      assert.deepEqual(mismatchResponse.body, {
+        error: {
+          message: "Appointment management link is invalid or expired",
+          details: undefined
+        }
+      });
+
+      const cancelledResponse = await runWithErrorHandler(
+        (request, res) => publicController.getManagedAppointment(request, res),
+        createMockRequest({ params: { token: cancelledToken } })
+      );
+      assert.equal(cancelledResponse.statusCode, 400);
+      assert.deepEqual(cancelledResponse.body, {
+        error: {
+          message: "Appointment can no longer be managed",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("reschedules a pending public managed appointment and keeps it pending", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const oldStartTime = "2099-05-11T15:00:00.000Z";
+    const newDate = getNextLocalDay("2099-05-12", 1);
+    const requestedDateTime = zonedDateTimeToUtc(newDate, "UTC", 10, 0, 0, 0).toISOString();
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: oldStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 36500,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 0,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: true,
+          new_client_booking_window_days: 36500,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          client_audience: "all",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: oldStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "pending"
+        }
+      ],
+      activity_events: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.rescheduleManagedAppointment(request, res),
+        createMockRequest({
+          params: { token },
+          body: { requested_datetime: requestedDateTime }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { status: string } }).data.status, "pending");
+      assert.equal(supabase.state.appointments[0]?.appointment_date, requestedDateTime);
+      assert.equal(supabase.state.appointments[0]?.status, "pending");
+      assert.equal(supabase.state.activity_events[0]?.activity_type, "appointment_rescheduled");
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_rescheduled");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.idempotency_key,
+        `appointment_rescheduled:${appointmentId}:${requestedDateTime}`
+      );
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as { status?: string } | undefined)?.status,
+        "pending"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("moves a scheduled first appointment back to pending when current rules require new-client approval", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const oldStartTime = "2099-05-11T15:00:00.000Z";
+    const newDate = getNextLocalDay("2099-05-12", 1);
+    const requestedDateTime = zonedDateTimeToUtc(newDate, "UTC", 10, 0, 0, 0).toISOString();
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: oldStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 36500,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 0,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: true,
+          new_client_booking_window_days: 36500,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          client_audience: "all",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: oldStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.rescheduleManagedAppointment(request, res),
+        createMockRequest({
+          params: { token },
+          body: { requested_datetime: requestedDateTime }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { status: string } }).data.status, "pending");
+      assert.equal(supabase.state.appointments[0]?.status, "pending");
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as { status?: string } | undefined)?.status,
+        "pending"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("keeps a completed client's rescheduled appointment scheduled even when new-client approval is enabled", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const completedAppointmentId = "99999999-9999-4999-8999-999999999999";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const oldStartTime = "2099-05-11T15:00:00.000Z";
+    const newDate = getNextLocalDay("2099-05-12", 1);
+    const requestedDateTime = zonedDateTimeToUtc(newDate, "UTC", 10, 0, 0, 0).toISOString();
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: oldStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 36500,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 0,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: true,
+          new_client_booking_window_days: 36500,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          client_audience: "all",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: completedAppointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-05-01T15:00:00.000Z",
+          duration_minutes: 60,
+          service_name: "Trim",
+          price: 65,
+          status: "completed"
+        },
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: oldStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.rescheduleManagedAppointment(request, res),
+        createMockRequest({
+          params: { token },
+          body: { requested_datetime: requestedDateTime }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { status: string } }).data.status, "scheduled");
+      assert.equal(
+        supabase.state.appointments.find((appointment) => appointment.id === appointmentId)?.status,
+        "scheduled"
+      );
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as { status?: string } | undefined)?.status,
+        "scheduled"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects a public managed appointment reschedule when the requested time is unavailable", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const oldStartTime = "2099-05-11T15:00:00.000Z";
+    const newDate = getNextLocalDay("2099-05-12", 1);
+    const requestedDateTime = zonedDateTimeToUtc(newDate, "UTC", 14, 0, 0, 0).toISOString();
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: oldStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 36500,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 0,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 36500,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          client_audience: "all",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: oldStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.rescheduleManagedAppointment(request, res),
+        createMockRequest({
+          params: { token },
+          body: { requested_datetime: requestedDateTime }
+        })
+      );
+
+      assert.equal(response.statusCode, 409);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Requested time is no longer available",
+          details: undefined
+        }
+      });
+      assert.equal(supabase.state.appointments[0]?.appointment_date, oldStartTime);
+      assert.equal(supabase.state.appointment_email_events.length, 0);
     } finally {
       supabase.restore();
     }
