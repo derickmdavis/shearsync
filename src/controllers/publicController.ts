@@ -6,6 +6,7 @@ import { publicAppointmentManagementService } from "../services/publicAppointmen
 import { publicBookingsService } from "../services/publicBookingsService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
+import { waitlistService } from "../services/waitlistService";
 
 export const publicController = {
   async getStylist(req: Request, res: Response) {
@@ -51,6 +52,11 @@ export const publicController = {
   async createBooking(req: Request, res: Response) {
     const confirmation = await publicBookingsService.create(req.body);
     res.status(201).json({ data: confirmation });
+  },
+
+  async createWaitlistEntry(req: Request, res: Response) {
+    const entry = await waitlistService.createPublicWaitlistEntry(getRequiredParam(req, "slug"), req.body);
+    res.status(201).json({ data: entry });
   },
 
   async getManagedAppointment(req: Request, res: Response) {

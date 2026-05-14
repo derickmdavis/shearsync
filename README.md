@@ -155,6 +155,7 @@ Public booking routes:
 - `GET /api/public/services/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug/slots?service_id=...&date=YYYY-MM-DD&booking_context_token=...`
+- `POST /api/public/stylists/:slug/waitlist`
 - `POST /api/public/booking-intake`
 - `POST /api/public/bookings`
 
@@ -162,7 +163,7 @@ Public booking routes:
 
 Recommended public flow:
 
-1. `GET /api/public/stylists/:slug` and read `booking_enabled`.
+1. `GET /api/public/stylists/:slug` and read `booking_enabled` plus `features.waitlistEnabled`.
 2. If `booking_enabled` is `false`, stop the booking flow and show an "online booking unavailable" state.
 3. `POST /api/public/booking-intake` with guest contact details.
 4. Read `isExistingClient`, `bookingContextToken`, and `bookingEnabled` from the response.
@@ -171,6 +172,7 @@ Recommended public flow:
 7. If the UI needs raw weekly windows, pass the same `booking_context_token` into `GET /api/public/availability/:slug` so audience-specific windows are filtered the same way.
 8. Pass the same `booking_context_token` into `GET /api/public/availability/:slug/slots` so slot generation uses the same client-specific rules and client-specific availability windows.
 9. Submit the final booking through `POST /api/public/bookings`.
+10. If the selected day has no useful slots and `features.waitlistEnabled=true`, the client may submit `POST /api/public/stylists/:slug/waitlist`.
 
 `POST /api/public/bookings` still re-checks the real client match and booking rules server-side:
 
@@ -188,7 +190,70 @@ The public read endpoints also enforce booking availability now:
 - `GET /api/public/availability/:slug` returns `400` when `booking_enabled=false`.
 - `GET /api/public/availability/:slug/slots` returns `400` when `booking_enabled=false`.
 
-This is intentionally MVP-safe. There is no calendar sync, payment collection, waitlist, or advanced collision logic beyond rejecting an exact appointment datetime conflict.
+This is intentionally MVP-safe. There is no calendar sync, payment collection, automatic waitlist booking, or advanced collision logic beyond rejecting an exact appointment datetime conflict.
+
+## Waitlist
+
+Waitlist is a plan-gated backend feature for public booking pages. Basic stylists cannot use it; Pro and Premium stylists can. The source of truth is the existing `public.users.plan_tier` field (`basic`, `pro`, `premium`) exposed through the backend entitlement helpers. No Stripe or real subscription lifecycle logic is added.
+
+Database support:
+
+- `public.waitlist_entries` stores one requested date/service/contact row per waitlist request.
+- `user_id` is the stylist/account owner.
+- `client_id` and `service_id` are nullable.
+- Status values are `active`, `contacted`, `booked`, `cancelled`, and `expired`.
+- Source values are `public_booking`, `stylist_created`, and `manual`.
+- RLS policies scope authenticated direct table access to `auth.uid() = user_id`.
+
+Public metadata:
+
+```json
+{
+  "data": {
+    "slug": "maya-johnson",
+    "booking_enabled": true,
+    "features": {
+      "waitlistEnabled": true
+    }
+  }
+}
+```
+
+Public create:
+
+`POST /api/public/stylists/:slug/waitlist`
+
+```json
+{
+  "requestedDate": "2026-06-15",
+  "serviceId": "33333333-3333-4333-8333-333333333333",
+  "requestedTimePreference": "Morning preferred",
+  "clientName": "Ava Martinez",
+  "clientEmail": "ava@example.com",
+  "clientPhone": "(555) 555-1212",
+  "note": "I can come in anytime after 10am."
+}
+```
+
+The backend validates the stylist slug, plan eligibility, requested date in the stylist business timezone, optional service ownership, and at least one email or phone contact. Public callers cannot list waitlist entries.
+
+Authenticated stylist endpoints:
+
+- `GET /api/waitlist?status=active&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&serviceId=uuid&limit=50`
+- `GET /api/waitlist/:id`
+- `POST /api/waitlist`
+- `PATCH /api/waitlist/:id`
+- `DELETE /api/waitlist/:id`
+
+`GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` for Basic accounts. Mutating waitlist routes return `403` for ineligible plans. Cross-stylist access returns `404`.
+
+Current limitations:
+
+- No automatic cancellation matching.
+- No automatic booking from the waitlist.
+- No SMS or email notifications.
+- No Stripe enforcement beyond the existing mocked/backend plan fields.
+- No automated expiration or cleanup.
 
 ## Availability Settings
 

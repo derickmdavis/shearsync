@@ -65,6 +65,7 @@ Response shape:
       "crm": true,
       "emailReminders": true,
       "smsReminders": true,
+      "waitlist": true,
       "customCoverPhoto": true,
       "customSlug": true,
       "googleCalendarSync": true,
@@ -85,6 +86,7 @@ Current feature matrix from `PLAN_CONFIG`:
 | `crm` | true | true | true |
 | `emailReminders` | true | true | true |
 | `smsReminders` | false | true | true |
+| `waitlist` | false | true | true |
 | `customCoverPhoto` | false | true | true |
 | `customSlug` | false | false | true |
 | `googleCalendarSync` | false | false | true |
@@ -98,6 +100,7 @@ Frontend should key off `data.features`, not hardcoded tier comparisons, wheneve
 Recommended gating examples:
 
 - Hide SMS reminder settings when `data.features.smsReminders === false`
+- Hide public booking waitlist CTAs and stylist waitlist management when `data.features.waitlist === false`
 - Hide cover photo editing when `data.features.customCoverPhoto === false`
 - Hide custom booking URL editing when `data.features.customSlug === false`
 - Hide premium-only exports when `data.features.clientExport === false`
@@ -141,12 +144,15 @@ Server-enforced today:
 
 - `customCoverPhoto`
 - `customSlug`
+- Waitlist public creation and authenticated waitlist mutations
 - SMS sending availability via `assertSmsAvailable`
 
 Known enforcement details:
 
 - Updating booking cover photo is blocked unless `customCoverPhoto` is allowed
 - Updating stylist slug is blocked unless `customSlug` is allowed
+- Public waitlist creation and authenticated waitlist mutations are blocked unless `waitlist` is allowed
+- `GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` when `waitlist` is not allowed
 - SMS usage is blocked when the plan does not allow SMS or the monthly cap is exceeded
 - Any `cancelled` plan fails feature-gated checks with `403`
 
@@ -255,6 +261,7 @@ type AccountPlan = {
     crm: boolean;
     emailReminders: boolean;
     smsReminders: boolean;
+    waitlist: boolean;
     customCoverPhoto: boolean;
     customSlug: boolean;
     googleCalendarSync: boolean;
@@ -270,6 +277,7 @@ Use these checks directly:
 
 ```ts
 const canUseSms = plan.features.smsReminders && plan.smsMonthlyLimit > 0;
+const canUseWaitlist = plan.features.waitlist;
 const canEditCoverPhoto = plan.features.customCoverPhoto;
 const canEditBookingSlug = plan.features.customSlug;
 const canExportClients = plan.features.clientExport;

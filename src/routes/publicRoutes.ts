@@ -11,6 +11,7 @@ import {
   getPublicAvailabilitySlotsSchema,
   reschedulePublicAppointmentSchema
 } from "../validators/publicBookingValidators";
+import { createPublicWaitlistEntrySchema } from "../validators/waitlistValidators";
 
 export const publicRouter = Router();
 
@@ -36,6 +37,11 @@ publicRouter.post(
   asyncHandler(publicController.createBookingIntake)
 );
 publicRouter.post("/bookings", validate({ body: createPublicBookingSchema }), asyncHandler(publicController.createBooking));
+publicRouter.post(
+  "/stylists/:slug/waitlist",
+  validate({ params: slugParamSchema, body: createPublicWaitlistEntrySchema }),
+  asyncHandler(publicController.createWaitlistEntry)
+);
 publicRouter.get(
   "/appointments/manage/:token",
   validate({ params: publicAppointmentManagementTokenParamSchema }),

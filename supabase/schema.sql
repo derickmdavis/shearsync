@@ -5,6 +5,11 @@ create table if not exists public.users (
   phone_number text,
   business_name text,
   timezone text not null default 'UTC',
+  plan_tier text not null default 'basic' check (plan_tier in ('basic', 'pro', 'premium')),
+  plan_status text not null default 'active' check (plan_status in ('trialing', 'active', 'past_due', 'cancelled')),
+  sms_monthly_limit integer not null default 0,
+  sms_used_this_month integer not null default 0,
+  plan_updated_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -195,6 +200,32 @@ create table if not exists public.stylist_off_days (
   constraint stylist_off_days_user_date_unique unique (user_id, date)
 );
 
+create table if not exists public.waitlist_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  service_id uuid references public.services(id) on delete set null,
+  requested_date date not null,
+  requested_time_preference text,
+  client_name text not null,
+  client_email text,
+  client_phone text,
+  note text,
+  status text not null default 'active',
+  source text not null default 'public_booking',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint waitlist_entries_status_check
+    check (status in ('active', 'contacted', 'booked', 'cancelled', 'expired')),
+  constraint waitlist_entries_source_check
+    check (source in ('public_booking', 'stylist_created', 'manual')),
+  constraint waitlist_entries_contact_check
+    check (
+      nullif(trim(coalesce(client_email, '')), '') is not null
+      or nullif(trim(coalesce(client_phone, '')), '') is not null
+    )
+);
+
 create index if not exists clients_user_id_idx on public.clients(user_id);
 create index if not exists clients_user_phone_normalized_idx on public.clients(user_id, phone_normalized);
 create index if not exists appointments_user_id_date_idx on public.appointments(user_id, appointment_date);
@@ -211,6 +242,10 @@ create index if not exists availability_user_id_day_idx on public.availability(u
 create index if not exists availability_user_id_day_audience_idx on public.availability(user_id, day_of_week, client_audience);
 create index if not exists stylist_off_days_user_id_idx on public.stylist_off_days(user_id);
 create index if not exists stylist_off_days_user_date_idx on public.stylist_off_days(user_id, date);
+create index if not exists waitlist_entries_user_id_idx on public.waitlist_entries(user_id);
+create index if not exists waitlist_entries_user_date_idx on public.waitlist_entries(user_id, requested_date);
+create index if not exists waitlist_entries_user_status_idx on public.waitlist_entries(user_id, status);
+create index if not exists waitlist_entries_user_created_at_idx on public.waitlist_entries(user_id, created_at desc);
 create index if not exists activity_events_stylist_occurred_at_idx on public.activity_events(stylist_id, occurred_at desc, id desc);
 create index if not exists activity_events_appointment_id_idx on public.activity_events(appointment_id);
 create index if not exists activity_events_client_id_idx on public.activity_events(client_id);
@@ -235,6 +270,7 @@ alter table public.booking_rules enable row level security;
 alter table public.services enable row level security;
 alter table public.availability enable row level security;
 alter table public.stylist_off_days enable row level security;
+alter table public.waitlist_entries enable row level security;
 
 do $$
 begin
@@ -249,6 +285,63 @@ begin
       on public.activity_events
       for select
       using (auth.uid() = stylist_id);
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'waitlist_entries'
+      and policyname = 'waitlist_entries_select_own'
+  ) then
+    create policy waitlist_entries_select_own
+      on public.waitlist_entries
+      for select
+      using (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'waitlist_entries'
+      and policyname = 'waitlist_entries_insert_own'
+  ) then
+    create policy waitlist_entries_insert_own
+      on public.waitlist_entries
+      for insert
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'waitlist_entries'
+      and policyname = 'waitlist_entries_update_own'
+  ) then
+    create policy waitlist_entries_update_own
+      on public.waitlist_entries
+      for update
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'waitlist_entries'
+      and policyname = 'waitlist_entries_delete_own'
+  ) then
+    create policy waitlist_entries_delete_own
+      on public.waitlist_entries
+      for delete
+      using (auth.uid() = user_id);
   end if;
 end
 $$;

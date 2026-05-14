@@ -11,6 +11,7 @@ export type ReminderType = "appointment_reminder" | "follow_up" | "general";
 export type PhotoType = "before" | "after" | "inspiration" | "other";
 export type BookingSettingsMaxReschedules = number | "unlimited";
 export type AvailabilityClientAudience = "all" | "new" | "returning";
+export type WaitlistStatus = "active" | "contacted" | "booked" | "cancelled" | "expired";
 
 export interface BookingCreatedActivityMetadata {
   client_name: string;
@@ -262,6 +263,25 @@ export interface PublicStylistProfile {
   business_name: string | null;
   phone_number: string | null;
   timezone: string;
+  features: {
+    waitlistEnabled: boolean;
+  };
+}
+
+export interface WaitlistEntry {
+  id: string;
+  requestedDate: string;
+  serviceId: string | null;
+  serviceName: string | null;
+  requestedTimePreference: string | null;
+  clientName: string;
+  clientEmail: string | null;
+  clientPhone: string | null;
+  note: string | null;
+  status: WaitlistStatus;
+  source: "public_booking" | "stylist_created" | "manual";
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PublicAvailabilitySlot {

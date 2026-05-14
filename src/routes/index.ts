@@ -17,6 +17,7 @@ import { publicRouter } from "./publicRoutes";
 import { reminderRouter } from "./reminderRoutes";
 import { serviceRouter } from "./serviceRoutes";
 import { settingsRouter } from "./settingsRoutes";
+import { waitlistRouter } from "./waitlistRoutes";
 
 export const apiRouter = Router();
 
@@ -40,3 +41,4 @@ apiRouter.use("/api/off-days", offDayRouter);
 apiRouter.use("/api/profile", profileRouter);
 apiRouter.use("/api/services", serviceRouter);
 apiRouter.use("/api/settings", settingsRouter);
+apiRouter.use("/api/waitlist", waitlistRouter);

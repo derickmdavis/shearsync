@@ -4,6 +4,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { PublicStylistProfile } from "../types/api";
 import type { Row } from "./db";
 import { ApiError } from "../lib/errors";
+import { canUseWaitlist } from "../lib/plans";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { entitlementsService } from "./entitlementsService";
 import { usersService } from "./usersService";
@@ -171,6 +172,7 @@ export const stylistsService = {
   async getPublicProfileBySlug(slug: string): Promise<PublicStylistProfile> {
     const stylist = await this.getBySlug(slug);
     const user = await usersService.getById(stylist.user_id as string);
+    const entitlements = await entitlementsService.getEntitlementsForUser(stylist.user_id as string);
 
     return {
       id: stylist.id as string,
@@ -181,7 +183,10 @@ export const stylistsService = {
       booking_enabled: Boolean(stylist.booking_enabled),
       business_name: (user?.business_name as string | null | undefined) ?? null,
       phone_number: (user?.phone_number as string | null | undefined) ?? null,
-      timezone: resolveBusinessTimeZone(user)
+      timezone: resolveBusinessTimeZone(user),
+      features: {
+        waitlistEnabled: entitlements.status !== "cancelled" && canUseWaitlist(entitlements.tier)
+      }
     };
   },
 

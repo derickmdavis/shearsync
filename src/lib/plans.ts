@@ -6,6 +6,7 @@ export type PlanFeatureKey =
   | "crm"
   | "emailReminders"
   | "smsReminders"
+  | "waitlist"
   | "customCoverPhoto"
   | "customSlug"
   | "googleCalendarSync"
@@ -17,6 +18,7 @@ export interface PlanFeatures {
   crm: boolean;
   emailReminders: boolean;
   smsReminders: boolean;
+  waitlist: boolean;
   customCoverPhoto: boolean;
   customSlug: boolean;
   googleCalendarSync: boolean;
@@ -51,6 +53,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       crm: true,
       emailReminders: true,
       smsReminders: false,
+      waitlist: false,
       customCoverPhoto: false,
       customSlug: false,
       googleCalendarSync: false,
@@ -67,6 +70,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       crm: true,
       emailReminders: true,
       smsReminders: true,
+      waitlist: true,
       customCoverPhoto: true,
       customSlug: false,
       googleCalendarSync: false,
@@ -83,6 +87,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       crm: true,
       emailReminders: true,
       smsReminders: true,
+      waitlist: true,
       customCoverPhoto: true,
       customSlug: true,
       googleCalendarSync: true,
@@ -100,3 +105,5 @@ export const isPlanTier = (value: unknown): value is PlanTier =>
 
 export const isPlanStatus = (value: unknown): value is PlanStatus =>
   value === "trialing" || value === "active" || value === "past_due" || value === "cancelled";
+
+export const canUseWaitlist = (tier: PlanTier): boolean => PLAN_CONFIG[tier].features.waitlist;
