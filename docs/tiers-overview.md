@@ -71,6 +71,12 @@ Response shape:
       "googleCalendarSync": true,
       "weeklyBusinessRecap": true,
       "clientExport": true
+    },
+    "settings": {
+      "waitlistEnabled": true
+    },
+    "effectiveFeatures": {
+      "waitlistEnabled": true
     }
   }
 }
@@ -95,12 +101,14 @@ Current feature matrix from `PLAN_CONFIG`:
 
 ## What Frontend Should Use
 
-Frontend should key off `data.features`, not hardcoded tier comparisons, whenever possible.
+Frontend should key off backend response fields, not hardcoded tier comparisons, whenever possible. Use `data.features` for plan eligibility and `data.effectiveFeatures` when a feature also has user settings or account-status rules.
 
 Recommended gating examples:
 
 - Hide SMS reminder settings when `data.features.smsReminders === false`
-- Hide public booking waitlist CTAs and stylist waitlist management when `data.features.waitlist === false`
+- Hide or upsell stylist waitlist management when `data.features.waitlist === false`
+- Show the stylist waitlist on/off toggle from `data.settings.waitlistEnabled` when `data.features.waitlist === true`
+- Treat authenticated waitlist actions as usable only when `data.effectiveFeatures.waitlistEnabled === true`
 - Hide cover photo editing when `data.features.customCoverPhoto === false`
 - Hide custom booking URL editing when `data.features.customSlug === false`
 - Hide premium-only exports when `data.features.clientExport === false`
@@ -151,8 +159,8 @@ Known enforcement details:
 
 - Updating booking cover photo is blocked unless `customCoverPhoto` is allowed
 - Updating stylist slug is blocked unless `customSlug` is allowed
-- Public waitlist creation and authenticated waitlist mutations are blocked unless `waitlist` is allowed
-- `GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` when `waitlist` is not allowed
+- Public waitlist creation and authenticated waitlist mutations are blocked unless `waitlist` is allowed, the account is not cancelled, and `users.waitlist_enabled=true`
+- `GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` when the effective waitlist feature is not available
 - SMS usage is blocked when the plan does not allow SMS or the monthly cap is exceeded
 - Any `cancelled` plan fails feature-gated checks with `403`
 
@@ -268,6 +276,12 @@ type AccountPlan = {
     weeklyBusinessRecap: boolean;
     clientExport: boolean;
   };
+  settings: {
+    waitlistEnabled: boolean;
+  };
+  effectiveFeatures: {
+    waitlistEnabled: boolean;
+  };
 };
 ```
 
@@ -277,7 +291,8 @@ Use these checks directly:
 
 ```ts
 const canUseSms = plan.features.smsReminders && plan.smsMonthlyLimit > 0;
-const canUseWaitlist = plan.features.waitlist;
+const canShowWaitlistToggle = plan.features.waitlist;
+const canUseWaitlist = plan.effectiveFeatures.waitlistEnabled;
 const canEditCoverPhoto = plan.features.customCoverPhoto;
 const canEditBookingSlug = plan.features.customSlug;
 const canExportClients = plan.features.clientExport;

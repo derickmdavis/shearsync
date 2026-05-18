@@ -41,11 +41,20 @@ export interface ReminderSentActivityMetadata {
   appointment_start_time: string | null;
 }
 
+export interface WaitlistJoinedActivityMetadata {
+  client_name: string;
+  service_name: string | null;
+  requested_date: string;
+  requested_time_preference: string | null;
+  source: "public_booking" | "stylist_created" | "manual";
+}
+
 export type ActivityEventMetadata =
   | BookingCreatedActivityMetadata
   | AppointmentCancelledActivityMetadata
   | AppointmentRescheduledActivityMetadata
-  | ReminderSentActivityMetadata;
+  | ReminderSentActivityMetadata
+  | WaitlistJoinedActivityMetadata;
 
 export interface AuthUser {
   id: string;
@@ -259,6 +268,7 @@ export interface PublicStylistProfile {
   display_name: string;
   bio: string | null;
   cover_photo_url: string | null;
+  instagram: string | null;
   booking_enabled: boolean;
   business_name: string | null;
   phone_number: string | null;
@@ -329,6 +339,7 @@ export interface ActivityGroupSummary {
   cancellations: number;
   reschedules: number;
   reminders_sent: number;
+  waitlist_joins: number;
 }
 
 export interface ActivityDayGroup {
@@ -338,7 +349,17 @@ export interface ActivityDayGroup {
   events: ActivityEventItem[];
 }
 
+export type ActivityFeedCategory = "updates" | "approvals" | "waitlist";
+
+export interface ActivityFeedCounts {
+  updates: number;
+  approvals: number;
+  waitlist: number;
+}
+
 export interface ActivityFeedResponse {
+  category?: ActivityFeedCategory;
+  counts?: ActivityFeedCounts;
   groups: ActivityDayGroup[];
   next_cursor: string | null;
 }

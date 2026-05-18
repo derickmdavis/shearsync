@@ -41,6 +41,12 @@ export interface UserEntitlements {
   smsUsedThisMonth: number;
   smsRemainingThisMonth: number;
   features: PlanFeatures;
+  settings: {
+    waitlistEnabled: boolean;
+  };
+  effectiveFeatures: {
+    waitlistEnabled: boolean;
+  };
 }
 
 export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {

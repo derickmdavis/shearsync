@@ -97,9 +97,10 @@ Authenticated routes:
 
 Client contract notes:
 
+- `GET /api/settings/booking` and `PATCH /api/settings/booking` include the stylist's business booking settings. The booking settings payload accepts optional `instagram`; the backend stores the handle without leading `@`.
 - `GET /api/clients` returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`.
 - `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as `clients_requiring_rebook` in `GET /api/client-actions`.
-- `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
+- `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
 
 Appointment contract notes:
 
@@ -120,11 +121,12 @@ See [docs/frontend-client-actions-integration.md](docs/frontend-client-actions-i
 
 The mobile Activity screen is a business timeline, not a chat inbox.
 
-- `GET /api/activity` returns recent operational events grouped by business-local day.
+- `GET /api/activity` and `GET /api/activity/feed` return recent operational events grouped by business-local day.
 - `GET /api/appointments/:id/activity` returns appointment-specific activity in reverse chronological order for detail/history UI.
-- The response is ordered most recent first and includes per-day summary counts for `new_bookings`, `cancellations`, `reschedules`, and `reminders_sent`.
-- Supported MVP event types are `booking_created`, `appointment_cancelled`, `appointment_rescheduled`, and `reminder_sent`.
-- Query params: `limit`, `cursor`, `activity_type`, `start_date`, `end_date`.
+- The response is ordered most recent first and includes per-day summary counts for `new_bookings`, `cancellations`, `reschedules`, `reminders_sent`, and `waitlist_joins`.
+- Supported MVP event types are `booking_created`, `appointment_cancelled`, `appointment_rescheduled`, `reminder_sent`, and `waitlist_joined`.
+- Query params: `limit`, `cursor`, `category`, `activity_type`, `start_date`, `end_date`.
+- Category feeds support `updates`, `approvals`, and `waitlist`, echo the selected `category`, and include total `counts` for all three categories before pagination.
 - Pagination is cursor-based and paginates by event, not by day-group count.
 
 Activity events are created automatically by backend mutations:
@@ -133,6 +135,7 @@ Activity events are created automatically by backend mutations:
 - Updating an appointment to `status: "cancelled"` inserts `appointment_cancelled`.
 - Changing an appointment's scheduled time inserts `appointment_rescheduled`.
 - Updating a reminder to `status: "sent"` inserts `reminder_sent`.
+- Creating a waitlist entry inserts `waitlist_joined`.
 
 Reminder notes for Activity support:
 
@@ -148,6 +151,7 @@ Activity metadata is also normalized server-side so the mobile app can inspect t
 - `appointment_cancelled`: `client_name`, `service_name`, `appointment_start_time`, `cancelled_by`
 - `appointment_rescheduled`: `client_name`, `service_name`, `old_start_time`, `new_start_time`
 - `reminder_sent`: `client_name`, `channel`, `reminder_type`, `appointment_start_time`
+- `waitlist_joined`: `client_name`, `service_name`, `requested_date`, `requested_time_preference`, `source`
 
 Public booking routes:
 
@@ -194,10 +198,11 @@ This is intentionally MVP-safe. There is no calendar sync, payment collection, a
 
 ## Waitlist
 
-Waitlist is a plan-gated backend feature for public booking pages. Basic stylists cannot use it; Pro and Premium stylists can. The source of truth is the existing `public.users.plan_tier` field (`basic`, `pro`, `premium`) exposed through the backend entitlement helpers. No Stripe or real subscription lifecycle logic is added.
+Waitlist is a plan-gated backend feature for public booking pages with a stylist-controlled on/off setting. Basic stylists cannot use it; Pro and Premium stylists can use it when their plan is not cancelled and `public.users.waitlist_enabled=true`. No Stripe or real subscription lifecycle logic is added.
 
 Database support:
 
+- `public.users.waitlist_enabled` stores the stylist's waitlist toggle. It defaults to `true`.
 - `public.waitlist_entries` stores one requested date/service/contact row per waitlist request.
 - `user_id` is the stylist/account owner.
 - `client_id` and `service_id` are nullable.
@@ -246,6 +251,22 @@ Authenticated stylist endpoints:
 - `DELETE /api/waitlist/:id`
 
 `GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` for Basic accounts. Mutating waitlist routes return `403` for ineligible plans. Cross-stylist access returns `404`.
+
+Stylist settings toggle:
+
+- Read current value with `GET /api/settings/profile` and `data.waitlist_enabled`.
+- Update with `PATCH /api/settings/profile` and body `{ "waitlist_enabled": false }` or `{ "waitlist_enabled": true }`.
+- The account plan endpoint also returns:
+  - `data.features.waitlist`: tier eligibility
+  - `data.settings.waitlistEnabled`: stored stylist toggle
+  - `data.effectiveFeatures.waitlistEnabled`: eligible, not cancelled, and toggled on
+
+Public booking integration:
+
+- Read `GET /api/public/stylists/:slug`.
+- Show public waitlist UI only when `data.booking_enabled === true` and `data.features.waitlistEnabled === true`.
+- Submit public waitlist requests to `POST /api/public/stylists/:slug/waitlist`.
+- Do not insert directly into Supabase from the public frontend; anonymous browser inserts fail RLS by design.
 
 Current limitations:
 

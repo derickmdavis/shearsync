@@ -104,6 +104,18 @@ describe("Activity handlers", () => {
     assert.equal(query.activity_type, "booking_created");
   });
 
+  it("accepts waitlist_joined as a valid activity_type filter", () => {
+    const query = listActivityQuerySchema.parse({ activity_type: "waitlist_joined" });
+    assert.equal(query.activity_type, "waitlist_joined");
+  });
+
+  it("rejects unsupported activity categories", () => {
+    assert.throws(
+      () => listActivityQuerySchema.parse({ category: "all" }),
+      /Invalid enum value/
+    );
+  });
+
   it("rejects appointment_created as an invalid activity_type filter", () => {
     assert.throws(
       () => listActivityQuerySchema.parse({ activity_type: "appointment_created" }),
@@ -456,7 +468,8 @@ describe("Activity handlers", () => {
               new_bookings: 1,
               cancellations: 0,
               reschedules: 0,
-              reminders_sent: 1
+              reminders_sent: 1,
+              waitlist_joins: 0
             },
             events: [
               {
@@ -497,7 +510,8 @@ describe("Activity handlers", () => {
               new_bookings: 0,
               cancellations: 1,
               reschedules: 1,
-              reminders_sent: 0
+              reminders_sent: 0,
+              waitlist_joins: 0
             },
             events: [
               {
@@ -595,7 +609,8 @@ describe("Activity handlers", () => {
               new_bookings: 1,
               cancellations: 0,
               reschedules: 0,
-              reminders_sent: 0
+              reminders_sent: 0,
+              waitlist_joins: 0
             },
             events: [
               {
@@ -867,7 +882,8 @@ describe("Activity handlers", () => {
             new_bookings: 1,
             cancellations: 0,
             reschedules: 0,
-            reminders_sent: 0
+            reminders_sent: 0,
+            waitlist_joins: 0
           },
           events: [
             {
@@ -886,6 +902,395 @@ describe("Activity handlers", () => {
             }
           ]
         }
+      ]);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("filters the activity feed by waitlist_joined", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-12T20:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          stylist_id: userId,
+          activity_type: "waitlist_joined",
+          title: "Ava Martinez joined the waitlist",
+          description: "Requested 2026-05-14 for Color",
+          occurred_at: "2026-05-12T18:00:00.000Z",
+          metadata: {
+            client_name: "Ava Martinez",
+            service_name: "Color",
+            requested_date: "2026-05-14",
+            requested_time_preference: "Morning preferred",
+            source: "public_booking"
+          }
+        },
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          stylist_id: userId,
+          activity_type: "booking_created",
+          title: "Booking event",
+          description: null,
+          occurred_at: "2026-05-12T10:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Balayage",
+            appointment_start_time: "2026-05-12T15:00:00.000Z"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({ activity_type: "waitlist_joined" }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as { data: { groups: Array<{ events: Array<{ activity_type: string; id: string }> }> } }).data;
+      assert.deepEqual(payload.groups, [
+        {
+          date: "2026-05-12",
+          label: "Today",
+          summary: {
+            new_bookings: 0,
+            cancellations: 0,
+            reschedules: 0,
+            reminders_sent: 0,
+            waitlist_joins: 1
+          },
+          events: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              activity_type: "waitlist_joined",
+              title: "Ava Martinez joined the waitlist",
+              description: "Requested 2026-05-14 for Color",
+              occurred_at: "2026-05-12T18:00:00.000Z",
+              client_id: null,
+              appointment_id: null,
+              metadata: {
+                client_name: "Ava Martinez",
+                service_name: "Color",
+                requested_date: "2026-05-14",
+                requested_time_preference: "Morning preferred",
+                source: "public_booking"
+              }
+            }
+          ]
+        }
+      ]);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns waitlist events as a scoped activity category with total counts", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-12T20:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-05-13T15:00:00.000Z",
+          service_name: "Balayage",
+          status: "pending",
+          created_at: "2026-05-12T17:00:00.000Z"
+        }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          stylist_id: userId,
+          activity_type: "waitlist_joined",
+          title: "Ava Martinez joined the waitlist",
+          description: "Requested 2026-05-14 for Color",
+          occurred_at: "2026-05-12T18:00:00.000Z",
+          metadata: {
+            client_name: "Ava Martinez",
+            service_name: "Color",
+            requested_date: "2026-05-14",
+            requested_time_preference: "Morning preferred",
+            source: "public_booking"
+          }
+        },
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          stylist_id: userId,
+          activity_type: "appointment_cancelled",
+          title: "Cancellation event",
+          description: null,
+          occurred_at: "2026-05-12T10:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Balayage",
+            appointment_start_time: "2026-05-12T15:00:00.000Z",
+            cancelled_by: "stylist"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({ category: "waitlist" }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as {
+        data: {
+          category: string;
+          counts: { updates: number; approvals: number; waitlist: number };
+          groups: Array<{ events: Array<{ id: string; activity_type: string }> }>;
+        };
+      }).data;
+      assert.equal(payload.category, "waitlist");
+      assert.deepEqual(payload.counts, {
+        updates: 1,
+        approvals: 1,
+        waitlist: 1
+      });
+      assert.deepEqual(payload.groups[0]?.events.map((event) => [event.id, event.activity_type]), [
+        ["11111111-1111-4111-8111-111111111111", "waitlist_joined"]
+      ]);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns pending appointment approvals as an activity category", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-12T20:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" },
+        { id: secondClientId, user_id: userId, first_name: "Jessica", last_name: "Lane" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-05-14T15:00:00.000Z",
+          service_name: "Balayage",
+          status: "pending",
+          created_at: "2026-05-12T18:00:00.000Z"
+        },
+        {
+          id: secondAppointmentId,
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_date: "2026-05-13T16:00:00.000Z",
+          service_name: "Haircut",
+          status: "scheduled",
+          created_at: "2026-05-12T17:00:00.000Z"
+        }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          stylist_id: userId,
+          activity_type: "reminder_sent",
+          title: "Reminder event",
+          description: null,
+          occurred_at: "2026-05-12T19:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            channel: "sms",
+            reminder_type: "appointment_reminder",
+            appointment_start_time: "2026-05-14T15:00:00.000Z"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({ category: "approvals" }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as { data: unknown }).data;
+      activityFeedResponseSchema.parse(payload);
+      assert.deepEqual(payload, {
+        category: "approvals",
+        counts: {
+          updates: 0,
+          approvals: 1,
+          waitlist: 0
+        },
+        groups: [
+          {
+            date: "2026-05-12",
+            label: "Today",
+            summary: {
+              new_bookings: 1,
+              cancellations: 0,
+              reschedules: 0,
+              reminders_sent: 0,
+              waitlist_joins: 0
+            },
+            events: [
+              {
+                id: appointmentId,
+                activity_type: "booking_created",
+                title: "Sarah booked Balayage",
+                description: "Appointment scheduled for 3:00 PM",
+                occurred_at: "2026-05-12T18:00:00.000Z",
+                client_id: clientId,
+                appointment_id: appointmentId,
+                current_appointment_status: "pending",
+                metadata: {
+                  client_name: "Sarah Miller",
+                  service_name: "Balayage",
+                  appointment_start_time: "2026-05-14T15:00:00.000Z",
+                  current_appointment_status: "pending"
+                }
+              }
+            ]
+          }
+        ],
+        next_cursor: null
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns updates without waitlist joins or pending approval bookings", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-12T20:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          status: "pending",
+          client_id: clientId,
+          appointment_date: "2026-05-12T15:00:00.000Z"
+        },
+        {
+          id: secondAppointmentId,
+          user_id: userId,
+          status: "scheduled",
+          client_id: secondClientId,
+          appointment_date: "2026-05-12T16:00:00.000Z"
+        }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          stylist_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "booking_created",
+          title: "Pending booking event",
+          description: null,
+          occurred_at: "2026-05-12T18:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Balayage",
+            appointment_start_time: "2026-05-12T15:00:00.000Z"
+          }
+        },
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          stylist_id: userId,
+          client_id: secondClientId,
+          appointment_id: secondAppointmentId,
+          activity_type: "booking_created",
+          title: "Scheduled booking event",
+          description: null,
+          occurred_at: "2026-05-12T17:00:00.000Z",
+          metadata: {
+            client_name: "Jessica Lane",
+            service_name: "Haircut",
+            appointment_start_time: "2026-05-12T16:00:00.000Z"
+          }
+        },
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          stylist_id: userId,
+          activity_type: "waitlist_joined",
+          title: "Ava Martinez joined the waitlist",
+          description: "Requested 2026-05-14",
+          occurred_at: "2026-05-12T16:00:00.000Z",
+          metadata: {
+            client_name: "Ava Martinez",
+            service_name: null,
+            requested_date: "2026-05-14",
+            requested_time_preference: null,
+            source: "public_booking"
+          }
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          stylist_id: userId,
+          client_id: secondClientId,
+          appointment_id: secondAppointmentId,
+          activity_type: "reminder_sent",
+          title: "Reminder event",
+          description: null,
+          occurred_at: "2026-05-12T15:00:00.000Z",
+          metadata: {
+            client_name: "Jessica Lane",
+            channel: "sms",
+            reminder_type: "appointment_reminder",
+            appointment_start_time: "2026-05-12T16:00:00.000Z"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({ category: "updates" }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as {
+        data: {
+          category: string;
+          counts: { updates: number; approvals: number; waitlist: number };
+          groups: Array<{ events: Array<{ id: string }> }>;
+        };
+      }).data;
+      assert.equal(payload.category, "updates");
+      assert.deepEqual(payload.counts, {
+        updates: 1,
+        approvals: 1,
+        waitlist: 1
+      });
+      assert.deepEqual(payload.groups[0]?.events.map((event) => event.id), [
+        "22222222-2222-4222-8222-222222222222"
       ]);
     } finally {
       supabase.restore();

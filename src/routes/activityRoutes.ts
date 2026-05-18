@@ -7,3 +7,4 @@ import { listActivityQuerySchema } from "../validators/activityValidators";
 export const activityRouter = Router();
 
 activityRouter.get("/", validate({ query: listActivityQuerySchema }), asyncHandler(activityController.list));
+activityRouter.get("/feed", validate({ query: listActivityQuerySchema }), asyncHandler(activityController.list));

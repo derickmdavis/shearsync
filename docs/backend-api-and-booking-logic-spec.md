@@ -419,16 +419,19 @@ There are two active patterns:
 
 Only the activity feed is paginated.
 
-- `GET /api/activity`
+- `GET /api/activity` or `GET /api/activity/feed`
 - query `limit`, default 25, max 100
 - query `cursor`
+- query `category` for tabbed feeds: `updates`, `approvals`, or `waitlist`
 - cursor is a base64url-encoded JSON payload of:
   - `occurred_at`
   - `id`
+  - `category` when generated for a category-scoped feed
 
 Important implementation detail:
 
 - the service fetches all matching events first, then applies cursor slicing in memory
+- category filters are applied before cursor slicing
 - pagination is by event count, not by day-group count
 
 ### Date and time serialization
@@ -473,6 +476,7 @@ Fields actively used by code:
 - `plan_status` (referenced by code; not in checked-in base schema)
 - `sms_monthly_limit` (referenced by code; not in checked-in base schema)
 - `sms_used_this_month` (referenced by code; not in checked-in base schema)
+- `waitlist_enabled`
 - `plan_updated_at` (written by code; not in checked-in base schema)
 
 Relationships:
@@ -488,6 +492,7 @@ Important notes:
 
 - `usersService.ensureAuthUser()` lazily creates the row with `id` and `email`.
 - `resolveBusinessTimeZone()` falls back to `"UTC"` if timezone is missing or invalid.
+- `waitlist_enabled` is the stylist-controlled waitlist on/off setting. It defaults to `true` for backwards compatibility, but the public waitlist is only effectively enabled when the plan allows waitlist, `plan_status != "cancelled"`, and `waitlist_enabled = true`.
 
 ### `public.stylists`
 
@@ -503,6 +508,7 @@ Fields actively used:
 - `display_name`
 - `bio`
 - `cover_photo_url`
+- `instagram`
 - `booking_enabled`
 
 Relationships:
@@ -967,6 +973,14 @@ All route declarations are defined in `src/routes/*`. Controllers are in `src/co
   - `smsUsedThisMonth`
   - `smsRemainingThisMonth`
   - `features`
+  - `settings.waitlistEnabled`
+  - `effectiveFeatures.waitlistEnabled`
+
+Important waitlist distinction:
+
+- `features.waitlist` means the user's current tier is allowed to use waitlist.
+- `settings.waitlistEnabled` mirrors `users.waitlist_enabled`, the stylist-controlled toggle.
+- `effectiveFeatures.waitlistEnabled` is what the product should treat as usable for authenticated waitlist UI. It is `true` only when the plan allows waitlist, the plan is not cancelled, and the stylist setting is enabled.
 
 ### 7.4 `PATCH /api/account/plan`
 
@@ -989,13 +1003,20 @@ All route declarations are defined in `src/routes/*`. Controllers are in `src/co
 - Query params:
   - `limit` default `25`, max `100`
   - `cursor?`
+  - `category?`: `updates`, `approvals`, or `waitlist`
   - `activity_type?`
   - `start_date?` as `YYYY-MM-DD`
   - `end_date?` as `YYYY-MM-DD`
 - Purpose: grouped activity feed
 - Main service: `activityEventsService.getFeed`
 - Response:
-  - `{ data: { groups, next_cursor } }`
+  - category feed: `{ data: { category, counts, groups, next_cursor } }`
+  - legacy unscoped feed: `{ data: { groups, next_cursor } }`
+- Category definitions:
+  - `updates`: `booking_created` with current appointment status not `pending`, `appointment_cancelled`, and `appointment_rescheduled`
+  - `approvals`: appointments whose current status is `pending`
+  - `waitlist`: `waitlist_joined`
+- `counts` are total counts for each category after date filtering, before cursor/limit pagination.
 - Group shape:
   - `date`
   - `label`
@@ -1487,11 +1508,13 @@ All route declarations are defined in `src/routes/*`. Controllers are in `src/co
   - `location_label`
   - `avatar_image_id`
   - `timezone`
+  - `waitlist_enabled`
 - Main service: `usersService.updateProfile`
 - Response: `{ data: updatedUserRow }`
 - Important note:
   - unknown keys are stripped by Zod and do not reach the service
   - for example, `plan_tier` sent here is ignored rather than updated
+  - Basic users may save `waitlist_enabled=true`, but effective/public waitlist availability remains false until their plan allows waitlist
 
 ### 7.33 `GET /api/settings/booking`
 
@@ -2447,6 +2470,12 @@ Booking page settings live in `stylists`:
 - `cover_photo_url`
 - `booking_enabled`
 
+Waitlist settings live in `users`:
+
+- `waitlist_enabled`
+
+The public booking profile response exposes the effective waitlist state as `data.features.waitlistEnabled`. That value combines `users.waitlist_enabled`, plan eligibility, and cancelled-plan blocking.
+
 ### Booking settings plan gates
 
 Enforced in `stylistsService.upsertForUser()`:
@@ -2454,6 +2483,7 @@ Enforced in `stylistsService.upsertForUser()`:
 - `cover_photo_url` update requires plan feature `customCoverPhoto`
 - a custom slug requires plan feature `customSlug`
 - all plans currently have `bookingPage = true`
+- waitlist requires the plan feature `waitlist`, `plan_status != "cancelled"`, and `users.waitlist_enabled = true`
 
 ### Booking settings stored but not fully enforced
 

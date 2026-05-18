@@ -3,6 +3,7 @@ alter table public.users
   add column if not exists plan_status text not null default 'active',
   add column if not exists sms_monthly_limit integer not null default 0,
   add column if not exists sms_used_this_month integer not null default 0,
+  add column if not exists waitlist_enabled boolean not null default true,
   add column if not exists plan_updated_at timestamptz;
 
 do $$
@@ -127,4 +128,3 @@ begin
   end if;
 end
 $$;
-

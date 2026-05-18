@@ -9,6 +9,7 @@ create table if not exists public.users (
   plan_status text not null default 'active' check (plan_status in ('trialing', 'active', 'past_due', 'cancelled')),
   sms_monthly_limit integer not null default 0,
   sms_used_this_month integer not null default 0,
+  waitlist_enabled boolean not null default true,
   plan_updated_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -92,7 +93,7 @@ create table if not exists public.activity_events (
   metadata jsonb,
   dedupe_key text not null,
   created_at timestamptz not null default now(),
-  check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent'))
+  check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent', 'waitlist_joined'))
 );
 
 create table if not exists public.appointment_email_events (
@@ -124,6 +125,7 @@ create table if not exists public.stylists (
   display_name text not null,
   bio text,
   cover_photo_url text,
+  instagram text,
   booking_enabled boolean default false,
   created_at timestamptz default now(),
   updated_at timestamptz default now()

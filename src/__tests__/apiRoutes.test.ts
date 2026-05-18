@@ -50,7 +50,7 @@ const { createServiceSchema, reorderServicesSchema, updateServiceSchema } =
   require("../validators/serviceValidators") as typeof import("../validators/serviceValidators");
 const { createAppointmentSchema, pendingAppointmentDecisionSchema } =
   require("../validators/appointmentValidators") as typeof import("../validators/appointmentValidators");
-const { createClientSchema } =
+const { createClientSchema, updateClientSchema } =
   require("../validators/clientValidators") as typeof import("../validators/clientValidators");
 const { replaceAvailabilitySchema, updateBookingRulesSchema, updateProfileSchema, updateBookingSettingsSchema } =
   require("../validators/settingsValidators") as typeof import("../validators/settingsValidators");
@@ -588,6 +588,7 @@ describe("API handlers", () => {
           last_name: "Martinez",
           preferred_name: null,
           instagram: null,
+          birthday: null,
           preferred_contact_method: null,
           tags: null,
           source: null,
@@ -752,6 +753,7 @@ describe("API handlers", () => {
           phone: "(555) 218-4401",
           email: "ava@example.com",
           instagram: "@avamartinezhair",
+          birthday: "1994-05-12",
           preferred_contact_method: "text",
           notes: "Prefers afternoon appointments.",
           tags: ["VIP", "Blonde", "VIP"],
@@ -766,6 +768,7 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 201);
       assert.equal(createdClient.preferred_name, "Avi");
       assert.equal(createdClient.instagram, "avamartinezhair");
+      assert.equal(createdClient.birthday, "1994-05-12");
       assert.equal(createdClient.preferred_contact_method, "text");
       assert.deepEqual(createdClient.tags, ["VIP", "Blonde"]);
       assert.equal(createdClient.source, "instagram");
@@ -775,6 +778,45 @@ describe("API handlers", () => {
       assert.equal(createdClient.has_future_appointment, false);
       assert.equal(createdClient.needs_rebook, false);
       assert.equal(createdClient.last_service, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows client birthdays to be cleared", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          birthday: "1994-05-12"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: { id: "client-1" },
+        body: updateClientSchema.parse({
+          birthday: null
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => clientsController.update(request, res), req);
+      const updatedClient = (response.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(updatedClient.birthday, null);
+      assert.equal(supabase.state.clients[0]?.birthday, null);
     } finally {
       supabase.restore();
     }
@@ -983,6 +1025,7 @@ describe("API handlers", () => {
           display_name: "Maya Johnson",
           bio: "Lived-in color specialist",
           cover_photo_url: "https://example.com/cover.jpg",
+          instagram: "mayajohnsonhair",
           booking_enabled: true
         }
       ]
@@ -1000,6 +1043,7 @@ describe("API handlers", () => {
           display_name: "Maya Johnson",
           bio: "Lived-in color specialist",
           cover_photo_url: "https://example.com/cover.jpg",
+          instagram: "mayajohnsonhair",
           booking_enabled: true,
           business_name: "Maya Johnson Hair",
           phone_number: "555-0101",
@@ -1049,6 +1093,7 @@ describe("API handlers", () => {
           display_name: "Maya Johnson",
           bio: null,
           cover_photo_url: null,
+          instagram: null,
           booking_enabled: false,
           business_name: "Maya Johnson Hair",
           phone_number: null,
@@ -1105,6 +1150,43 @@ describe("API handlers", () => {
     }
   });
 
+  it("returns waitlist disabled when an eligible stylist turns the setting off", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "pro@example.com",
+          timezone: "America/Denver",
+          plan_tier: "pro",
+          plan_status: "active",
+          waitlist_enabled: false
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({ params: { slug: "maya-johnson" } });
+      const response = await runWithErrorHandler((request, res) => publicController.getStylist(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(
+        ((response.body as { data: { features: { waitlistEnabled: boolean } } }).data.features.waitlistEnabled),
+        false
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("rejects public waitlist creation for a Basic stylist", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -1114,6 +1196,50 @@ describe("API handlers", () => {
           timezone: "UTC",
           plan_tier: "basic",
           plan_status: "active"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      waitlist_entries: [],
+      activity_events: []
+    });
+
+    try {
+      const req = createMockRequest({
+        params: { slug: "maya-johnson" },
+        body: createPublicWaitlistEntrySchema.parse({
+          requestedDate: getCurrentLocalDate("UTC"),
+          clientName: "Ava Martinez",
+          clientEmail: "ava@example.com"
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => publicController.createWaitlistEntry(request, res), req);
+
+      assert.equal(response.statusCode, 403);
+      assert.equal((response.body as { error: { message: string } }).error.message, "Waitlist is not available for this stylist.");
+      assert.equal(supabase.state.waitlist_entries.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects public waitlist creation when the stylist has turned waitlist off", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "pro@example.com",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active",
+          waitlist_enabled: false
         }
       ],
       stylists: [
@@ -1205,6 +1331,18 @@ describe("API handlers", () => {
       assert.equal(entry.status, "active");
       assert.equal(supabase.state.waitlist_entries.length, 1);
       assert.equal(supabase.state.waitlist_entries[0]?.source, "public_booking");
+      assert.equal(supabase.state.activity_events.length, 1);
+      assert.equal(supabase.state.activity_events[0]?.activity_type, "waitlist_joined");
+      assert.equal(supabase.state.activity_events[0]?.title, "Ava Martinez joined the waitlist");
+      assert.equal(supabase.state.activity_events[0]?.client_id, null);
+      assert.equal(supabase.state.activity_events[0]?.appointment_id, null);
+      assert.deepEqual(supabase.state.activity_events[0]?.metadata, {
+        client_name: "Ava Martinez",
+        service_name: null,
+        requested_date: getCurrentLocalDate("UTC"),
+        requested_time_preference: "Morning preferred",
+        source: "public_booking"
+      });
     } finally {
       supabase.restore();
     }
@@ -5691,6 +5829,44 @@ describe("API handlers", () => {
     }
   });
 
+  it("stores normalized stylist Instagram handles in booking settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: updateBookingSettingsSchema.parse({
+          instagram: "  @mayajohnsonhair  "
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => settingsController.updateBooking(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { instagram: string } }).data.instagram, "mayajohnsonhair");
+      assert.equal(supabase.state.stylists[0]?.instagram, "mayajohnsonhair");
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("blocks Pro from changing a custom booking slug", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -6025,6 +6201,37 @@ describe("API handlers", () => {
       assert.equal(supabase.state.users[0]?.location_label, "Denver, CO");
       assert.equal(supabase.state.users[0]?.avatar_image_id, "avatar-456");
       assert.equal(supabase.state.users[0]?.plan_tier, "pro");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows the current user to toggle their waitlist setting through profile settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active",
+          waitlist_enabled: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: updateProfileSchema.parse({
+          waitlist_enabled: false
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => settingsController.updateProfile(request, res), req);
+      const profile = (response.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(profile.waitlist_enabled, false);
+      assert.equal(supabase.state.users[0]?.waitlist_enabled, false);
     } finally {
       supabase.restore();
     }

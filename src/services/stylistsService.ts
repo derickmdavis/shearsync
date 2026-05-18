@@ -4,7 +4,6 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { PublicStylistProfile } from "../types/api";
 import type { Row } from "./db";
 import { ApiError } from "../lib/errors";
-import { canUseWaitlist } from "../lib/plans";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { entitlementsService } from "./entitlementsService";
 import { usersService } from "./usersService";
@@ -13,8 +12,18 @@ const sanitizeStylistPayload = (payload: Row): Row => ({
   ...payload,
   display_name: normalizeEmptyString(payload.display_name as string | undefined),
   bio: normalizeEmptyString(payload.bio as string | undefined),
-  cover_photo_url: normalizeEmptyString(payload.cover_photo_url as string | undefined)
+  cover_photo_url: normalizeEmptyString(payload.cover_photo_url as string | undefined),
+  instagram: payload.instagram === null ? null : stripLeadingAt(payload.instagram as string | undefined)
 });
+
+const stripLeadingAt = (value: string | undefined): string | undefined => {
+  const normalized = normalizeEmptyString(value)?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.replace(/^@+/, "");
+};
 
 const stylistsSlugConstraintName = "stylists_slug_key";
 
@@ -111,6 +120,7 @@ const createDefaultStylistForUser = async (userId: string, payload: Row): Promis
     display_name: displayName,
     bio: payload.bio,
     cover_photo_url: payload.cover_photo_url,
+    instagram: payload.instagram,
     booking_enabled: payload.booking_enabled ?? false
   };
 
@@ -180,12 +190,13 @@ export const stylistsService = {
       display_name: (stylist.display_name as string) ?? "",
       bio: (stylist.bio as string | null | undefined) ?? null,
       cover_photo_url: (stylist.cover_photo_url as string | null | undefined) ?? null,
+      instagram: (stylist.instagram as string | null | undefined) ?? null,
       booking_enabled: Boolean(stylist.booking_enabled),
       business_name: (user?.business_name as string | null | undefined) ?? null,
       phone_number: (user?.phone_number as string | null | undefined) ?? null,
       timezone: resolveBusinessTimeZone(user),
       features: {
-        waitlistEnabled: entitlements.status !== "cancelled" && canUseWaitlist(entitlements.tier)
+        waitlistEnabled: entitlements.effectiveFeatures.waitlistEnabled
       }
     };
   },

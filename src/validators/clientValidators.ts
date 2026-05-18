@@ -11,7 +11,7 @@ export const createClientSchema = z.object({
   phone: z.string().max(40).optional(),
   email: optionalEmailSchema,
   instagram: z.string().max(100).nullable().optional(),
-  birthday: z.string().date().optional(),
+  birthday: z.string().date().nullable().optional(),
   preferred_contact_method: preferredContactMethodSchema.nullable().optional(),
   notes: z.string().max(5000).optional(),
   tags: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),

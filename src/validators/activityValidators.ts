@@ -1,12 +1,9 @@
 import { z } from "zod";
+import { ACTIVITY_CATEGORIES, ACTIVITY_TYPES } from "../lib/activityTypes";
 import { isoDateSchema, isoDateTimeSchema } from "./common";
 
-export const activityTypeSchema = z.enum([
-  "booking_created",
-  "appointment_cancelled",
-  "appointment_rescheduled",
-  "reminder_sent"
-]);
+export const activityTypeSchema = z.enum(ACTIVITY_TYPES);
+export const activityCategorySchema = z.enum(ACTIVITY_CATEGORIES);
 
 const isValidDateString = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -32,6 +29,7 @@ const isValidDateString = (value: string): boolean => {
 export const listActivityQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(25),
   cursor: z.string().min(1).optional(),
+  category: activityCategorySchema.optional(),
   activity_type: activityTypeSchema.optional(),
   start_date: isoDateSchema.refine(isValidDateString, "start_date must be YYYY-MM-DD").optional(),
   end_date: isoDateSchema.refine(isValidDateString, "end_date must be YYYY-MM-DD").optional()
@@ -71,6 +69,14 @@ const reminderSentMetadataSchema = z.object({
   appointment_start_time: isoDateTimeSchema.nullable()
 });
 
+const waitlistJoinedMetadataSchema = z.object({
+  client_name: z.string().min(1),
+  service_name: z.string().min(1).nullable(),
+  requested_date: isoDateSchema,
+  requested_time_preference: z.string().nullable(),
+  source: z.enum(["public_booking", "stylist_created", "manual"])
+});
+
 const activityEventBaseSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -97,6 +103,10 @@ export const activityEventItemSchema = z.discriminatedUnion("activity_type", [
   activityEventBaseSchema.extend({
     activity_type: z.literal("reminder_sent"),
     metadata: reminderSentMetadataSchema.nullable()
+  }),
+  activityEventBaseSchema.extend({
+    activity_type: z.literal("waitlist_joined"),
+    metadata: waitlistJoinedMetadataSchema.nullable()
   })
 ]);
 
@@ -104,7 +114,8 @@ export const activityGroupSummarySchema = z.object({
   new_bookings: z.number().int().nonnegative(),
   cancellations: z.number().int().nonnegative(),
   reschedules: z.number().int().nonnegative(),
-  reminders_sent: z.number().int().nonnegative()
+  reminders_sent: z.number().int().nonnegative(),
+  waitlist_joins: z.number().int().nonnegative()
 });
 
 export const activityDayGroupSchema = z.object({
@@ -115,6 +126,12 @@ export const activityDayGroupSchema = z.object({
 });
 
 export const activityFeedResponseSchema = z.object({
+  category: activityCategorySchema.optional(),
+  counts: z.object({
+    updates: z.number().int().nonnegative(),
+    approvals: z.number().int().nonnegative(),
+    waitlist: z.number().int().nonnegative()
+  }).optional(),
   groups: z.array(activityDayGroupSchema),
   next_cursor: z.string().nullable()
 });

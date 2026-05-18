@@ -33,6 +33,8 @@ const toEntitlements = (user: Row | null): UserEntitlements => {
   const config = PLAN_CONFIG[tier];
   const smsUsedThisMonth = toWholeNumber(user?.sms_used_this_month, 0);
   const smsMonthlyLimit = toWholeNumber(user?.sms_monthly_limit, config.smsMonthlyLimit);
+  const waitlistEnabled = user?.waitlist_enabled !== false;
+  const waitlistPlanAllowed = status !== "cancelled" && config.features.waitlist;
 
   return {
     tier,
@@ -41,7 +43,13 @@ const toEntitlements = (user: Row | null): UserEntitlements => {
     smsMonthlyLimit,
     smsUsedThisMonth,
     smsRemainingThisMonth: Math.max(0, smsMonthlyLimit - smsUsedThisMonth),
-    features: config.features
+    features: config.features,
+    settings: {
+      waitlistEnabled
+    },
+    effectiveFeatures: {
+      waitlistEnabled: waitlistPlanAllowed && waitlistEnabled
+    }
   };
 };
 
@@ -54,7 +62,7 @@ export const entitlementsService = {
   }> {
     const { data, error } = await supabaseAdmin
       .from("users")
-      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month")
+      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month, waitlist_enabled")
       .eq("id", userId)
       .maybeSingle();
 
@@ -72,7 +80,7 @@ export const entitlementsService = {
   async getEntitlementsForUser(userId: string): Promise<UserEntitlements> {
     const { data, error } = await supabaseAdmin
       .from("users")
-      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month")
+      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month, waitlist_enabled")
       .eq("id", userId)
       .maybeSingle();
 

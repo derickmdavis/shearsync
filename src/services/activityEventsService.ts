@@ -9,10 +9,12 @@ import {
   zonedDateTimeToUtc
 } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
+import type { ActivityCategory } from "../lib/activityTypes";
 import type {
   ActivityDayGroup,
   ActivityEventMetadata,
   ActivityEventItem,
+  ActivityFeedCounts,
   ActivityFeedResponse,
   ActivityGroupSummary,
   ActivityType,
@@ -22,7 +24,8 @@ import type {
   BookingCreatedActivityMetadata,
   ReminderChannel,
   ReminderSentActivityMetadata,
-  ReminderType
+  ReminderType,
+  WaitlistJoinedActivityMetadata
 } from "../types/api";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import type { Row, RowList } from "./db";
@@ -31,6 +34,7 @@ import { handleSupabaseError } from "./db";
 interface ActivityFeedFilters {
   limit: number;
   cursor?: string;
+  category?: ActivityCategory;
   activity_type?: ActivityType;
   start_date?: string;
   end_date?: string;
@@ -39,6 +43,7 @@ interface ActivityFeedFilters {
 interface CursorPayload {
   occurred_at: string;
   id: string;
+  category?: ActivityCategory;
 }
 
 interface ClientNameParts {
@@ -48,6 +53,9 @@ interface ClientNameParts {
 
 const ACTIVITY_EVENT_SELECT =
   "id, activity_type, title, description, occurred_at, client_id, appointment_id, metadata";
+
+const PENDING_APPROVAL_SELECT =
+  "id, client_id, appointment_date, service_name, status, created_at";
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
 
@@ -134,6 +142,27 @@ const normalizeActivityMetadata = (
         };
       }
       return null;
+    case "waitlist_joined":
+      if (
+        typeof value.client_name === "string"
+        && (typeof value.service_name === "string" || value.service_name === null)
+        && typeof value.requested_date === "string"
+        && (typeof value.requested_time_preference === "string" || value.requested_time_preference === null)
+        && (
+          value.source === "public_booking"
+          || value.source === "stylist_created"
+          || value.source === "manual"
+        )
+      ) {
+        return {
+          client_name: value.client_name,
+          service_name: value.service_name,
+          requested_date: value.requested_date,
+          requested_time_preference: value.requested_time_preference,
+          source: value.source
+        };
+      }
+      return null;
   }
 };
 
@@ -155,6 +184,34 @@ const toRowActivityItem = (row: Row, appointmentStatuses = new Map<string, Appoi
   };
 };
 
+const toPendingApprovalActivityItem = (
+  appointment: Row,
+  client: Row | null,
+  timeZone: string
+): ActivityEventItem => {
+  const clientNames = createClientNameParts(client);
+  const appointmentId = String(appointment.id ?? "");
+  const appointmentDate = String(appointment.appointment_date ?? "");
+  const serviceName = typeof appointment.service_name === "string" ? appointment.service_name : "Appointment";
+  const occurredAt = String(appointment.created_at ?? appointment.appointment_date ?? new Date().toISOString());
+  const metadata: BookingCreatedActivityMetadata = {
+    ...createBookingCreatedMetadata(clientNames, serviceName, appointmentDate),
+    current_appointment_status: "pending"
+  };
+
+  return {
+    id: appointmentId,
+    activity_type: "booking_created",
+    title: `${clientNames.shortName} booked ${serviceName}`,
+    description: `Appointment scheduled for ${formatLocalTime(appointmentDate, timeZone)}`,
+    occurred_at: occurredAt,
+    client_id: typeof appointment.client_id === "string" ? appointment.client_id : null,
+    appointment_id: appointmentId,
+    current_appointment_status: "pending",
+    metadata
+  };
+};
+
 const toSummaryKey = (activityType: ActivityType): keyof ActivityGroupSummary => {
   switch (activityType) {
     case "booking_created":
@@ -165,6 +222,8 @@ const toSummaryKey = (activityType: ActivityType): keyof ActivityGroupSummary =>
       return "reschedules";
     case "reminder_sent":
       return "reminders_sent";
+    case "waitlist_joined":
+      return "waitlist_joins";
   }
 };
 
@@ -172,7 +231,8 @@ const createEmptySummary = (): ActivityGroupSummary => ({
   new_bookings: 0,
   cancellations: 0,
   reschedules: 0,
-  reminders_sent: 0
+  reminders_sent: 0,
+  waitlist_joins: 0
 });
 
 const createClientNameParts = (client: Row | null): ClientNameParts => {
@@ -227,14 +287,22 @@ const compareRowsDescending = (left: Row, right: Row): number => {
   return String(right.id ?? "").localeCompare(String(left.id ?? ""));
 };
 
-const encodeCursor = (event: ActivityEventItem): string =>
-  Buffer.from(JSON.stringify({ occurred_at: event.occurred_at, id: event.id } satisfies CursorPayload), "utf8").toString("base64url");
+const encodeCursor = (event: ActivityEventItem, category?: ActivityCategory): string =>
+  Buffer.from(JSON.stringify({
+    occurred_at: event.occurred_at,
+    id: event.id,
+    ...(category ? { category } : {})
+  } satisfies CursorPayload), "utf8").toString("base64url");
 
-const decodeCursor = (cursor: string): CursorPayload => {
+const decodeCursor = (cursor: string, category?: ActivityCategory): CursorPayload => {
   try {
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as CursorPayload;
     if (typeof parsed.occurred_at !== "string" || typeof parsed.id !== "string") {
       throw new Error("Invalid cursor shape");
+    }
+
+    if (parsed.category && parsed.category !== category) {
+      throw new Error("Cursor category mismatch");
     }
 
     return parsed;
@@ -270,6 +338,29 @@ const groupEventsByDay = (events: ActivityEventItem[], timeZone: string): Activi
   }
 
   return [...groups.values()].sort((left, right) => right.date.localeCompare(left.date));
+};
+
+const isPendingApprovalActivity = (event: ActivityEventItem): boolean =>
+  event.activity_type === "booking_created" && event.current_appointment_status === "pending";
+
+const shouldIncludeEventForCategory = (event: ActivityEventItem, category?: ActivityCategory): boolean => {
+  switch (category) {
+    case "updates":
+      return (
+        (
+          event.activity_type === "booking_created"
+          || event.activity_type === "appointment_cancelled"
+          || event.activity_type === "appointment_rescheduled"
+        )
+        && !isPendingApprovalActivity(event)
+      );
+    case "waitlist":
+      return event.activity_type === "waitlist_joined";
+    case "approvals":
+      return false;
+    default:
+      return true;
+  }
 };
 
 const getReminderChannel = (value: unknown): ReminderChannel =>
@@ -332,6 +423,26 @@ const createReminderSentMetadata = (
   appointment_start_time: appointmentStartTime
 });
 
+const createWaitlistJoinedMetadata = (waitlistEntry: Row): WaitlistJoinedActivityMetadata => {
+  const service = isRecord(waitlistEntry.services) ? waitlistEntry.services : null;
+
+  return {
+    client_name: String(waitlistEntry.client_name ?? "Client"),
+    service_name: typeof service?.name === "string"
+      ? service.name
+      : typeof waitlistEntry.service_name === "string"
+        ? waitlistEntry.service_name
+        : null,
+    requested_date: String(waitlistEntry.requested_date ?? ""),
+    requested_time_preference: typeof waitlistEntry.requested_time_preference === "string"
+      ? waitlistEntry.requested_time_preference
+      : null,
+    source: waitlistEntry.source === "stylist_created" || waitlistEntry.source === "manual"
+      ? waitlistEntry.source
+      : "public_booking"
+  };
+};
+
 const getAppointmentIds = (rows: Row[]): string[] =>
   [...new Set(rows
     .map((row) => row.appointment_id)
@@ -356,15 +467,115 @@ const getAppointmentStatuses = async (stylistId: string, rows: Row[]): Promise<M
     .map((row) => [row.id as string, row.status as AppointmentStatus]));
 };
 
+const getClientsById = async (stylistId: string, clientIds: string[]): Promise<Map<string, Row>> => {
+  const uniqueClientIds = [...new Set(clientIds)];
+  if (uniqueClientIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select("id, first_name, last_name")
+    .eq("user_id", stylistId)
+    .in("id", uniqueClientIds);
+
+  handleSupabaseError(error, "Unable to load activity clients");
+
+  return new Map(((data ?? []) as Row[])
+    .filter((row) => typeof row.id === "string")
+    .map((row) => [row.id as string, row]));
+};
+
+const applyDateFilters = (rows: Row[], filters: ActivityFeedFilters, timeZone: string, column: string): Row[] =>
+  rows.filter((row) => {
+    const value = String(row[column] ?? "");
+    if (filters.start_date && value < getStartOfLocalDayUtc(filters.start_date, timeZone).toISOString()) {
+      return false;
+    }
+
+    if (filters.end_date && value >= getEndOfLocalDayUtc(filters.end_date, timeZone).toISOString()) {
+      return false;
+    }
+
+    return true;
+  });
+
+const withCategoryFields = (
+  response: Pick<ActivityFeedResponse, "groups" | "next_cursor">,
+  category: ActivityCategory | undefined,
+  counts: ActivityFeedCounts | undefined
+): ActivityFeedResponse => ({
+  ...(category ? { category } : {}),
+  ...(counts ? { counts } : {}),
+  ...response
+});
+
 export const activityEventsService = {
+  async getCategoryCounts(
+    stylistId: string,
+    filters: Pick<ActivityFeedFilters, "start_date" | "end_date">,
+    timeZone: string
+  ): Promise<ActivityFeedCounts> {
+    const activityQuery = supabaseAdmin
+      .from("activity_events")
+      .select(ACTIVITY_EVENT_SELECT)
+      .eq("stylist_id", stylistId);
+
+    if (filters.start_date) {
+      activityQuery.gte("occurred_at", getStartOfLocalDayUtc(filters.start_date, timeZone).toISOString());
+    }
+
+    if (filters.end_date) {
+      activityQuery.lt("occurred_at", getEndOfLocalDayUtc(filters.end_date, timeZone).toISOString());
+    }
+
+    const { data: activityData, error: activityError } = await activityQuery;
+    handleSupabaseError(activityError, "Unable to load activity counts");
+
+    const activityRows = (activityData ?? []) as Row[];
+    const appointmentStatuses = await getAppointmentStatuses(stylistId, activityRows);
+    const activityEvents = activityRows.map((row) => toRowActivityItem(row, appointmentStatuses));
+
+    const appointmentsQuery = supabaseAdmin
+      .from("appointments")
+      .select(PENDING_APPROVAL_SELECT)
+      .eq("user_id", stylistId)
+      .eq("status", "pending");
+
+    if (filters.start_date) {
+      appointmentsQuery.gte("created_at", getStartOfLocalDayUtc(filters.start_date, timeZone).toISOString());
+    }
+
+    if (filters.end_date) {
+      appointmentsQuery.lt("created_at", getEndOfLocalDayUtc(filters.end_date, timeZone).toISOString());
+    }
+
+    const { data: appointmentData, error: appointmentError } = await appointmentsQuery;
+    handleSupabaseError(appointmentError, "Unable to load pending approval counts");
+
+    return {
+      updates: activityEvents.filter((event) => shouldIncludeEventForCategory(event, "updates")).length,
+      approvals: ((appointmentData ?? []) as Row[]).length,
+      waitlist: activityEvents.filter((event) => shouldIncludeEventForCategory(event, "waitlist")).length
+    };
+  },
+
   async getFeed(stylistId: string, filters: ActivityFeedFilters): Promise<ActivityFeedResponse> {
     const timeZone = await businessTimeZoneService.getForUser(stylistId);
+    const counts = filters.category ? await this.getCategoryCounts(stylistId, filters, timeZone) : undefined;
+
+    if (filters.category === "approvals") {
+      return this.getPendingApprovalsFeed(stylistId, filters, timeZone, counts);
+    }
+
     let query = supabaseAdmin
       .from("activity_events")
       .select(ACTIVITY_EVENT_SELECT)
       .eq("stylist_id", stylistId);
 
-    if (filters.activity_type) {
+    if (filters.category === "waitlist") {
+      query = query.eq("activity_type", "waitlist_joined");
+    } else if (filters.activity_type) {
       query = query.eq("activity_type", filters.activity_type);
     }
 
@@ -383,19 +594,76 @@ export const activityEventsService = {
     handleSupabaseError(error, "Unable to load activity feed");
 
     const sortedRows = ((data ?? []) as Row[]).sort(compareRowsDescending);
-    const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
-    const filteredRows = cursor ? sortedRows.filter((row) => isBeforeCursor(row, cursor)) : sortedRows;
-    const pageRows = filteredRows.slice(0, filters.limit);
-    const appointmentStatuses = await getAppointmentStatuses(stylistId, pageRows);
-    const events = pageRows.map((row) => toRowActivityItem(row, appointmentStatuses));
-    const nextCursor = filteredRows.length > filters.limit && events.length > 0
-      ? encodeCursor(events[events.length - 1] as ActivityEventItem)
+    const appointmentStatuses = await getAppointmentStatuses(stylistId, sortedRows);
+    const sortedEvents = sortedRows
+      .map((row) => toRowActivityItem(row, appointmentStatuses))
+      .filter((event) => shouldIncludeEventForCategory(event, filters.category));
+    const cursor = filters.cursor ? decodeCursor(filters.cursor, filters.category) : null;
+    const filteredEvents = cursor
+      ? sortedEvents.filter((event) => isBeforeCursor({ occurred_at: event.occurred_at, id: event.id }, cursor))
+      : sortedEvents;
+    const events = filteredEvents.slice(0, filters.limit);
+    const nextCursor = filteredEvents.length > filters.limit && events.length > 0
+      ? encodeCursor(events[events.length - 1] as ActivityEventItem, filters.category)
       : null;
 
-    return {
+    return withCategoryFields({
       groups: groupEventsByDay(events, timeZone),
       next_cursor: nextCursor
-    };
+    }, filters.category, counts);
+  },
+
+  async getPendingApprovalsFeed(
+    stylistId: string,
+    filters: ActivityFeedFilters,
+    timeZone: string,
+    counts?: ActivityFeedCounts
+  ): Promise<ActivityFeedResponse> {
+    const { data, error } = await supabaseAdmin
+      .from("appointments")
+      .select(PENDING_APPROVAL_SELECT)
+      .eq("user_id", stylistId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    handleSupabaseError(error, "Unable to load pending approval activity");
+
+    const sortedRows = applyDateFilters((data ?? []) as Row[], filters, timeZone, "created_at")
+      .sort((left, right) => compareRowsDescending({
+        ...left,
+        occurred_at: left.created_at
+      }, {
+        ...right,
+        occurred_at: right.created_at
+      }));
+    const cursor = filters.cursor ? decodeCursor(filters.cursor, filters.category) : null;
+    const filteredRows = cursor
+      ? sortedRows.filter((row) => isBeforeCursor({
+        occurred_at: String(row.created_at ?? ""),
+        id: String(row.id ?? "")
+      }, cursor))
+      : sortedRows;
+    const pageRows = filteredRows.slice(0, filters.limit);
+    const clientsById = await getClientsById(
+      stylistId,
+      pageRows
+        .map((row) => row.client_id)
+        .filter((clientId): clientId is string => typeof clientId === "string")
+    );
+    const events = pageRows.map((row) => toPendingApprovalActivityItem(
+      row,
+      typeof row.client_id === "string" ? clientsById.get(row.client_id) ?? null : null,
+      timeZone
+    ));
+    const nextCursor = filteredRows.length > filters.limit && events.length > 0
+      ? encodeCursor(events[events.length - 1] as ActivityEventItem, filters.category)
+      : null;
+
+    return withCategoryFields({
+      groups: groupEventsByDay(events, timeZone),
+      next_cursor: nextCursor
+    }, filters.category, counts);
   },
 
   async listByAppointment(stylistId: string, appointmentId: string): Promise<ActivityEventItem[]> {
@@ -531,6 +799,23 @@ export const activityEventsService = {
         channel,
         occurredAt
       ])
+    });
+  },
+
+  async recordWaitlistJoined(stylistId: string, waitlistEntry: Row): Promise<void> {
+    const metadata = createWaitlistJoinedMetadata(waitlistEntry);
+    const serviceText = metadata.service_name ? ` for ${metadata.service_name}` : "";
+
+    await this.createIfMissing({
+      stylistId,
+      clientId: typeof waitlistEntry.client_id === "string" ? waitlistEntry.client_id : null,
+      appointmentId: null,
+      activityType: "waitlist_joined",
+      title: `${metadata.client_name} joined the waitlist`,
+      description: `Requested ${metadata.requested_date}${serviceText}`,
+      occurredAt: String(waitlistEntry.created_at ?? new Date().toISOString()),
+      metadata,
+      dedupeKey: getActivityEventDedupeKey("waitlist_joined", [String(waitlistEntry.id ?? "")])
     });
   },
 

@@ -1,10 +1,10 @@
 import { ApiError, requireFound } from "../lib/errors";
-import { canUseWaitlist } from "../lib/plans";
 import { supabaseAdmin } from "../lib/supabase";
 import { addDays, getCurrentLocalDate } from "../lib/timezone";
 import type { WaitlistEntry, WaitlistStatus } from "../types/api";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
+import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import { entitlementsService } from "./entitlementsService";
@@ -95,7 +95,7 @@ const toWaitlistEntry = (row: WaitlistRow): WaitlistEntry => ({
 
 const getFeatureAvailableForUser = async (userId: string): Promise<boolean> => {
   const entitlements = await entitlementsService.getEntitlementsForUser(userId);
-  return entitlements.status !== "cancelled" && canUseWaitlist(entitlements.tier);
+  return entitlements.effectiveFeatures.waitlistEnabled;
 };
 
 const assertWaitlistAvailableForUser = async (userId: string, message = "Waitlist is not available for this stylist.") => {
@@ -202,7 +202,11 @@ const insertWaitlistEntry = async (
     .single();
 
   handleSupabaseError(error, "Unable to create waitlist entry");
-  return toWaitlistEntry(requireFound(data as WaitlistRow | null, "Waitlist entry was not created"));
+
+  const waitlistEntry = requireFound(data as WaitlistRow | null, "Waitlist entry was not created");
+  await activityEventsService.recordWaitlistJoined(userId, waitlistEntry);
+
+  return toWaitlistEntry(waitlistEntry);
 };
 
 export const waitlistService = {

@@ -7,7 +7,8 @@ export const updateProfileSchema = z.object({
   business_name: z.string().max(180).optional(),
   location_label: z.string().max(180).optional().or(z.literal("")),
   avatar_image_id: z.string().max(255).optional().or(z.literal("")),
-  timezone: timeZoneSchema.optional()
+  timezone: timeZoneSchema.optional(),
+  waitlist_enabled: z.boolean().optional()
 });
 
 export const updateBookingSettingsSchema = z.object({
@@ -15,6 +16,7 @@ export const updateBookingSettingsSchema = z.object({
   display_name: z.string().min(1).max(160).optional(),
   bio: z.string().max(2000).optional(),
   cover_photo_url: z.string().url().optional().or(z.literal("")),
+  instagram: z.string().max(100).nullable().optional(),
   booking_enabled: z.boolean().optional()
 });
 
