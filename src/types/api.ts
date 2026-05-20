@@ -153,6 +153,9 @@ export interface ProfileOverviewResponse {
   avatarImageId: string | null;
   profile: {
     displayName: string;
+    fullName: string | null;
+    businessName: string | null;
+    bookingDisplayName: string | null;
     planLabel: string;
     locationLabel: string;
   };
@@ -276,6 +279,7 @@ export interface PublicStylistProfile {
   features: {
     waitlistEnabled: boolean;
   };
+  intelligent_scheduling_enabled: boolean;
 }
 
 export interface WaitlistEntry {
@@ -309,6 +313,9 @@ export interface PublicAvailabilitySlotsResponse {
     price: number;
   };
   slots: PublicAvailabilitySlot[];
+  moreSlots: PublicAvailabilitySlot[];
+  hasMore: boolean;
+  intelligentSchedulingEnabled: boolean;
 }
 
 export interface InternalAppointmentContextSlot extends PublicAvailabilitySlot {

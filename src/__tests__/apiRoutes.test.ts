@@ -1050,7 +1050,8 @@ describe("API handlers", () => {
           timezone: "America/Denver",
           features: {
             waitlistEnabled: true
-          }
+          },
+          intelligent_scheduling_enabled: true
         }
       });
     } finally {
@@ -1100,7 +1101,8 @@ describe("API handlers", () => {
           timezone: "America/Denver",
           features: {
             waitlistEnabled: false
-          }
+          },
+          intelligent_scheduling_enabled: true
         }
       });
     } finally {
@@ -1872,9 +1874,112 @@ describe("API handlers", () => {
               start: `${monday}T11:00:00+00:00`,
               end: `${monday}T12:00:00+00:00`
             }
-          ]
+          ],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: true
         }
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns initial and more public slots when intelligent scheduling is enabled", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true,
+          intelligent_scheduling_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 3650,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 3650,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const req = createMockRequest({
+        params: { slug: "maya-johnson" },
+        query: getPublicAvailabilitySlotsSchema.parse({
+          service_id: ownedServiceId,
+          date: monday
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => publicController.getAvailabilitySlots(request, res), req);
+      const data = (response.body as {
+        data: {
+          slots: Array<{ start: string; end: string }>;
+          moreSlots: Array<{ start: string; end: string }>;
+          hasMore: boolean;
+          intelligentSchedulingEnabled: boolean;
+        };
+      }).data;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(data.intelligentSchedulingEnabled, true);
+      assert.equal(data.slots.length, 5);
+      assert.equal(data.hasMore, true);
+      assert.equal(data.moreSlots.length, 4);
+      assert.equal(new Set([...data.slots, ...data.moreSlots].map((slot) => slot.start)).size, 9);
+      assert.deepEqual(data.slots.map((slot) => slot.start), [...data.slots.map((slot) => slot.start)].sort());
+      assert.deepEqual(data.moreSlots.map((slot) => slot.start), [...data.moreSlots.map((slot) => slot.start)].sort());
     } finally {
       supabase.restore();
     }
@@ -2369,7 +2474,8 @@ describe("API handlers", () => {
           user_id: userId,
           slug: "maya-johnson",
           display_name: "Maya Johnson",
-          booking_enabled: true
+          booking_enabled: true,
+          intelligent_scheduling_enabled: false
         }
       ],
       booking_rules: [
@@ -2479,7 +2585,10 @@ describe("API handlers", () => {
               start: `${monday}T11:00:00+00:00`,
               end: `${monday}T12:00:00+00:00`
             }
-          ]
+          ],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: false
         }
       });
     } finally {
@@ -2504,7 +2613,8 @@ describe("API handlers", () => {
           user_id: userId,
           slug: "maya-johnson",
           display_name: "Maya Johnson",
-          booking_enabled: true
+          booking_enabled: true,
+          intelligent_scheduling_enabled: false
         }
       ],
       booking_rules: [
@@ -2619,7 +2729,10 @@ describe("API handlers", () => {
             duration_minutes: 60,
             price: 95
           },
-          slots: []
+          slots: [],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: false
         }
       });
 
@@ -2683,7 +2796,10 @@ describe("API handlers", () => {
               start: `${monday}T11:00:00+00:00`,
               end: `${monday}T12:00:00+00:00`
             }
-          ]
+          ],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: false
         }
       });
     } finally {
@@ -2851,7 +2967,10 @@ describe("API handlers", () => {
               start: `${monday}T10:00:00+00:00`,
               end: `${monday}T11:00:00+00:00`
             }
-          ]
+          ],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: true
         }
       });
 
@@ -2887,7 +3006,10 @@ describe("API handlers", () => {
               start: `${monday}T11:00:00+00:00`,
               end: `${monday}T12:00:00+00:00`
             }
-          ]
+          ],
+          moreSlots: [],
+          hasMore: false,
+          intelligentSchedulingEnabled: true
         }
       });
     } finally {
@@ -3032,6 +3154,107 @@ describe("API handlers", () => {
     }
   });
 
+  it("rejects final public bookings that do not start on an advertised slot boundary", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const offGridDateTime = `${monday}T09:07:12+00:00`;
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 30,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "10:00:00",
+          is_active: true,
+          client_audience: "all"
+        }
+      ],
+      clients: [],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.createBooking(request, res),
+        createMockRequest({
+          body: createPublicBookingSchema.parse({
+            stylist_slug: "maya-johnson",
+            service_id: ownedServiceId,
+            requested_datetime: offGridDateTime,
+            guest_first_name: "New",
+            guest_last_name: "Guest",
+            guest_email: "new@example.com",
+            guest_phone: "(720) 555-0199"
+          })
+        })
+      );
+
+      assert.equal(response.statusCode, 409);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Requested time is no longer available",
+          details: undefined
+        }
+      });
+      assert.equal(supabase.state.appointments.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("creates pending public bookings when a new client requires approval", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
@@ -3111,7 +3334,8 @@ describe("API handlers", () => {
           guest_first_name: "New",
           guest_last_name: "Client",
           guest_email: "new@example.com",
-          guest_phone: "(720) 555-0102"
+          guest_phone: "(720) 555-0102",
+          notes: "Please keep volume low."
         })
       });
 
@@ -3136,6 +3360,8 @@ describe("API handlers", () => {
         }
       });
       assert.equal(supabase.state.appointments[0]?.status, "pending");
+      assert.equal(supabase.state.appointments[0]?.notes, "Please keep volume low.");
+      assert.equal(supabase.state.clients[0]?.notes, undefined);
       assert.equal(supabase.state.clients[0]?.phone_normalized, "+17205550102");
       assert.equal(supabase.state.appointment_email_events.length, 1);
       assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_pending");
@@ -4970,6 +5196,108 @@ describe("API handlers", () => {
     }
   });
 
+  it("rejects public managed appointment reschedules that do not start on an advertised slot boundary", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const oldStartTime = "2099-05-11T15:00:00.000Z";
+    const newDate = getNextLocalDay("2099-05-12", 1);
+    const offGridDateTime = `${newDate}T09:07:12+00:00`;
+    const token = createPublicAppointmentManagementToken({
+      appointmentId,
+      clientId,
+      stylistId: userId,
+      appointmentStartTime: oldStartTime
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 36500,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 0,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 36500,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          client_audience: "all",
+          is_active: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: oldStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.rescheduleManagedAppointment(request, res),
+        createMockRequest({
+          params: { token },
+          body: { requested_datetime: offGridDateTime }
+        })
+      );
+
+      assert.equal(response.statusCode, 409);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Requested time is no longer available",
+          details: undefined
+        }
+      });
+      assert.equal(supabase.state.appointments[0]?.appointment_date, oldStartTime);
+      assert.equal(supabase.state.appointment_email_events.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("normalizes a public booking request to the business timezone when the submitted offset is stale", async () => {
     const sunday = getNextLocalDay("2030-05-01", 0);
     const canonicalRequestedDateTime = zonedDateTimeToUtc(sunday, "America/Denver", 15, 30, 0, 0).toISOString();
@@ -5867,6 +6195,90 @@ describe("API handlers", () => {
     }
   });
 
+  it("accepts nullable optional booking settings without clearing required display name", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          instagram: "mayajohnsonhair",
+          booking_enabled: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: updateBookingSettingsSchema.parse({
+          display_name: null,
+          instagram: null
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => settingsController.updateBooking(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { display_name: string; instagram: string | null } }).data.display_name, "Maya Johnson");
+      assert.equal((response.body as { data: { instagram: string | null } }).data.instagram, null);
+      assert.equal(supabase.state.stylists[0]?.display_name, "Maya Johnson");
+      assert.equal(supabase.state.stylists[0]?.instagram, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("updates intelligent scheduling through booking settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true,
+          intelligent_scheduling_enabled: true
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: updateBookingSettingsSchema.parse({
+          intelligent_scheduling_enabled: false
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => settingsController.updateBooking(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(
+        (response.body as { data: { intelligent_scheduling_enabled: boolean } }).data.intelligent_scheduling_enabled,
+        false
+      );
+      assert.equal(supabase.state.stylists[0]?.intelligent_scheduling_enabled, false);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("blocks Pro from changing a custom booking slug", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -6098,7 +6510,12 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 200);
       const overview = (response.body as {
         data: {
-          profile: { displayName: string };
+          profile: {
+            displayName: string;
+            fullName: string | null;
+            businessName: string | null;
+            bookingDisplayName: string | null;
+          };
           availability: unknown[];
           availabilitySettings: { days: unknown[] };
           services: unknown[];
@@ -6107,6 +6524,9 @@ describe("API handlers", () => {
         };
       }).data;
       assert.equal(overview.profile.displayName, "owner@example.com");
+      assert.equal(overview.profile.fullName, null);
+      assert.equal(overview.profile.businessName, null);
+      assert.equal(overview.profile.bookingDisplayName, null);
       assert.deepEqual(overview.availability, []);
       assert.equal(overview.availabilitySettings.days.length, 7);
       assert.deepEqual(overview.services, []);

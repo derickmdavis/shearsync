@@ -193,7 +193,7 @@ describe("Profile and dashboard handlers", () => {
           id: "stylist-1",
           user_id: userId,
           slug: "maya-johnson",
-          display_name: "Maya Johnson",
+          display_name: "Maya Johnson Hair Studio",
           booking_enabled: true
         }
       ],
@@ -260,6 +260,9 @@ describe("Profile and dashboard handlers", () => {
           avatarImageId: string | null;
           profile: {
             displayName: string;
+            fullName: string | null;
+            businessName: string | null;
+            bookingDisplayName: string | null;
             planLabel: string;
             locationLabel: string;
           };
@@ -276,6 +279,9 @@ describe("Profile and dashboard handlers", () => {
       }).data;
 
       assert.equal(overview.profile.displayName, "Maya Johnson");
+      assert.equal(overview.profile.fullName, "Maya Johnson");
+      assert.equal(overview.profile.businessName, "Maya Johnson Hair");
+      assert.equal(overview.profile.bookingDisplayName, "Maya Johnson Hair Studio");
       assert.equal(overview.profile.planLabel, "Pro");
       assert.equal(overview.profile.locationLabel, "Denver, CO");
       assert.equal(overview.avatarImageId, "avatar-123");

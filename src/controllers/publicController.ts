@@ -1,4 +1,6 @@
 import type { Request, Response } from "express";
+import { env } from "../config/env";
+import { ApiError } from "../lib/errors";
 import { getRequiredParam } from "../lib/request";
 import { availabilityService } from "../services/availabilityService";
 import { publicBookingIntakeService } from "../services/publicBookingIntakeService";
@@ -9,6 +11,18 @@ import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
 
 export const publicController = {
+  async redirectToBookingPage(req: Request, res: Response) {
+    const webAppUrl = env.WEB_APP_URL ?? env.CLIENT_APP_URL;
+
+    if (!webAppUrl) {
+      throw new ApiError(404, "Public booking web app URL is not configured");
+    }
+
+    const slug = getRequiredParam(req, "slug");
+    const redirectUrl = new URL(`/booking/${slug}`, webAppUrl);
+    res.redirect(302, redirectUrl.toString());
+  },
+
   async getStylist(req: Request, res: Response) {
     const stylist = await stylistsService.getPublicProfileBySlug(getRequiredParam(req, "slug"));
     res.json({ data: stylist });

@@ -13,11 +13,12 @@ export const updateProfileSchema = z.object({
 
 export const updateBookingSettingsSchema = z.object({
   slug: z.string().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
-  display_name: z.string().min(1).max(160).optional(),
+  display_name: z.string().min(1).max(160).nullable().optional(),
   bio: z.string().max(2000).optional(),
   cover_photo_url: z.string().url().optional().or(z.literal("")),
   instagram: z.string().max(100).nullable().optional(),
-  booking_enabled: z.boolean().optional()
+  booking_enabled: z.boolean().optional(),
+  intelligent_scheduling_enabled: z.boolean().optional()
 });
 
 const timeOfDaySchema = z

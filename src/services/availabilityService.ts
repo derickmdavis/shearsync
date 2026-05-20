@@ -1,12 +1,7 @@
 import {
-  addDays,
   formatInstantInTimeZoneOffset,
-  getCurrentLocalDate,
   getEndOfLocalDayUtc,
-  getLocalDateForInstant,
   getLocalDayOfWeekForDate,
-  getLocalDayOfWeekForInstant,
-  getMinutesSinceMidnightForInstant,
   getStartOfLocalDayUtc,
   zonedDateTimeToUtc
 } from "../lib/timezone";
@@ -25,7 +20,9 @@ import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { bookingRulesService } from "./bookingRulesService";
+import { applyIntelligentScheduling } from "./intelligentSchedulingService";
 import { offDaysService } from "./offDaysService";
+import { schedulingPolicyService } from "./schedulingPolicyService";
 import { servicesService } from "./servicesService";
 import { stylistsService } from "./stylistsService";
 
@@ -49,31 +46,6 @@ const formatTimeText = (minutes: number): { hour: number; minute: number } => ({
 const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
   new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
 
-const overlaps = (
-  startIso: string,
-  durationMinutes: number,
-  existingStartIso: string,
-  existingDurationMinutes: number
-): boolean => {
-  const endIso = getAppointmentEndIso(startIso, durationMinutes);
-  const existingEndIso = getAppointmentEndIso(existingStartIso, existingDurationMinutes);
-  return startIso < existingEndIso && endIso > existingStartIso;
-};
-
-const getNewClientRuleViolation = (localDate: string, today: string, bookingWindowDays: number) => {
-  if (bookingWindowDays === 0) {
-    return null;
-  }
-
-  if (localDate > addDays(today, bookingWindowDays)) {
-    return `New clients can only book up to ${bookingWindowDays} day(s) in advance`;
-  }
-
-  return null;
-};
-
-const isAfterCutoff = (currentMinutes: number, cutoffTime: string): boolean => currentMinutes > timeToMinutes(cutoffTime);
-
 interface AvailabilityWindow extends Row {
   id?: string;
   day_of_week?: number;
@@ -91,6 +63,9 @@ interface AppointmentSummary extends Row {
 const dayIndexes = [0, 1, 2, 3, 4, 5, 6];
 
 const formatTimeForApi = (time: string): string => time.slice(0, 5);
+
+const isIntelligentSchedulingEnabled = (stylist: Row): boolean =>
+  stylist.intelligent_scheduling_enabled !== false;
 
 const normalizeAvailabilityAudience = (value: unknown): AvailabilityClientAudience =>
   value === "new" || value === "returning" ? value : "all";
@@ -313,31 +288,6 @@ export const availabilityService = {
     return (data ?? []) as AppointmentSummary[];
   },
 
-  async isRequestedTimeAvailable(
-    userId: string,
-    requestedDateTime: string,
-    durationMinutes: number,
-    isExistingClient = false
-  ): Promise<boolean> {
-    const timeZone = await businessTimeZoneService.getForUser(userId);
-    const localDate = getLocalDateForInstant(requestedDateTime, timeZone);
-
-    if (await offDaysService.isOffDay(userId, localDate)) {
-      return false;
-    }
-
-    const dayOfWeek = getLocalDayOfWeekForInstant(requestedDateTime, timeZone);
-    const requestedMinutes = getMinutesSinceMidnightForInstant(requestedDateTime, timeZone);
-    const requestedEndMinutes = requestedMinutes + durationMinutes;
-    const windows = await this.listActiveForUserOnDay(userId, dayOfWeek, { isExistingClient });
-
-    return windows.some((window) => {
-      const start = timeToMinutes(window.start_time);
-      const end = timeToMinutes(window.end_time);
-      return requestedMinutes >= start && requestedEndMinutes <= end;
-    });
-  },
-
   async getBookableSlotsByStylistSlug(
     slug: string,
     serviceId: string,
@@ -356,7 +306,6 @@ export const availabilityService = {
 
     const bookingRules = await bookingRulesService.getByUserId(userId);
     const localDayOfWeek = getLocalDayOfWeekForDate(dateText, timeZone);
-    const today = getCurrentLocalDate(timeZone);
     const bookingContext = resolvePublicBookingContextToken(bookingContextToken, slug);
     const isExistingClient = bookingContext?.isExistingClient ?? false;
     const isOffDay = await offDaysService.isOffDay(userId, dateText);
@@ -372,7 +321,10 @@ export const availabilityService = {
           duration_minutes: serviceDuration,
           price: Number(service.price ?? 0)
         },
-        slots: []
+        slots: [],
+        moreSlots: [],
+        hasMore: false,
+        intelligentSchedulingEnabled: isIntelligentSchedulingEnabled(stylist)
       };
     }
 
@@ -381,8 +333,6 @@ export const availabilityService = {
     const slotStarts = new Set<string>();
     const slots: PublicAvailabilitySlot[] = [];
     const now = new Date();
-    const currentLocalDate = getCurrentLocalDate(timeZone, now);
-    const currentLocalMinutes = getMinutesSinceMidnightForInstant(now.toISOString(), timeZone);
 
     for (const window of windows) {
       const windowStart = timeToMinutes(window.start_time);
@@ -397,55 +347,22 @@ export const availabilityService = {
           continue;
         }
 
-        if (candidateUtc <= now) {
-          continue;
-        }
+        const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
+          userId,
+          serviceId,
+          requestedDateTime: candidateIso,
+          durationMinutes: serviceDuration,
+          isExistingClient,
+          mode: "booking",
+          timeZone,
+          bookingRules,
+          windows,
+          appointments,
+          isOffDay,
+          now
+        });
 
-        if (!bookingRules.sameDayBookingAllowed && dateText === currentLocalDate) {
-          continue;
-        }
-
-        if (
-          bookingRules.sameDayBookingAllowed &&
-          dateText === currentLocalDate &&
-          isAfterCutoff(currentLocalMinutes, bookingRules.sameDayBookingCutoff)
-        ) {
-          continue;
-        }
-
-        const localDate = getLocalDateForInstant(candidateIso, timeZone);
-        if (localDate > addDays(today, bookingRules.maxBookingWindowDays)) {
-          continue;
-        }
-
-        const leadTimeCutoff = new Date(now.getTime() + bookingRules.leadTimeHours * 60 * 60_000);
-        if (candidateUtc < leadTimeCutoff) {
-          continue;
-        }
-
-        if (!isExistingClient) {
-          if (
-            bookingRules.restrictServicesForNewClients &&
-            bookingRules.restrictedServiceIds.includes(serviceId)
-          ) {
-            continue;
-          }
-
-          if (getNewClientRuleViolation(localDate, today, bookingRules.newClientBookingWindowDays)) {
-            continue;
-          }
-        }
-
-        const hasConflict = appointments.some((appointment) =>
-          overlaps(
-            candidateIso,
-            serviceDuration,
-            appointment.appointment_date,
-            Number(appointment.duration_minutes ?? 0)
-          )
-        );
-
-        if (hasConflict) {
+        if (!slotEvaluation.ok) {
           continue;
         }
 
@@ -457,6 +374,24 @@ export const availabilityService = {
       }
     }
 
+    const scheduledSlots = applyIntelligentScheduling({
+      validSlots: slots,
+      existingBusyBlocks: appointments.map((appointment) => ({
+        start: formatInstantInTimeZoneOffset(appointment.appointment_date, timeZone),
+        end: formatInstantInTimeZoneOffset(
+          getAppointmentEndIso(appointment.appointment_date, Number(appointment.duration_minutes ?? 0)),
+          timeZone
+        )
+      })),
+      businessHours: windows.map((window) => ({
+        start: formatTimeForApi(window.start_time),
+        end: formatTimeForApi(window.end_time)
+      })),
+      serviceDurationMinutes: serviceDuration,
+      timeZone,
+      enabled: isIntelligentSchedulingEnabled(stylist)
+    });
+
     return {
       date: dateText,
       timezone: timeZone,
@@ -466,7 +401,10 @@ export const availabilityService = {
         duration_minutes: serviceDuration,
         price: Number(service.price ?? 0)
       },
-      slots
+      slots: scheduledSlots.slots,
+      moreSlots: scheduledSlots.moreSlots,
+      hasMore: scheduledSlots.hasMore,
+      intelligentSchedulingEnabled: isIntelligentSchedulingEnabled(stylist)
     };
   }
 };

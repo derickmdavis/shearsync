@@ -11,16 +11,19 @@ import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
 const appointmentSlotConstraintName = "appointments_user_id_appointment_date_active_idx";
+const appointmentOverlapConstraintName = "appointments_user_active_time_no_overlap";
 const internalSlotIntervalMinutes = 15;
+const maxAppointmentDurationMinutes = 720;
 
 const isAppointmentSlotConflictError = (error: { code?: string; message?: string; details?: string } | null): boolean => {
-  if (!error || error.code !== "23505") {
+  if (!error || (error.code !== "23505" && error.code !== "23P01")) {
     return false;
   }
 
   const errorText = `${error.message ?? ""} ${error.details ?? ""}`;
   return (
     errorText.includes(appointmentSlotConstraintName) ||
+    errorText.includes(appointmentOverlapConstraintName) ||
     errorText.includes("(user_id, appointment_date)")
   );
 };
@@ -58,6 +61,10 @@ const toContextTimeRange = (appointment: Row, timeZone: string): { start: string
 
 interface AppointmentUpdateOptions {
   cancelledBy?: "client" | "stylist";
+}
+
+interface AppointmentCreateOptions {
+  slotConflictMessage?: string;
 }
 
 export const appointmentsService = {
@@ -173,9 +180,10 @@ export const appointmentsService = {
     return requireFound(data, "Appointment not found");
   },
 
-  async create(userId: string, payload: Row): Promise<Row> {
+  async create(userId: string, payload: Row, options: AppointmentCreateOptions = {}): Promise<Row> {
     await clientsService.assertOwned(userId, payload.client_id as string);
     const bookingSource = (payload.booking_source as BookingSource | undefined) ?? "internal";
+    const slotConflictMessage = options.slotConflictMessage ?? appointmentSlotConflictMessage;
 
     if (payload.status !== "cancelled") {
       const conflict = await this.hasSlotConflict(
@@ -185,7 +193,7 @@ export const appointmentsService = {
       );
 
       if (conflict) {
-        throw new ApiError(409, appointmentSlotConflictMessage);
+        throw new ApiError(409, slotConflictMessage);
       }
     }
 
@@ -196,7 +204,7 @@ export const appointmentsService = {
       .single();
 
     if (isAppointmentSlotConflictError(error)) {
-      throw new ApiError(409, appointmentSlotConflictMessage);
+      throw new ApiError(409, slotConflictMessage);
     }
 
     handleSupabaseError(error, "Unable to create appointment");
@@ -291,11 +299,18 @@ export const appointmentsService = {
     durationMinutes: number,
     excludedAppointmentId?: string
   ): Promise<boolean> {
+    const appointmentStart = new Date(appointmentDate);
+    const appointmentEnd = new Date(appointmentStart.getTime() + durationMinutes * 60_000);
+    const earliestPossibleOverlap = new Date(
+      appointmentStart.getTime() - maxAppointmentDurationMinutes * 60_000
+    );
     let query = supabaseAdmin
       .from("appointments")
       .select("id, appointment_date, duration_minutes")
       .eq("user_id", userId)
-      .neq("status", "cancelled");
+      .neq("status", "cancelled")
+      .gte("appointment_date", earliestPossibleOverlap.toISOString())
+      .lt("appointment_date", appointmentEnd.toISOString());
 
     if (excludedAppointmentId) {
       query = query.neq("id", excludedAppointmentId);
@@ -317,17 +332,9 @@ export const appointmentsService = {
   },
 
   async createForBooking(userId: string, payload: Row): Promise<Row> {
-    const conflict = await this.hasSlotConflict(
-      userId,
-      payload.appointment_date as string,
-      toDurationMinutes(payload.duration_minutes)
-    );
-
-    if (conflict) {
-      throw new ApiError(409, "Requested time is no longer available");
-    }
-
-    return this.create(userId, { ...payload, booking_source: "public" });
+    return this.create(userId, { ...payload, booking_source: "public" }, {
+      slotConflictMessage: "Requested time is no longer available"
+    });
   },
 
   async applyPendingDecision(userId: string, appointmentId: string, decision: "accept" | "reject"): Promise<Row> {

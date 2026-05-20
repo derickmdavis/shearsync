@@ -106,6 +106,7 @@ Appointment contract notes:
 
 - Authenticated `POST /api/appointments` defaults `booking_source` to `internal`, ignores public booking rules, and only enforces ownership plus overlap protection.
 - Public booking creation stores `booking_source: "public"`.
+- Public booking `notes` are stored on the appointment only; they are not copied into client/customer notes.
 - `GET /api/appointments/internal-context` returns overlap-safe internal slot suggestions for a given date and duration without applying public booking rules or saved availability windows.
 - `GET /api/appointments/:id/activity` returns activity events for a single appointment in reverse chronological order for appointment detail/history UI.
 
@@ -175,6 +176,8 @@ Recommended public flow:
 6. Pass `booking_context_token` into `GET /api/public/services/:slug` so the backend can filter service visibility using returning-client vs new-client rules.
 7. If the UI needs raw weekly windows, pass the same `booking_context_token` into `GET /api/public/availability/:slug` so audience-specific windows are filtered the same way.
 8. Pass the same `booking_context_token` into `GET /api/public/availability/:slug/slots` so slot generation uses the same client-specific rules and client-specific availability windows.
+   - When Intelligent Scheduling is enabled, this endpoint returns up to 5 ranked initial `slots`, the remaining valid `moreSlots`, `hasMore`, and `intelligentSchedulingEnabled`.
+   - Intelligent Scheduling is display ranking only. The backend still returns every technically valid slot across `slots` and `moreSlots`.
 9. Submit the final booking through `POST /api/public/bookings`.
 10. If the selected day has no useful slots and `features.waitlistEnabled=true`, the client may submit `POST /api/public/stylists/:slug/waitlist`.
 

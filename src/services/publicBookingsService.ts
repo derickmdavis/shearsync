@@ -1,16 +1,10 @@
 import { ApiError } from "../lib/errors";
 import {
-  addDays,
   formatInstantInTimeZoneOffset,
-  getCurrentLocalDate,
-  getLocalDateForInstant,
-  getMinutesSinceMidnightForInstant,
   zonedDateTimeToUtc
 } from "../lib/timezone";
 import type { PublicBookingConfirmation } from "../types/api";
 import { appointmentsService } from "./appointmentsService";
-import { availabilityService } from "./availabilityService";
-import { bookingRulesService } from "./bookingRulesService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import type { Row } from "./db";
@@ -19,11 +13,7 @@ import { stylistsService } from "./stylistsService";
 import { usersService } from "./usersService";
 import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
-
-const timeToMinutes = (time: string): number => {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-};
+import { schedulingPolicyService } from "./schedulingPolicyService";
 
 const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
   new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
@@ -92,69 +82,6 @@ const buildConfirmation = async ({
   };
 };
 
-const validateBookingRules = async ({
-  userId,
-  serviceId,
-  requestedDateTime,
-  isExistingClient
-}: {
-  userId: string;
-  serviceId: string;
-  requestedDateTime: string;
-  isExistingClient: boolean;
-}): Promise<"pending" | "scheduled"> => {
-  const rules = await bookingRulesService.getByUserId(userId);
-  const timeZone = await businessTimeZoneService.getForUser(userId);
-  const now = new Date();
-  const requestedDate = new Date(requestedDateTime);
-  const requestedLocalDate = getLocalDateForInstant(requestedDateTime, timeZone);
-  const today = getCurrentLocalDate(timeZone, now);
-  let nextStatus: "pending" | "scheduled" = "scheduled";
-
-  if (requestedDate <= now) {
-    throw new ApiError(400, "Requested time must be in the future");
-  }
-
-  const leadTimeThreshold = new Date(now.getTime() + rules.leadTimeHours * 60 * 60_000);
-  if (requestedDate < leadTimeThreshold) {
-    throw new ApiError(400, `Appointments require at least ${rules.leadTimeHours} hour(s) of notice`);
-  }
-
-  if (requestedLocalDate > addDays(today, rules.maxBookingWindowDays)) {
-    throw new ApiError(400, `Appointments can only be booked up to ${rules.maxBookingWindowDays} day(s) in advance`);
-  }
-
-  if (requestedLocalDate === today) {
-    if (!rules.sameDayBookingAllowed) {
-      throw new ApiError(400, "Same-day booking is not allowed");
-    }
-
-    const currentLocalMinutes = getMinutesSinceMidnightForInstant(now.toISOString(), timeZone);
-    if (currentLocalMinutes > timeToMinutes(rules.sameDayBookingCutoff)) {
-      throw new ApiError(400, "The same-day booking cutoff has passed");
-    }
-  }
-
-  if (!isExistingClient) {
-    if (rules.newClientApprovalRequired) {
-      nextStatus = "pending";
-    }
-
-    if (
-      rules.newClientBookingWindowDays > 0
-      && requestedLocalDate > addDays(today, rules.newClientBookingWindowDays)
-    ) {
-      throw new ApiError(400, `New clients can only book up to ${rules.newClientBookingWindowDays} day(s) in advance`);
-    }
-
-    if (rules.restrictServicesForNewClients && rules.restrictedServiceIds.includes(serviceId)) {
-      throw new ApiError(400, "This service is not available for new clients online");
-    }
-  }
-
-  return nextStatus;
-};
-
 const queuePublicBookingEmail = async (
   userId: string,
   appointment: Row,
@@ -215,30 +142,45 @@ export const publicBookingsService = {
     });
     const isExistingClient = Boolean(matchedClient);
 
-    const bookingStatus = await validateBookingRules({
+    const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
       userId,
       serviceId: service.id as string,
       requestedDateTime,
+      durationMinutes: serviceDurationMinutes,
+      mode: "booking",
       isExistingClient
     });
 
-    const isAvailable = await availabilityService.isRequestedTimeAvailable(
-      userId,
-      requestedDateTime,
-      serviceDurationMinutes,
-      isExistingClient
-    );
+    if (!slotEvaluation.ok) {
+      if (slotEvaluation.reason === "appointment_conflict" && matchedClient) {
+        const existingAppointment = await appointmentsService.findMatchingPublicBooking(userId, {
+          clientId: matchedClient.id as string,
+          appointmentDate: requestedDateTime,
+          serviceName: service.name as string,
+          durationMinutes: serviceDurationMinutes
+        });
 
-    if (!isAvailable) {
-      throw new ApiError(409, "Requested time is no longer available");
+        if (existingAppointment) {
+          await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
+
+          return buildConfirmation({
+            appointment: existingAppointment,
+            stylist,
+            service,
+            userId,
+            serviceDurationMinutes
+          });
+        }
+      }
+
+      throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message);
     }
 
     const resolvedClient = matchedClient ?? await clientsService.findOrCreateForBooking(userId, {
       first_name: payload.guest_first_name,
       last_name: payload.guest_last_name,
       email: normalizedGuestEmail,
-      phone: payload.guest_phone,
-      notes: payload.notes
+      phone: payload.guest_phone
     });
     const client = await persistGuestEmailIfMissing(userId, resolvedClient, normalizedGuestEmail);
 
@@ -250,7 +192,7 @@ export const publicBookingsService = {
         duration_minutes: serviceDurationMinutes,
         price: service.price,
         notes: payload.notes,
-        status: bookingStatus,
+        status: slotEvaluation.status,
         booking_source: "public"
       });
 

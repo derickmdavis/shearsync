@@ -1,10 +1,6 @@
 import { ApiError, requireFound } from "../lib/errors";
 import {
-  addDays,
   formatInstantInTimeZoneOffset,
-  getCurrentLocalDate,
-  getLocalDateForInstant,
-  getMinutesSinceMidnightForInstant,
   zonedDateTimeToUtc
 } from "../lib/timezone";
 import {
@@ -15,9 +11,8 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { appointmentsService } from "./appointmentsService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
-import { availabilityService } from "./availabilityService";
-import { bookingRulesService } from "./bookingRulesService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { schedulingPolicyService } from "./schedulingPolicyService";
 import { usersService } from "./usersService";
 
 export interface PublicManagedAppointment {
@@ -49,11 +44,6 @@ interface ManagedAppointmentContext {
 
 const invalidManagementLinkMessage = "Appointment management link is invalid or expired";
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
-
-const timeToMinutes = (time: string): number => {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-};
 
 const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
   new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
@@ -125,71 +115,6 @@ const hasCompletedAppointment = async (
   return Number(count ?? 0) > 0;
 };
 
-const validateRescheduleRules = async ({
-  stylistId,
-  appointment,
-  requestedDateTime,
-  isExistingClient,
-  timeZone
-}: {
-  stylistId: string;
-  appointment: Row;
-  requestedDateTime: string;
-  isExistingClient: boolean;
-  timeZone: string;
-}): Promise<"pending" | "scheduled"> => {
-  const rules = await bookingRulesService.getByUserId(stylistId);
-  const now = new Date();
-  const requestedDate = new Date(requestedDateTime);
-  const requestedLocalDate = getLocalDateForInstant(requestedDateTime, timeZone);
-  const today = getCurrentLocalDate(timeZone, now);
-  const currentAppointmentDate = new Date(String(appointment.appointment_date ?? ""));
-
-  if (requestedDate <= now) {
-    throw new ApiError(400, "Requested time must be in the future");
-  }
-
-  if (currentAppointmentDate.getTime() - now.getTime() < rules.rescheduleWindowHours * 60 * 60_000) {
-    throw new ApiError(400, `Appointments require at least ${rules.rescheduleWindowHours} hour(s) of notice to reschedule`);
-  }
-
-  const leadTimeThreshold = new Date(now.getTime() + rules.leadTimeHours * 60 * 60_000);
-  if (requestedDate < leadTimeThreshold) {
-    throw new ApiError(400, `Appointments require at least ${rules.leadTimeHours} hour(s) of notice`);
-  }
-
-  if (requestedLocalDate > addDays(today, rules.maxBookingWindowDays)) {
-    throw new ApiError(400, `Appointments can only be booked up to ${rules.maxBookingWindowDays} day(s) in advance`);
-  }
-
-  if (requestedLocalDate === today && !rules.sameDayReschedulingAllowed) {
-    throw new ApiError(400, "Same-day rescheduling is not allowed");
-  }
-
-  if (
-    requestedLocalDate === today &&
-    rules.sameDayReschedulingAllowed &&
-    getMinutesSinceMidnightForInstant(now.toISOString(), timeZone) > timeToMinutes(rules.sameDayBookingCutoff)
-  ) {
-    throw new ApiError(400, "The same-day booking cutoff has passed");
-  }
-
-  if (!isExistingClient) {
-    if (
-      rules.newClientBookingWindowDays > 0 &&
-      requestedLocalDate > addDays(today, rules.newClientBookingWindowDays)
-    ) {
-      throw new ApiError(400, `New clients can only book up to ${rules.newClientBookingWindowDays} day(s) in advance`);
-    }
-  }
-
-  if (appointment.status === "pending") {
-    return "pending";
-  }
-
-  return !isExistingClient && rules.newClientApprovalRequired ? "pending" : "scheduled";
-};
-
 const toManagedAppointment = ({
   appointment,
   client,
@@ -256,22 +181,20 @@ export const publicAppointmentManagementService = {
     );
     const durationMinutes = Number(context.appointment.duration_minutes ?? 0);
     const isExistingClient = await hasCompletedAppointment(stylistId, clientId);
-    const nextStatus = await validateRescheduleRules({
-      stylistId,
-      appointment: context.appointment,
-      requestedDateTime,
-      isExistingClient,
-      timeZone: context.timeZone
-    });
-    const isAvailable = await availabilityService.isRequestedTimeAvailable(
-      stylistId,
+    const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
+      userId: stylistId,
       requestedDateTime,
       durationMinutes,
-      isExistingClient
-    );
+      isExistingClient,
+      mode: "reschedule",
+      currentAppointmentId: String(context.appointment.id ?? ""),
+      currentAppointmentStart: String(context.appointment.appointment_date ?? ""),
+      currentAppointmentStatus: String(context.appointment.status ?? ""),
+      timeZone: context.timeZone
+    });
 
-    if (!isAvailable) {
-      throw new ApiError(409, "Requested time is no longer available");
+    if (!slotEvaluation.ok) {
+      throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message);
     }
 
     const updatedAppointment = await appointmentsService.update(
@@ -279,7 +202,7 @@ export const publicAppointmentManagementService = {
       String(context.appointment.id ?? ""),
       {
         appointment_date: requestedDateTime,
-        status: nextStatus
+        status: slotEvaluation.status
       }
     );
 

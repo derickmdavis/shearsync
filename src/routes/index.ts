@@ -1,5 +1,9 @@
 import { Router } from "express";
+import { publicController } from "../controllers/publicController";
+import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/auth";
+import { validate } from "../middleware/validate";
+import { slugParamSchema } from "../validators/common";
 import { accountRouter } from "./accountRoutes";
 import { activityRouter } from "./activityRoutes";
 import { appointmentRouter } from "./appointmentRoutes";
@@ -22,6 +26,11 @@ import { waitlistRouter } from "./waitlistRoutes";
 export const apiRouter = Router();
 
 apiRouter.use(healthRouter);
+apiRouter.get(
+  ["/booking/:slug", "/book/:slug"],
+  validate({ params: slugParamSchema }),
+  asyncHandler(publicController.redirectToBookingPage)
+);
 apiRouter.use("/api/public", publicRouter);
 apiRouter.use("/internal", internalRouter);
 apiRouter.use("/me", requireAuth);

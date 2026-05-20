@@ -12,7 +12,7 @@ import {
 } from "../lib/plans";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
-import { handleSupabaseError } from "./db";
+import { handleSupabaseError, isMissingColumnError } from "./db";
 
 const toWholeNumber = (value: unknown, fallback: number): number => {
   const parsed = Number(value);
@@ -26,6 +26,8 @@ const toWholeNumber = (value: unknown, fallback: number): number => {
 
 const normalizePlanTier = (value: unknown): PlanTier => (isPlanTier(value) ? value : DEFAULT_PLAN_TIER);
 const normalizePlanStatus = (value: unknown): PlanStatus => (isPlanStatus(value) ? value : DEFAULT_PLAN_STATUS);
+
+const ENTITLEMENT_COLUMNS = "plan_tier, plan_status, sms_monthly_limit, sms_used_this_month, waitlist_enabled";
 
 const toEntitlements = (user: Row | null): UserEntitlements => {
   const tier = normalizePlanTier(user?.plan_tier);
@@ -53,6 +55,28 @@ const toEntitlements = (user: Row | null): UserEntitlements => {
   };
 };
 
+const loadEntitlementUserRow = async (userId: string, fallbackMessage: string): Promise<Row | null> => {
+  const { data, error } = await supabaseAdmin
+    .from("users")
+    .select(ENTITLEMENT_COLUMNS)
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!isMissingColumnError(error)) {
+    handleSupabaseError(error, fallbackMessage);
+    return (data as Row | null) ?? null;
+  }
+
+  const fallback = await supabaseAdmin
+    .from("users")
+    .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  handleSupabaseError(fallback.error, fallbackMessage);
+  return (fallback.data as Row | null) ?? null;
+};
+
 export const entitlementsService = {
   async getPlanForUser(userId: string): Promise<{
     tier: PlanTier;
@@ -60,14 +84,7 @@ export const entitlementsService = {
     smsMonthlyLimit: number;
     smsUsedThisMonth: number;
   }> {
-    const { data, error } = await supabaseAdmin
-      .from("users")
-      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month, waitlist_enabled")
-      .eq("id", userId)
-      .maybeSingle();
-
-    handleSupabaseError(error, "Unable to load user plan");
-    const entitlements = toEntitlements((data as Row | null) ?? null);
+    const entitlements = toEntitlements(await loadEntitlementUserRow(userId, "Unable to load user plan"));
 
     return {
       tier: entitlements.tier,
@@ -78,14 +95,7 @@ export const entitlementsService = {
   },
 
   async getEntitlementsForUser(userId: string): Promise<UserEntitlements> {
-    const { data, error } = await supabaseAdmin
-      .from("users")
-      .select("plan_tier, plan_status, sms_monthly_limit, sms_used_this_month, waitlist_enabled")
-      .eq("id", userId)
-      .maybeSingle();
-
-    handleSupabaseError(error, "Unable to load user entitlements");
-    return toEntitlements((data as Row | null) ?? null);
+    return toEntitlements(await loadEntitlementUserRow(userId, "Unable to load user entitlements"));
   },
 
   async assertFeatureAllowed(userId: string, featureKey: PlanFeatureKey): Promise<void> {

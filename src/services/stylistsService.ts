@@ -16,6 +16,9 @@ const sanitizeStylistPayload = (payload: Row): Row => ({
   instagram: payload.instagram === null ? null : stripLeadingAt(payload.instagram as string | undefined)
 });
 
+const omitUndefinedValues = (payload: Row): Row =>
+  Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+
 const stripLeadingAt = (value: string | undefined): string | undefined => {
   const normalized = normalizeEmptyString(value)?.trim();
   if (!normalized) {
@@ -121,7 +124,8 @@ const createDefaultStylistForUser = async (userId: string, payload: Row): Promis
     bio: payload.bio,
     cover_photo_url: payload.cover_photo_url,
     instagram: payload.instagram,
-    booking_enabled: payload.booking_enabled ?? false
+    booking_enabled: payload.booking_enabled ?? false,
+    intelligent_scheduling_enabled: payload.intelligent_scheduling_enabled ?? true
   };
 
   const { data, error } = await supabaseAdmin
@@ -197,7 +201,8 @@ export const stylistsService = {
       timezone: resolveBusinessTimeZone(user),
       features: {
         waitlistEnabled: entitlements.effectiveFeatures.waitlistEnabled
-      }
+      },
+      intelligent_scheduling_enabled: stylist.intelligent_scheduling_enabled !== false
     };
   },
 
@@ -209,7 +214,7 @@ export const stylistsService = {
 
   async upsertForUser(userId: string, payload: Row): Promise<Row> {
     const existing = await this.getByUserId(userId);
-    const cleanedPayload = sanitizeStylistPayload(payload);
+    const cleanedPayload = omitUndefinedValues(sanitizeStylistPayload(payload));
 
     if (payload.cover_photo_url !== undefined) {
       await entitlementsService.assertFeatureAllowed(userId, "customCoverPhoto");

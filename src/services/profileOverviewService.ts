@@ -122,13 +122,21 @@ const shiftMonthStartDate = (monthStartDate: string, deltaMonths: number): strin
   return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-01`;
 };
 
-const getDisplayName = (user: Row | null, stylist: Row | null): string => {
-  const stylistDisplayName = typeof stylist?.display_name === "string" ? stylist.display_name.trim() : "";
+const getTrimmedString = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || null;
+};
+
+const getDisplayName = (user: Row | null): string => {
   const businessName = typeof user?.business_name === "string" ? user.business_name.trim() : "";
   const fullName = typeof user?.full_name === "string" ? user.full_name.trim() : "";
   const email = typeof user?.email === "string" ? user.email : "";
 
-  return stylistDisplayName || businessName || fullName || email || "Your Profile";
+  return fullName || businessName || email || "Your Profile";
 };
 
 const getLocationLabel = (user: Row | null): string => {
@@ -506,7 +514,10 @@ export const profileOverviewService = {
     return {
       avatarImageId: getAvatarImageId(user),
       profile: {
-        displayName: getDisplayName(user, stylist),
+        displayName: getDisplayName(user),
+        fullName: getTrimmedString(user?.full_name),
+        businessName: getTrimmedString(user?.business_name),
+        bookingDisplayName: getTrimmedString(stylist?.display_name),
         planLabel: getPlanLabel(user),
         locationLabel: getLocationLabel(user)
       },

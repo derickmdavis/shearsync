@@ -127,6 +127,7 @@ create table if not exists public.stylists (
   cover_photo_url text,
   instagram text,
   booking_enabled boolean default false,
+  intelligent_scheduling_enabled boolean not null default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

@@ -1342,6 +1342,11 @@ Important waitlist distinction:
 - Purpose: richer profile/settings overview payload
 - Main service: `profileOverviewService.getOverview`
 - Response: `{ data: ProfileOverviewResponse }`
+- Profile identity fields:
+  - `profile.displayName` is the in-app display fallback and is derived from `users.full_name`, then `users.business_name`, then email.
+  - `profile.fullName` mirrors `users.full_name`.
+  - `profile.businessName` mirrors `users.business_name`.
+  - `profile.bookingDisplayName` mirrors `stylists.display_name` and is the public booking page display name.
 - Important note:
   - This endpoint bootstraps booking rules if missing.
   - It does not auto-create a `stylists` row.
@@ -1494,8 +1499,12 @@ Important waitlist distinction:
 
 - Auth: required
 - Controller: `settingsController.getProfile`
-- Purpose: return current `users` row
+- Purpose: return current `users` row for account/business profile settings
 - Response: `{ data: userRow }`
+- Source of truth:
+  - `full_name` is the logged-in app user's canonical full name.
+  - `business_name` is the canonical business/account name.
+  - Public booking page display name is not stored here; use `GET /api/settings/booking`.
 
 ### 7.32 `PATCH /api/settings/profile`
 
@@ -1525,6 +1534,8 @@ Important waitlist distinction:
   - `stylistsService.ensureByUserId(userId)`
   - auto-creates row if missing
 - Response: `{ data: stylistRow }`
+- Source of truth:
+  - `display_name` is the public booking page display name and is separate from `users.full_name`.
 
 ### 7.34 `PATCH /api/settings/booking`
 
@@ -1532,10 +1543,12 @@ Important waitlist distinction:
 - Validator: `updateBookingSettingsSchema`
 - Accepted body:
   - `slug`
-  - `display_name`
+  - `display_name` public booking page display name
   - `bio`
   - `cover_photo_url`
+  - `instagram`
   - `booking_enabled`
+  - `intelligent_scheduling_enabled`
 - Main logic:
   - creates row if missing
   - enforces plan gates:
@@ -1682,7 +1695,12 @@ Important waitlist distinction:
     },
     "slots": [
       { "start": "...offset datetime...", "end": "...offset datetime..." }
-    ]
+    ],
+    "moreSlots": [
+      { "start": "...offset datetime...", "end": "...offset datetime..." }
+    ],
+    "hasMore": true,
+    "intelligentSchedulingEnabled": true
   }
 }
 ```
@@ -1701,6 +1719,11 @@ Important waitlist distinction:
   - applies audience-specific availability windows
   - excludes overlapping active appointments
   - dedupes slot starts across DST transitions
+  - when `stylists.intelligent_scheduling_enabled = true`, ranks valid slots for display and returns up to 5 in `slots`
+  - remaining valid slots are returned chronologically in `moreSlots`; this supports a frontend "View more" button
+  - when intelligent scheduling is disabled, all valid slots remain in `slots`, `moreSlots` is empty, and `hasMore = false`
+
+Intelligent Scheduling is a ranking/display feature, not a hard availability rule. It runs after all technical booking validation has produced valid slots. It never removes valid appointment times from the response; it only splits the best initial options from the remaining valid options.
 
 ### 7.43 `POST /api/public/booking-intake`
 

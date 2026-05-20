@@ -147,7 +147,8 @@ describe("Public availability DST handling", () => {
           user_id: userId,
           slug: "maya-johnson",
           display_name: "Maya Johnson",
-          booking_enabled: true
+          booking_enabled: true,
+          intelligent_scheduling_enabled: false
         }
       ],
       booking_rules: [
@@ -237,7 +238,8 @@ describe("Public availability DST handling", () => {
           user_id: userId,
           slug: "maya-johnson",
           display_name: "Maya Johnson",
-          booking_enabled: true
+          booking_enabled: true,
+          intelligent_scheduling_enabled: false
         }
       ],
       booking_rules: [
