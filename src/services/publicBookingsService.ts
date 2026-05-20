@@ -103,6 +103,43 @@ const queuePublicBookingEmail = async (
   }
 };
 
+const findMatchingPublicBookingForClients = async (
+  userId: string,
+  clients: Row[],
+  {
+    appointmentDate,
+    serviceName,
+    durationMinutes
+  }: {
+    appointmentDate: string;
+    serviceName: string;
+    durationMinutes: number;
+  }
+): Promise<Row | null> => {
+  const seenClientIds = new Set<string>();
+
+  for (const client of clients) {
+    const clientId = client.id;
+    if (typeof clientId !== "string" || seenClientIds.has(clientId)) {
+      continue;
+    }
+
+    seenClientIds.add(clientId);
+    const existingAppointment = await appointmentsService.findMatchingPublicBooking(userId, {
+      clientId,
+      appointmentDate,
+      serviceName,
+      durationMinutes
+    });
+
+    if (existingAppointment) {
+      return existingAppointment;
+    }
+  }
+
+  return null;
+};
+
 const persistGuestEmailIfMissing = async (
   userId: string,
   client: Row,
@@ -166,8 +203,31 @@ export const publicBookingsService = {
 
     if (!slotEvaluation.ok) {
       if (slotEvaluation.reason === "appointment_conflict" && matchedClient) {
-        const existingAppointment = await appointmentsService.findMatchingPublicBooking(userId, {
-          clientId: matchedClient.id as string,
+        const existingAppointment = await findMatchingPublicBookingForClients(userId, [matchedClient], {
+          appointmentDate: requestedDateTime,
+          serviceName: service.name as string,
+          durationMinutes: serviceDurationMinutes
+        });
+
+        if (existingAppointment) {
+          await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
+
+          return buildConfirmation({
+            appointment: existingAppointment,
+            stylist,
+            service,
+            userId,
+            serviceDurationMinutes
+          });
+        }
+      }
+
+      if (slotEvaluation.reason === "appointment_conflict" && !matchedClient) {
+        const latestMatchedClients = await clientsService.findBookingMatches(userId, {
+          email: normalizedGuestEmail,
+          phone: normalizedGuestPhone
+        });
+        const existingAppointment = await findMatchingPublicBookingForClients(userId, latestMatchedClients, {
           appointmentDate: requestedDateTime,
           serviceName: service.name as string,
           durationMinutes: serviceDurationMinutes
@@ -225,8 +285,11 @@ export const publicBookingsService = {
         throw error;
       }
 
-      const existingAppointment = await appointmentsService.findMatchingPublicBooking(userId, {
-        clientId: client.id as string,
+      const latestMatchedClients = await clientsService.findBookingMatches(userId, {
+        email: normalizedGuestEmail,
+        phone: normalizedGuestPhone
+      });
+      const existingAppointment = await findMatchingPublicBookingForClients(userId, [client, ...latestMatchedClients], {
         appointmentDate: requestedDateTime,
         serviceName: service.name as string,
         durationMinutes: serviceDurationMinutes
