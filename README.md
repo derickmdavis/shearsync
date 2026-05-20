@@ -33,6 +33,10 @@ SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 CLIENT_APP_URL=http://localhost:8081
 WEB_APP_URL=http://localhost:3001
+INTERNAL_API_SECRET=your-long-random-internal-secret
+RESEND_API_KEY=your-resend-api-key
+EMAIL_FROM="DripDesk <appointments@your-verified-domain.com>"
+EMAIL_REPLY_TO=support@your-verified-domain.com
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.

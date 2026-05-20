@@ -21,7 +21,10 @@ const envSchema = z.object({
   DEV_AUTH_USER_EMAIL: z.string().email().optional(),
   CLIENT_APP_URL: z.string().url().optional(),
   WEB_APP_URL: z.string().url().optional(),
-  INTERNAL_API_SECRET: z.string().min(16).optional()
+  INTERNAL_API_SECRET: z.string().min(16).optional(),
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(1).optional(),
+  EMAIL_REPLY_TO: z.string().email().optional()
 });
 
 export const parseEnv = (rawEnv: NodeJS.ProcessEnv) => {

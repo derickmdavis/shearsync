@@ -2531,7 +2531,7 @@ Stored in the database or entitlement config:
 
 ### Actual email/SMS sending status
 
-Actual provider delivery is not implemented in this repo.
+Actual appointment email delivery is implemented for Resend when `RESEND_API_KEY` and `EMAIL_FROM` are configured.
 
 What exists today:
 
@@ -2543,6 +2543,7 @@ What exists today:
 - appointment email event queueing for scheduled, pending, confirmed, cancelled, and rescheduled appointments
 - email-ready appointment template data including business identity, formatted appointment time range, appointment end time, timezone, contact info, management token, and management URL when app URL env is configured
 - provider-neutral appointment email rendering and queue processing in `appointmentEmailDeliveryService`
+- Resend provider delivery for appointment emails
 - an explicit opt-in noop email provider that marks appointment email events as `skipped`
 - provider state fields on appointment email events: `status`, `provider`, `provider_message_id`, `sent_at`, and `error`
 - delivery retry fields on appointment email events: `attempt_count` and `last_attempt_at`
@@ -2562,7 +2563,6 @@ Internal trigger:
 
 What does not exist:
 
-- provider integrations
 - external scheduler configuration for calling the appointment email queue trigger
 - reminder delivery pipeline
 - automatic reminder send triggers
@@ -2861,7 +2861,7 @@ These are visible in the current code and should be treated as implementation re
 
 ### Messaging and reminders
 
-- Appointment email queueing and provider-neutral processing exist, but no real email provider adapter is configured. Processing refuses to use the noop provider unless explicitly requested.
+- Appointment email queueing and provider-neutral processing exist. Resend delivery is used when `RESEND_API_KEY` and `EMAIL_FROM` are configured; processing refuses to use the noop provider unless explicitly requested.
 - No SMS delivery implementation exists.
 - Reminder records and activity events exist, but sending is out of scope in this repo.
 - `entitlementsService.assertSmsAvailable()` exists but is not wired into reminder mutation routes.

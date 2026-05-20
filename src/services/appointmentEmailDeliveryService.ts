@@ -1,3 +1,4 @@
+import { Resend } from "resend";
 import { env } from "../config/env";
 import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
@@ -73,6 +74,41 @@ const noopEmailProvider: EmailProvider = {
       error: "No email provider configured"
     };
   }
+};
+
+const createResendEmailProvider = (): EmailProvider | null => {
+  const apiKey = getString(env.RESEND_API_KEY, "");
+  const from = getString(env.EMAIL_FROM, "");
+  const replyTo = getString(env.EMAIL_REPLY_TO, "");
+
+  if (!apiKey || !from) {
+    return null;
+  }
+
+  const resend = new Resend(apiKey);
+
+  return {
+    async send(message: EmailMessage): Promise<EmailProviderResult> {
+      const { data, error } = await resend.emails.send({
+        from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+        ...(replyTo ? { replyTo } : {})
+      });
+
+      if (error) {
+        throw new Error(`Resend email send failed: ${error.message}`);
+      }
+
+      return {
+        status: "sent",
+        provider: "resend",
+        providerMessageId: data.id
+      };
+    }
+  };
 };
 
 const escapeHtml = (value: string): string =>
@@ -235,6 +271,12 @@ const getProvider = (options: ProcessAppointmentEmailOptions): EmailProvider => 
     return noopEmailProvider;
   }
 
+  const resendProvider = createResendEmailProvider();
+
+  if (resendProvider) {
+    return resendProvider;
+  }
+
   throw new ApiError(503, "Email provider is not configured");
 };
 
@@ -339,6 +381,7 @@ const claimEmailEvent = async (emailEvent: Row, now: Date): Promise<Row | null> 
 
 export const appointmentEmailDeliveryService = {
   noopEmailProvider,
+  createResendEmailProvider,
   renderAppointmentEmail,
 
   async processQueuedAppointmentEmails(
