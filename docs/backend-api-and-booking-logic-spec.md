@@ -1763,13 +1763,15 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - `guest_last_name`
   - `guest_email`
   - `guest_phone`
+  - optional `booking_context_token`
   - optional `notes`
 - Purpose: final public booking creation
 - Main service: `publicBookingsService.create`
 - Response: `{ data: PublicBookingConfirmation }`
 - Important behavior:
-  - does not accept or require `booking_context_token`
-  - rematches the client directly from submitted contact info
+  - accepts but does not require `booking_context_token`
+  - uses a valid booking context token for existing/new-client rule validation when provided
+  - otherwise rematches the client directly from submitted contact info
   - can create `status = scheduled` or `status = pending`
   - writes `booking_source = public`
   - on exact duplicate repeat submission for the same client/service/start/duration, returns the existing appointment confirmation instead of creating a second row
@@ -2068,7 +2070,7 @@ Audience handling rules:
   - `all`
   - `returning`
 
-Final booking itself does not accept the token, but it re-derives `isExistingClient` from direct match and applies the same audience logic in `availabilityService.isRequestedTimeAvailable(...)`.
+Final booking accepts the token as optional. When present, it uses the token's `isExistingClient` value for rule and audience validation; otherwise, it re-derives `isExistingClient` from direct contact matching.
 
 ### 8.16 Existing appointments blocking time
 
@@ -2137,7 +2139,7 @@ This happens for both `scheduled` and `pending` public bookings.
 
 ### 8.21 Known booking gaps visible in code
 
-- final booking does not accept `booking_context_token`; it re-derives existing/new client status instead
+- final booking accepts `booking_context_token` but still relies on submitted phone/email to resolve or create the client record
 - intake ambiguity suggests `collect_email_or_name`, but name is not actually used for final disambiguation
 - no public cancel or reschedule routes
 - no payment capture or deposit logic
@@ -2895,7 +2897,7 @@ These are visible in the current code and should be treated as implementation re
 ### Booking context token limitations
 
 - The token only carries `isExistingClient` and stylist slug.
-- Final booking does not accept this token; it rematches directly from submitted contact info.
+- Final booking accepts this token for rule validation, but still rematches directly from submitted contact info to resolve or create the client record.
 
 ### Intake ambiguity gap
 
@@ -3031,4 +3033,4 @@ These tests are useful for:
 - Do not silently change the `PublicBookingIntakeResponse` shape.
 - Do not change slot datetime formatting without updating clients.
 - Remember that public services route returns raw DB rows today; changing it to the private camelCase catalog shape would be a breaking API change.
-- Remember that final public booking currently does not accept `booking_context_token`; adding a requirement there would be breaking.
+- Final public booking accepts optional `booking_context_token`; making it required would be breaking.

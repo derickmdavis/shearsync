@@ -19,6 +19,7 @@ export const createPublicBookingSchema = z.object({
   guest_last_name: z.string().min(1).max(100),
   guest_email: optionalEmailSchema,
   guest_phone: publicPhoneSchema,
+  booking_context_token: bookingContextTokenSchema,
   notes: z.string().max(2000).optional()
 });
 

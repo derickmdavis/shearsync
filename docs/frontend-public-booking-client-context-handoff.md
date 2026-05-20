@@ -20,7 +20,7 @@ The backend now supports that by minting a short-lived `bookingContextToken` fro
 8. Call `GET /api/public/services/:slug?booking_context_token=...`.
 9. If the page needs raw weekly availability, call `GET /api/public/availability/:slug?booking_context_token=...`.
 10. After the guest picks a service, call `GET /api/public/availability/:slug/slots?service_id=...&date=YYYY-MM-DD&booking_context_token=...`.
-11. Submit the final booking with `POST /api/public/bookings`.
+11. Submit the final booking with `POST /api/public/bookings`, including the same `booking_context_token`.
 
 If the guest edits their name, phone, or email after intake, the web app should run intake again and replace the old `bookingContextToken`.
 
@@ -103,7 +103,7 @@ Behavior:
 - Keep the same `bookingContextToken` for the service and slot calls that belong to the same intake result.
 - Treat `booking_enabled` from the profile response and `bookingEnabled` from the intake response as hard stops for the booking flow.
 - If the backend returns `400` for an invalid or expired booking context token, rerun intake and retry the services or slots request with the fresh token.
-- `POST /api/public/bookings` does not take the token. Final booking creation still performs its own backend-side client match and rule validation.
+- `POST /api/public/bookings` accepts the same token as optional `booking_context_token`. Final booking creation still performs backend-side client matching, but it uses the token for the same new/returning-client rule validation used by services and slots.
 
 ## Suggested Web App State Shape
 

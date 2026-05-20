@@ -14,6 +14,7 @@ import { usersService } from "./usersService";
 import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
+import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 
 const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
   new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
@@ -140,7 +141,11 @@ export const publicBookingsService = {
       email: normalizedGuestEmail,
       phone: normalizedGuestPhone
     });
-    const isExistingClient = Boolean(matchedClient);
+    const bookingContext = resolvePublicBookingContextToken(
+      typeof payload.booking_context_token === "string" ? payload.booking_context_token : undefined,
+      stylist.slug as string
+    );
+    const isExistingClient = bookingContext?.isExistingClient ?? Boolean(matchedClient);
 
     const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
       userId,
