@@ -155,6 +155,14 @@ export const publicBookingsService = {
       mode: "booking",
       isExistingClient
     });
+    const validationDetails = {
+      reason: slotEvaluation.ok ? undefined : slotEvaluation.reason,
+      requestedDateTime,
+      bookingContextTokenPresent: typeof payload.booking_context_token === "string",
+      bookingContextIsExistingClient: bookingContext?.isExistingClient ?? null,
+      matchedClientFound: Boolean(matchedClient),
+      finalIsExistingClient: isExistingClient
+    };
 
     if (!slotEvaluation.ok) {
       if (slotEvaluation.reason === "appointment_conflict" && matchedClient) {
@@ -178,7 +186,9 @@ export const publicBookingsService = {
         }
       }
 
-      throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message);
+      throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message, validationDetails, {
+        exposeDetails: true
+      });
     }
 
     const resolvedClient = matchedClient ?? await clientsService.findOrCreateForBooking(userId, {
@@ -223,7 +233,12 @@ export const publicBookingsService = {
       });
 
       if (!existingAppointment) {
-        throw error;
+        throw new ApiError(409, "Requested time is no longer available", {
+          ...validationDetails,
+          reason: "appointment_write_conflict"
+        }, {
+          exposeDetails: true
+        });
       }
 
       await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);

@@ -22,7 +22,7 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     res.status(error.statusCode).json({
       error: {
         message: error.message,
-        details: env.NODE_ENV === "production" ? undefined : error.details
+        details: env.NODE_ENV === "production" && !error.exposeDetails ? undefined : error.details
       }
     });
     return;
@@ -35,4 +35,3 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     }
   });
 };
-

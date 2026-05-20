@@ -1,11 +1,18 @@
 export class ApiError extends Error {
   public readonly statusCode: number;
   public readonly details?: unknown;
+  public readonly exposeDetails: boolean;
 
-  constructor(statusCode: number, message: string, details?: unknown) {
+  constructor(
+    statusCode: number,
+    message: string,
+    details?: unknown,
+    options: { exposeDetails?: boolean } = {}
+  ) {
     super(message);
     this.statusCode = statusCode;
     this.details = details;
+    this.exposeDetails = options.exposeDetails === true;
   }
 }
 
@@ -18,4 +25,3 @@ export const requireFound = <T>(value: T | null, message?: string): T => {
 
   return value;
 };
-

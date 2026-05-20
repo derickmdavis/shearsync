@@ -3127,12 +3127,11 @@ describe("API handlers", () => {
       );
 
       assert.equal(newClientResponse.statusCode, 409);
-      assert.deepEqual(newClientResponse.body, {
-        error: {
-          message: "Requested time is no longer available",
-          details: undefined
-        }
-      });
+      assert.equal((newClientResponse.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (newClientResponse.body as { error: { details: { reason: string } } }).error.details.reason,
+        "outside_availability"
+      );
 
       const returningClientResponse = await runWithErrorHandler(
         (request, res) => publicController.createBooking(request, res),
@@ -3245,12 +3244,11 @@ describe("API handlers", () => {
       );
 
       assert.equal(response.statusCode, 409);
-      assert.deepEqual(response.body, {
-        error: {
-          message: "Requested time is no longer available",
-          details: undefined
-        }
-      });
+      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (response.body as { error: { details: { reason: string } } }).error.details.reason,
+        "slot_not_on_grid"
+      );
       assert.equal(supabase.state.appointments.length, 0);
     } finally {
       supabase.restore();
@@ -5814,12 +5812,11 @@ describe("API handlers", () => {
       const secondResponse = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), secondReq);
 
       assert.equal(secondResponse.statusCode, 409);
-      assert.deepEqual(secondResponse.body, {
-        error: {
-          message: "Requested time is no longer available",
-          details: undefined
-        }
-      });
+      assert.equal((secondResponse.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (secondResponse.body as { error: { details: { reason: string } } }).error.details.reason,
+        "appointment_conflict"
+      );
       assert.equal(supabase.state.appointments.length, 1);
     } finally {
       supabase.restore();
@@ -5914,12 +5911,11 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), req);
 
       assert.equal(response.statusCode, 409);
-      assert.deepEqual(response.body, {
-        error: {
-          message: "Requested time is no longer available",
-          details: undefined
-        }
-      });
+      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (response.body as { error: { details: { reason: string } } }).error.details.reason,
+        "outside_availability"
+      );
       assert.equal(supabase.state.appointments.length, 0);
     } finally {
       supabase.restore();
