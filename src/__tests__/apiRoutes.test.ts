@@ -29,6 +29,8 @@ const { settingsController } = require("../controllers/settingsController") as t
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
 const { entitlementsService } = require("../services/entitlementsService") as typeof import("../services/entitlementsService");
 const { clientsService } = require("../services/clientsService") as typeof import("../services/clientsService");
+const { appointmentEmailEventsService } =
+  require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { parseEnv } = require("../config/env") as typeof import("../config/env");
 const { normalizePhone } = require("../lib/phone") as typeof import("../lib/phone");
 const { errorHandler } = require("../middleware/errorHandler") as typeof import("../middleware/errorHandler");
@@ -4383,6 +4385,111 @@ describe("API handlers", () => {
       assert.equal(templateData.appointment_end_display, "10:00 AM UTC");
       assert.match(String(templateData.appointment_time_display), /Monday, .* at 9:00 AM UTC - 10:00 AM UTC/);
     } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not fail a public booking when email queueing fails", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const requestedDateTime = zonedDateTimeToUtc(monday, "UTC", 9, 0, 0, 0).toISOString();
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 3650,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true
+        }
+      ],
+      clients: [],
+      appointments: []
+    });
+    const emailQueueMock = mock.method(
+      appointmentEmailEventsService,
+      "queueAppointmentEmail",
+      async () => {
+        throw new Error("Unable to validate appointment email uniqueness");
+      }
+    );
+    const warnMock = mock.method(console, "warn", () => undefined);
+
+    try {
+      const req = createMockRequest({
+        body: createPublicBookingSchema.parse({
+          stylist_slug: "maya-johnson",
+          service_id: ownedServiceId,
+          requested_datetime: requestedDateTime,
+          guest_first_name: "Jane",
+          guest_last_name: "Doe",
+          guest_email: "jane@example.com",
+          guest_phone: "720-555-0103"
+        })
+      });
+
+      const response = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), req);
+
+      assert.equal(response.statusCode, 201);
+      assert.equal(supabase.state.appointments.length, 1);
+      assert.equal((response.body as { data: { appointment_id: string } }).data.appointment_id, supabase.state.appointments[0]?.id);
+      assert.equal(warnMock.mock.callCount(), 1);
+    } finally {
+      warnMock.mock.restore();
+      emailQueueMock.mock.restore();
       supabase.restore();
     }
   });

@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "process:appointment-emails": "node dist/scripts/processAppointmentEmails.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/__tests__/**/*.test.ts"
   },

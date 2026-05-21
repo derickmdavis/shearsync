@@ -90,15 +90,24 @@ const queuePublicBookingEmail = async (
 ): Promise<void> => {
   const status = appointment.status as string | undefined;
 
-  if (status === "scheduled") {
-    await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_scheduled", {
-      recipientEmail
-    });
-  }
+  try {
+    if (status === "scheduled") {
+      await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_scheduled", {
+        recipientEmail
+      });
+    }
 
-  if (status === "pending") {
-    await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_pending", {
-      recipientEmail
+    if (status === "pending") {
+      await appointmentEmailEventsService.queueAppointmentEmail(userId, appointment, "appointment_pending", {
+        recipientEmail
+      });
+    }
+  } catch (error) {
+    console.warn("[PUBLIC_BOOKING_EMAIL] failed to queue appointment email", {
+      userId,
+      appointmentId: appointment.id,
+      status,
+      error: error instanceof Error ? error.message : String(error)
     });
   }
 };
