@@ -5,7 +5,7 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "${{RAILWAY_START_COMMAND:-npm run start}}",
+    "startCommand": "bash -lc \"${RAILWAY_START_COMMAND:-npm run start}\"",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
