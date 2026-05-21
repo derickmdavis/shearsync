@@ -107,6 +107,18 @@ const getAppointmentManagementUrl = (managementToken: string): string | null => 
   return `${baseUrl.replace(/\/+$/, "")}/appointments/manage/${encodeURIComponent(managementToken)}`;
 };
 
+const loadExistingEmailEventByIdempotencyKey = async (idempotencyKey: string): Promise<Row | null> => {
+  const { data, error } = await supabaseAdmin
+    .from("appointment_email_events")
+    .select("*")
+    .eq("idempotency_key", idempotencyKey)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  handleSupabaseError(error, "Unable to validate appointment email uniqueness");
+  return ((data ?? []) as Row[])[0] ?? null;
+};
+
 const loadStylist = async (stylistId: string): Promise<Row | null> => {
   const { data, error } = await supabaseAdmin
     .from("stylists")
@@ -193,13 +205,7 @@ export const appointmentEmailEventsService = {
     const appointmentStartTime = String(appointment.appointment_date ?? "");
     const idempotencyKey = getAppointmentEmailIdempotencyKey(emailType, appointmentId, appointmentStartTime);
 
-    const { data: existing, error: existingError } = await supabaseAdmin
-      .from("appointment_email_events")
-      .select("*")
-      .eq("idempotency_key", idempotencyKey)
-      .maybeSingle();
-
-    handleSupabaseError(existingError, "Unable to validate appointment email uniqueness");
+    const existing = await loadExistingEmailEventByIdempotencyKey(idempotencyKey);
     if (existing) {
       return existing;
     }
@@ -249,14 +255,7 @@ export const appointmentEmailEventsService = {
       .single();
 
     if (isUniqueViolation(error)) {
-      const { data: existingAfterConflict, error: conflictLoadError } = await supabaseAdmin
-        .from("appointment_email_events")
-        .select("*")
-        .eq("idempotency_key", idempotencyKey)
-        .maybeSingle();
-
-      handleSupabaseError(conflictLoadError, "Unable to load existing appointment email");
-      return existingAfterConflict ?? null;
+      return loadExistingEmailEventByIdempotencyKey(idempotencyKey);
     }
 
     handleSupabaseError(error, "Unable to queue appointment email");
