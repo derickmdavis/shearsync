@@ -3158,13 +3158,13 @@ describe("API handlers", () => {
     }
   });
 
-  it("treats final public bookings as returning-client when submitted email matches despite a stale new-client token", async () => {
+  it("treats final public bookings as new-client when only submitted email matches despite a stale returning-client token", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
     const returningOnlySlotIso = zonedDateTimeToUtc(monday, "UTC", 11, 0, 0, 0).toISOString();
-    const staleNewClientToken = createPublicBookingContextToken({
+    const staleReturningClientToken = createPublicBookingContextToken({
       stylistSlug: "maya-johnson",
-      isExistingClient: false
+      isExistingClient: true
     });
     const supabase = installMockSupabase({
       users: [
@@ -3256,14 +3256,25 @@ describe("API handlers", () => {
             guest_last_name: "Smith",
             guest_email: "jane@example.com",
             guest_phone: "(720) 555-0199",
-            booking_context_token: staleNewClientToken
+            booking_context_token: staleReturningClientToken
           })
         })
       );
 
-      assert.equal(response.statusCode, 201);
-      assert.equal((response.body as { data: { client_id: string } }).data.client_id, "client-1");
-      assert.equal((response.body as { data: { appointment_date: string } }).data.appointment_date, returningOnlySlotIso);
+      assert.equal(response.statusCode, 409);
+      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (response.body as { error: { details: { reason: string; matchedClientFound: boolean; finalIsExistingClient: boolean } } }).error.details.reason,
+        "outside_availability"
+      );
+      assert.equal(
+        (response.body as { error: { details: { matchedClientFound: boolean } } }).error.details.matchedClientFound,
+        false
+      );
+      assert.equal(
+        (response.body as { error: { details: { finalIsExistingClient: boolean } } }).error.details.finalIsExistingClient,
+        false
+      );
     } finally {
       supabase.restore();
     }
@@ -4048,7 +4059,7 @@ describe("API handlers", () => {
     }
   });
 
-  it("falls back to email matching for booking intake when phone does not match", async () => {
+  it("does not fall back to email matching for booking intake when phone does not match", async () => {
     const supabase = installMockSupabase({
       stylists: [
         {
@@ -4108,7 +4119,7 @@ describe("API handlers", () => {
 
       const response = await runWithErrorHandler((request, res) => publicController.createBookingIntake(request, res), req);
 
-      assert.equal((response.body as { data: { matchStatus: string } }).data.matchStatus, "matched");
+      assert.equal((response.body as { data: { matchStatus: string } }).data.matchStatus, "not_found");
     } finally {
       supabase.restore();
     }
@@ -4605,7 +4616,7 @@ describe("API handlers", () => {
     }
   });
 
-  it("uses the booking context token during final public booking validation", async () => {
+  it("does not use the booking context token alone during final public booking validation", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
     const requestedDateTime = zonedDateTimeToUtc(monday, "UTC", 14, 0, 0, 0).toISOString();
@@ -4698,9 +4709,17 @@ describe("API handlers", () => {
         })
       );
 
-      assert.equal(response.statusCode, 201);
-      assert.equal(supabase.state.appointments.length, 1);
-      assert.equal(supabase.state.appointments[0]?.appointment_date, requestedDateTime);
+      assert.equal(response.statusCode, 409);
+      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
+      assert.equal(
+        (response.body as { error: { details: { reason: string; finalIsExistingClient: boolean } } }).error.details.reason,
+        "outside_availability"
+      );
+      assert.equal(
+        (response.body as { error: { details: { finalIsExistingClient: boolean } } }).error.details.finalIsExistingClient,
+        false
+      );
+      assert.equal(supabase.state.appointments.length, 0);
     } finally {
       supabase.restore();
     }

@@ -84,13 +84,11 @@ const sanitizeClientPayload = (payload: Row): Row => {
   return Object.fromEntries(Object.entries(sanitized).filter(([, value]) => value !== undefined));
 };
 
-const normalizeBookingLookup = (payload: Row): { email?: string; phone?: string; phoneNormalized?: string } => {
-  const email = normalizeEmptyString(payload.email as string | undefined)?.toLowerCase();
+const normalizeBookingLookup = (payload: Row): { phone?: string; phoneNormalized?: string } => {
   const phone = normalizeEmptyString(payload.phone as string | undefined);
   const phoneNormalized = phone ? normalizePhone(phone) ?? undefined : undefined;
 
   return {
-    email,
     phone,
     phoneNormalized
   };
@@ -289,7 +287,7 @@ export const clientsService = {
   },
 
   async findBookingMatches(userId: string, payload: Row): Promise<RowList> {
-    const { email, phone, phoneNormalized } = normalizeBookingLookup(payload);
+    const { phone, phoneNormalized } = normalizeBookingLookup(payload);
 
     if (phoneNormalized) {
       const { data, error } = await supabaseAdmin
@@ -318,17 +316,6 @@ export const clientsService = {
       if ((data ?? []).length > 0) {
         return data ?? [];
       }
-    }
-
-    if (email) {
-      const { data, error } = await supabaseAdmin
-        .from("clients")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("email", email);
-
-      handleSupabaseError(error, "Unable to match booking client");
-      return data ?? [];
     }
 
     return [];
