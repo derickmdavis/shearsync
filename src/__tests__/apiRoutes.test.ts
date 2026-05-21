@@ -3158,6 +3158,117 @@ describe("API handlers", () => {
     }
   });
 
+  it("treats final public bookings as returning-client when submitted email matches despite a stale new-client token", async () => {
+    const today = getCurrentLocalDate("UTC");
+    const monday = getNextLocalDay(addDays(today, 1), 1);
+    const returningOnlySlotIso = zonedDateTimeToUtc(monday, "UTC", 11, 0, 0, 0).toISOString();
+    const staleNewClientToken = createPublicBookingContextToken({
+      stylistSlug: "maya-johnson",
+      isExistingClient: false
+    });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      booking_rules: [
+        {
+          id: "rules-1",
+          user_id: userId,
+          lead_time_hours: 0,
+          same_day_booking_allowed: true,
+          same_day_booking_cutoff: "23:59:00",
+          max_booking_window_days: 90,
+          cancellation_window_hours: 24,
+          late_cancellation_fee_enabled: false,
+          late_cancellation_fee_type: "flat",
+          late_cancellation_fee_value: 0,
+          allow_cancellation_after_cutoff: false,
+          reschedule_window_hours: 24,
+          max_reschedules: null,
+          same_day_rescheduling_allowed: false,
+          preserve_appointment_history: true,
+          new_client_approval_required: false,
+          new_client_booking_window_days: 30,
+          restrict_services_for_new_clients: false,
+          restricted_service_ids: []
+        }
+      ],
+      services: [
+        {
+          id: ownedServiceId,
+          user_id: userId,
+          name: "Silk Press",
+          duration_minutes: 60,
+          price: 95,
+          is_active: true,
+          is_default: false,
+          sort_order: 1
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 1,
+          start_time: "11:00:00",
+          end_time: "12:00:00",
+          is_active: true,
+          client_audience: "returning"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Smith",
+          email: "jane@example.com",
+          phone: "7205550103",
+          phone_normalized: "+17205550103"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.createBooking(request, res),
+        createMockRequest({
+          body: createPublicBookingSchema.parse({
+            stylist_slug: "maya-johnson",
+            service_id: ownedServiceId,
+            requested_datetime: returningOnlySlotIso,
+            guest_first_name: "Jane",
+            guest_last_name: "Smith",
+            guest_email: "jane@example.com",
+            guest_phone: "(720) 555-0199",
+            booking_context_token: staleNewClientToken
+          })
+        })
+      );
+
+      assert.equal(response.statusCode, 201);
+      assert.equal((response.body as { data: { client_id: string } }).data.client_id, "client-1");
+      assert.equal((response.body as { data: { appointment_date: string } }).data.appointment_date, returningOnlySlotIso);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("rejects final public bookings that do not start on an advertised slot boundary", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);

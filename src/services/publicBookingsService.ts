@@ -191,7 +191,7 @@ export const publicBookingsService = {
       typeof payload.booking_context_token === "string" ? payload.booking_context_token : undefined,
       stylist.slug as string
     );
-    const isExistingClient = bookingContext?.isExistingClient ?? Boolean(matchedClient);
+    const isExistingClient = Boolean(matchedClient) || bookingContext?.isExistingClient === true;
 
     const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
       userId,
