@@ -161,6 +161,9 @@ const persistGuestEmailIfMissing = async (
   return clientsService.update(userId, client.id as string, { email: guestEmail });
 };
 
+const getAppointmentEnd = (appointmentDate: string, durationMinutes: number): string =>
+  getAppointmentEndIso(appointmentDate, durationMinutes);
+
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
@@ -205,7 +208,16 @@ export const publicBookingsService = {
       bookingContextTokenPresent: typeof payload.booking_context_token === "string",
       bookingContextIsExistingClient: bookingContext?.isExistingClient ?? null,
       matchedClientFound: Boolean(matchedClient),
-      finalIsExistingClient: isExistingClient
+      finalIsExistingClient: isExistingClient,
+      conflicts: slotEvaluation.ok || slotEvaluation.reason !== "appointment_conflict"
+        ? undefined
+        : slotEvaluation.conflicts?.map((conflict) => ({
+          id: conflict.id,
+          start: conflict.appointment_date,
+          end: getAppointmentEnd(conflict.appointment_date, conflict.duration_minutes),
+          durationMinutes: conflict.duration_minutes,
+          status: conflict.status
+        }))
     };
 
     if (!slotEvaluation.ok) {

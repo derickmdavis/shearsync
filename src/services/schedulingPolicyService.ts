@@ -7,7 +7,7 @@ import {
 } from "../lib/timezone";
 import { appointmentsOverlap } from "../lib/appointments";
 import type { AvailabilityClientAudience, BookingSettings } from "../types/api";
-import { appointmentsService } from "./appointmentsService";
+import { appointmentsService, type AppointmentConflictSummary } from "./appointmentsService";
 import { bookingRulesService } from "./bookingRulesService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import type { Row } from "./db";
@@ -28,6 +28,7 @@ interface AppointmentSummary extends Row {
   id?: string;
   appointment_date: string;
   duration_minutes: number;
+  status?: string;
 }
 
 interface EvaluateRequestedSlotOptions {
@@ -68,6 +69,7 @@ export type SlotEvaluation =
       | "off_day"
       | "outside_availability"
       | "appointment_conflict";
+    conflicts?: AppointmentConflictSummary[];
   };
 
 const timeToMinutes = (time: string): number => {
@@ -250,25 +252,38 @@ export const schedulingPolicyService = {
       return { ok: false, statusCode: 409, message: requestedTimeUnavailableMessage, reason: "outside_availability" };
     }
 
-    const hasConflict = options.appointments
-      ? options.appointments.some((appointment) =>
-        appointment.id !== currentAppointmentId &&
-        appointmentsOverlap(
-          requestedDateTime,
-          durationMinutes,
-          appointment.appointment_date,
-          Number(appointment.duration_minutes ?? 0)
+    const conflicts = options.appointments
+      ? options.appointments
+        .filter((appointment) =>
+          appointment.id !== currentAppointmentId &&
+          appointmentsOverlap(
+            requestedDateTime,
+            durationMinutes,
+            appointment.appointment_date,
+            Number(appointment.duration_minutes ?? 0)
+          )
         )
-      )
-      : await appointmentsService.hasSlotConflict(
+        .map((appointment) => ({
+          id: typeof appointment.id === "string" ? appointment.id : undefined,
+          appointment_date: appointment.appointment_date,
+          duration_minutes: Number(appointment.duration_minutes ?? 0),
+          status: typeof appointment.status === "string" ? appointment.status : undefined
+        }))
+      : await appointmentsService.listSlotConflicts(
         userId,
         requestedDateTime,
         durationMinutes,
         currentAppointmentId
       );
 
-    if (hasConflict) {
-      return { ok: false, statusCode: 409, message: requestedTimeUnavailableMessage, reason: "appointment_conflict" };
+    if (conflicts.length > 0) {
+      return {
+        ok: false,
+        statusCode: 409,
+        message: requestedTimeUnavailableMessage,
+        reason: "appointment_conflict",
+        conflicts
+      };
     }
 
     return {

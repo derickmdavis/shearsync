@@ -275,7 +275,7 @@ export const availabilityService = {
   async listActiveAppointmentsForLocalDate(userId: string, dateText: string, timeZone: string): Promise<AppointmentSummary[]> {
     const { data, error } = await supabaseAdmin
       .from("appointments")
-      .select("appointment_date, duration_minutes, status")
+      .select("id, appointment_date, duration_minutes, status")
       .eq("user_id", userId)
       .neq("status", "cancelled")
       .gte("appointment_date", getStartOfLocalDayUtc(dateText, timeZone).toISOString())

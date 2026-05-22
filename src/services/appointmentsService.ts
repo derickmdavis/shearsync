@@ -57,6 +57,13 @@ interface AppointmentCreateOptions {
   slotConflictMessage?: string;
 }
 
+export interface AppointmentConflictSummary {
+  id?: string;
+  appointment_date: string;
+  duration_minutes: number;
+  status?: string;
+}
+
 export const appointmentsService = {
   async findMatchingPublicBooking(
     userId: string,
@@ -289,6 +296,16 @@ export const appointmentsService = {
     durationMinutes: number,
     excludedAppointmentId?: string
   ): Promise<boolean> {
+    const conflicts = await this.listSlotConflicts(userId, appointmentDate, durationMinutes, excludedAppointmentId);
+    return conflicts.length > 0;
+  },
+
+  async listSlotConflicts(
+    userId: string,
+    appointmentDate: string,
+    durationMinutes: number,
+    excludedAppointmentId?: string
+  ): Promise<AppointmentConflictSummary[]> {
     const appointmentStart = new Date(appointmentDate);
     const appointmentEnd = new Date(appointmentStart.getTime() + durationMinutes * 60_000);
     const earliestPossibleOverlap = new Date(
@@ -296,7 +313,7 @@ export const appointmentsService = {
     );
     let query = supabaseAdmin
       .from("appointments")
-      .select("id, appointment_date, duration_minutes")
+      .select("id, appointment_date, duration_minutes, status")
       .eq("user_id", userId)
       .neq("status", "cancelled")
       .gte("appointment_date", earliestPossibleOverlap.toISOString())
@@ -309,8 +326,8 @@ export const appointmentsService = {
     const { data, error } = await query;
 
     handleSupabaseError(error, "Unable to validate appointment slot");
-    return Boolean(
-      data?.some((appointment) =>
+    return (data ?? [])
+      .filter((appointment) =>
         appointmentsOverlap(
           appointmentDate,
           durationMinutes,
@@ -318,7 +335,12 @@ export const appointmentsService = {
           toDurationMinutes(appointment.duration_minutes)
         )
       )
-    );
+      .map((appointment) => ({
+        id: typeof appointment.id === "string" ? appointment.id : undefined,
+        appointment_date: appointment.appointment_date as string,
+        duration_minutes: toDurationMinutes(appointment.duration_minutes),
+        status: typeof appointment.status === "string" ? appointment.status : undefined
+      }));
   },
 
   async createForBooking(userId: string, payload: Row): Promise<Row> {
