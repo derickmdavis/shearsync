@@ -5,6 +5,7 @@ import {
   getStartOfLocalDayUtc,
   zonedDateTimeToUtc
 } from "../lib/timezone";
+import { getAppointmentEndIso } from "../lib/appointments";
 import { ApiError } from "../lib/errors";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 import { supabaseAdmin } from "../lib/supabase";
@@ -42,9 +43,6 @@ const formatTimeText = (minutes: number): { hour: number; minute: number } => ({
   hour: Math.floor(minutes / 60),
   minute: minutes % 60
 });
-
-const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
-  new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
 
 interface AvailabilityWindow extends Row {
   id?: string;

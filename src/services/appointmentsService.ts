@@ -1,4 +1,5 @@
 import { ApiError, requireFound } from "../lib/errors";
+import { appointmentsOverlap, getAppointmentEndIso } from "../lib/appointments";
 import { formatDateInTimeZone, formatInstantInTimeZoneOffset, getEndOfLocalDayUtc, getStartOfLocalDayUtc, zonedDateTimeToUtc } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
 import type { InternalAppointmentContext, BookingSource } from "../types/api";
@@ -33,21 +34,10 @@ const toDurationMinutes = (value: unknown): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
-  new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
-
 const formatTimeText = (minutes: number): { hour: number; minute: number } => ({
   hour: Math.floor(minutes / 60),
   minute: minutes % 60
 });
-
-const appointmentsOverlap = (
-  appointmentDate: string,
-  durationMinutes: number,
-  existingDate: string,
-  existingDurationMinutes: number
-): boolean => appointmentDate < getAppointmentEndIso(existingDate, existingDurationMinutes)
-  && getAppointmentEndIso(appointmentDate, durationMinutes) > existingDate;
 
 const toContextTimeRange = (appointment: Row, timeZone: string): { start: string; end: string } => {
   const appointmentDate = appointment.appointment_date as string;

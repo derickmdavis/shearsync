@@ -533,7 +533,11 @@ future_appointments as (
     schedule_slots.duration_minutes,
     schedule_slots.price,
     schedule_slots.status,
-    (date_trunc('day', now())::date + schedule_slots.day_offset + schedule_slots.start_time) as appointment_date
+    (
+      date_trunc('day', now() at time zone 'America/Denver')::date
+      + schedule_slots.day_offset
+      + schedule_slots.start_time
+    ) at time zone 'America/Denver' as appointment_date
   from schedule_slots
   join client_rows on client_rows.idx = ((schedule_slots.slot_no - 1) % 36) + 1
 )

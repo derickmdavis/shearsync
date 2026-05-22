@@ -1,4 +1,5 @@
 import { ApiError } from "../lib/errors";
+import { getAppointmentEndIso } from "../lib/appointments";
 import {
   formatInstantInTimeZoneOffset,
   zonedDateTimeToUtc
@@ -15,9 +16,6 @@ import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
-
-const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
-  new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
 
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
 

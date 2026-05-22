@@ -5,6 +5,7 @@ import {
   getLocalDayOfWeekForInstant,
   getMinutesSinceMidnightForInstant
 } from "../lib/timezone";
+import { appointmentsOverlap } from "../lib/appointments";
 import type { AvailabilityClientAudience, BookingSettings } from "../types/api";
 import { appointmentsService } from "./appointmentsService";
 import { bookingRulesService } from "./bookingRulesService";
@@ -73,17 +74,6 @@ const timeToMinutes = (time: string): number => {
   const [hours, minutes] = time.split(":").map(Number);
   return hours * 60 + minutes;
 };
-
-const getAppointmentEndIso = (appointmentDate: string, durationMinutes: number): string =>
-  new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString();
-
-const appointmentsOverlap = (
-  appointmentDate: string,
-  durationMinutes: number,
-  existingDate: string,
-  existingDurationMinutes: number
-): boolean => appointmentDate < getAppointmentEndIso(existingDate, existingDurationMinutes)
-  && getAppointmentEndIso(appointmentDate, durationMinutes) > existingDate;
 
 const normalizeAvailabilityAudience = (value: unknown): AvailabilityClientAudience =>
   value === "new" || value === "returning" ? value : "all";

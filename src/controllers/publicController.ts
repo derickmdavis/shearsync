@@ -10,6 +10,12 @@ import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
 
+const setLiveInventoryHeaders = (res: Response) => {
+  if (typeof res.set === "function") {
+    res.set("Cache-Control", "no-store");
+  }
+};
+
 export const publicController = {
   async redirectToBookingPage(req: Request, res: Response) {
     const webAppUrl = env.WEB_APP_URL ?? env.CLIENT_APP_URL;
@@ -38,6 +44,7 @@ export const publicController = {
   },
 
   async getAvailability(req: Request, res: Response) {
+    setLiveInventoryHeaders(res);
     const availability = await availabilityService.listActiveByStylistSlug(getRequiredParam(req, "slug"), {
       bookingContextToken: typeof req.query.booking_context_token === "string"
         ? req.query.booking_context_token
@@ -47,6 +54,7 @@ export const publicController = {
   },
 
   async getAvailabilitySlots(req: Request, res: Response) {
+    setLiveInventoryHeaders(res);
     const availability = await availabilityService.getBookableSlotsByStylistSlug(
       getRequiredParam(req, "slug"),
       req.query.service_id as string,
