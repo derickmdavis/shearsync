@@ -1234,11 +1234,23 @@ Important waitlist distinction:
 {
   "date": "YYYY-MM-DD",
   "appointments": [...],
+  "availableSlots": [
+    {
+      "id": "slot-YYYY-MM-DD-HHmm",
+      "startTime": "2026-07-06T08:30:00-06:00",
+      "endTime": "2026-07-06T10:00:00-06:00",
+      "durationMinutes": 90,
+      "canBook": true
+    }
+  ],
   "summary": {
-    "selected_date_label": "...",
-    "total_appointments": 0,
-    "booked_revenue": 0,
-    "open_slots": 0
+    "selectedDateLabel": "...",
+    "totalAppointments": 0,
+    "bookedRevenueCents": 0,
+    "bookedMinutes": 0,
+    "comparisonVsLastWeekPercent": null,
+    "freeMinutesRemaining": 0,
+    "openGapCount": 0
   }
 }
 ```
@@ -1247,7 +1259,10 @@ Important waitlist distinction:
   - excludes `status = cancelled`
   - joins client first/last name
   - returns derived `start_time`, `end_time`, `services`, `revenue`, `client_name`, `location: null`
-  - `open_slots` is `floor((availableMinutes - bookedMinutes) / 60)`, not a literal list of slots
+  - returns open gaps in `availableSlots`; frontend should not compute its own calendar gaps
+  - availability blockers are `scheduled`, `pending`, and `completed`
+  - booked revenue/time statuses are `scheduled`, `pending`, and `completed`
+  - `no_show` appointments can be returned in `appointments` but do not block availability or count toward booked revenue/time
 
 ### 7.20 `GET /api/dashboard`
 
@@ -2917,11 +2932,12 @@ These are visible in the current code and should be treated as implementation re
 - `availabilitySettings` returned from profile overview therefore normalizes missing audience values to `"all"`.
 - Audience-specific availability is preserved in `GET /api/settings/availability`, but not faithfully represented in profile overview today.
 
-### Calendar open-slots approximation
+### Calendar open-slot contract
 
-- `calendarService.getDay()` computes `open_slots` as remaining whole hours, not actual candidate slot count.
-- It sums all availability minutes for the day without audience-aware deduping.
-- If overlapping `new` and `returning` windows exist, `open_slots` can overstate real general availability.
+- `calendarService.getDay()` returns concrete open gaps in `availableSlots`.
+- `summary.openGapCount` is the number of returned open gaps.
+- `summary.freeMinutesRemaining` is the total minutes across returned open gaps.
+- Availability windows are merged before appointment busy intervals are subtracted.
 
 ### Transactions
 

@@ -2510,12 +2510,9 @@ describe("API handlers", () => {
         appointments: Array<{ id: string }>;
         availableSlots: Array<{ id: string; startTime: string; endTime: string; durationMinutes: number; canBook: boolean }>;
         summary: {
-          selected_date_label: string;
-          total_appointments: number;
-          booked_revenue: number;
-          open_slots: number;
+          selectedDateLabel: string;
           totalAppointments: number;
-          bookedRevenue: number;
+          bookedRevenueCents: number;
           bookedMinutes: number;
           comparisonVsLastWeekPercent: number | null;
           freeMinutesRemaining: number;
@@ -2548,29 +2545,19 @@ describe("API handlers", () => {
         {
           id: "slot-2026-05-05-1330",
           startTime: "2026-05-05T13:30:00+00:00",
-          endTime: "2026-05-05T15:00:00+00:00",
-          durationMinutes: 90,
-          canBook: true
-        },
-        {
-          id: "slot-2026-05-05-1530",
-          startTime: "2026-05-05T15:30:00+00:00",
           endTime: "2026-05-05T17:00:00+00:00",
-          durationMinutes: 90,
+          durationMinutes: 210,
           canBook: true
         }
       ]);
       assert.deepEqual(payload.summary, {
-        selected_date_label: "Tuesday, May 5",
-        total_appointments: 3,
-        booked_revenue: 150,
-        open_slots: 4,
+        selectedDateLabel: "Tuesday, May 5",
         totalAppointments: 3,
-        bookedRevenue: 150,
+        bookedRevenueCents: 15000,
         bookedMinutes: 90,
         comparisonVsLastWeekPercent: 50,
-        freeMinutesRemaining: 360,
-        openGapCount: 4
+        freeMinutesRemaining: 390,
+        openGapCount: 3
       });
     } finally {
       supabase.restore();

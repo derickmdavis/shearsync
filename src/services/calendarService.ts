@@ -30,6 +30,7 @@ interface BookedTotals {
 
 const SLOT_INTERVAL_MINUTES = 15;
 const MIN_BOOKABLE_GAP_MINUTES = 30;
+const availabilityBlockingStatusSet = new Set(["scheduled", "pending", "completed"]);
 const bookedStatusSet = new Set(["scheduled", "pending", "completed"]);
 
 const timeToMinutes = (time: string): number => {
@@ -45,6 +46,8 @@ const toNumber = (value: unknown): number => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const toCents = (value: number): number => Math.round(value * 100);
 
 const roundUpToInterval = (minutes: number, interval: number): number =>
   Math.ceil(minutes / interval) * interval;
@@ -262,6 +265,7 @@ export const calendarService = {
       end: typeof window.end_time === "string" ? timeToMinutes(window.end_time) : 0
     })));
     const busyIntervals = appointments
+      .filter((appointment) => availabilityBlockingStatusSet.has(String(appointment.status ?? "")))
       .map((appointment) => getAppointmentInterval(appointment, timeZone))
       .filter((interval): interval is TimeInterval => interval !== null);
     const now = new Date();
@@ -313,7 +317,7 @@ export const calendarService = {
       appointments,
       availableSlots,
       summary: {
-        selected_date_label: formatDateInTimeZone(
+        selectedDateLabel: formatDateInTimeZone(
           zonedDateTimeToUtc(dateText, timeZone, 12, 0, 0, 0),
           timeZone,
           {
@@ -322,11 +326,8 @@ export const calendarService = {
             day: "numeric"
           }
         ),
-        total_appointments: appointments.length,
-        booked_revenue: selectedBookedTotals.revenue,
-        open_slots: openGapCount,
         totalAppointments: appointments.length,
-        bookedRevenue: selectedBookedTotals.revenue,
+        bookedRevenueCents: toCents(selectedBookedTotals.revenue),
         bookedMinutes: selectedBookedTotals.minutes,
         comparisonVsLastWeekPercent: getRevenueComparisonPercent(
           selectedBookedTotals.revenue,

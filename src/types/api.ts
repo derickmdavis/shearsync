@@ -342,15 +342,12 @@ export interface CalendarDayResponse {
   appointments: Array<Record<string, unknown>>;
   availableSlots: CalendarAvailableSlot[];
   summary: {
-    selected_date_label: string;
-    total_appointments: number;
-    booked_revenue: number;
-    open_slots: number;
+    selectedDateLabel: string;
     totalAppointments: number;
-    bookedRevenue: number;
+    bookedRevenueCents: number;
     bookedMinutes: number;
     comparisonVsLastWeekPercent: number | null;
-    freeMinutesRemaining: number;
+    freeMinutesRemaining: number | null;
     openGapCount: number;
   };
 }
