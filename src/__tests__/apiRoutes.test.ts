@@ -27,6 +27,7 @@ const { accountController } = require("../controllers/accountController") as typ
 const { authController } = require("../controllers/authController") as typeof import("../controllers/authController");
 const { settingsController } = require("../controllers/settingsController") as typeof import("../controllers/settingsController");
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
+const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
 const { entitlementsService } = require("../services/entitlementsService") as typeof import("../services/entitlementsService");
 const { clientsService } = require("../services/clientsService") as typeof import("../services/clientsService");
 const { appointmentEmailEventsService } =
@@ -2424,6 +2425,278 @@ describe("API handlers", () => {
     }
   });
 
+  it("returns selected-day calendar gaps and expanded summary metrics", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-01T12:00:00.000Z") });
+    const date = "2026-05-05";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      appointments: [
+        {
+          id: "appt-selected-1",
+          user_id: userId,
+          appointment_date: "2026-05-05T10:00:00.000Z",
+          duration_minutes: 60,
+          price: 100,
+          status: "scheduled"
+        },
+        {
+          id: "appt-selected-2",
+          user_id: userId,
+          appointment_date: "2026-05-05T13:00:00.000Z",
+          duration_minutes: 30,
+          price: 50,
+          status: "pending"
+        },
+        {
+          id: "appt-selected-3",
+          user_id: userId,
+          appointment_date: "2026-05-05T15:00:00.000Z",
+          duration_minutes: 30,
+          price: 80,
+          status: "no_show"
+        },
+        {
+          id: "appt-cancelled",
+          user_id: userId,
+          appointment_date: "2026-05-05T16:00:00.000Z",
+          duration_minutes: 60,
+          price: 120,
+          status: "cancelled"
+        },
+        {
+          id: "appt-previous-week",
+          user_id: userId,
+          appointment_date: "2026-04-28T10:00:00.000Z",
+          duration_minutes: 60,
+          price: 100,
+          status: "completed"
+        },
+        {
+          id: "appt-previous-week-no-show",
+          user_id: userId,
+          appointment_date: "2026-04-28T11:00:00.000Z",
+          duration_minutes: 60,
+          price: 100,
+          status: "no_show"
+        }
+      ],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 2,
+          start_time: "09:00:00",
+          end_time: "17:00:00",
+          is_active: true
+        }
+      ],
+      stylist_off_days: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: { date }
+      });
+
+      const response = await runWithErrorHandler((request, res) => calendarController.getDay(request, res), req);
+      const payload = response.body as {
+        date: string;
+        appointments: Array<{ id: string }>;
+        availableSlots: Array<{ id: string; startTime: string; endTime: string; durationMinutes: number; canBook: boolean }>;
+        summary: {
+          selected_date_label: string;
+          total_appointments: number;
+          booked_revenue: number;
+          open_slots: number;
+          totalAppointments: number;
+          bookedRevenue: number;
+          bookedMinutes: number;
+          comparisonVsLastWeekPercent: number | null;
+          freeMinutesRemaining: number;
+          openGapCount: number;
+        };
+      };
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(payload.date, date);
+      assert.deepEqual(payload.appointments.map((appointment) => appointment.id), [
+        "appt-selected-1",
+        "appt-selected-2",
+        "appt-selected-3"
+      ]);
+      assert.deepEqual(payload.availableSlots, [
+        {
+          id: "slot-2026-05-05-0900",
+          startTime: "2026-05-05T09:00:00+00:00",
+          endTime: "2026-05-05T10:00:00+00:00",
+          durationMinutes: 60,
+          canBook: true
+        },
+        {
+          id: "slot-2026-05-05-1100",
+          startTime: "2026-05-05T11:00:00+00:00",
+          endTime: "2026-05-05T13:00:00+00:00",
+          durationMinutes: 120,
+          canBook: true
+        },
+        {
+          id: "slot-2026-05-05-1330",
+          startTime: "2026-05-05T13:30:00+00:00",
+          endTime: "2026-05-05T15:00:00+00:00",
+          durationMinutes: 90,
+          canBook: true
+        },
+        {
+          id: "slot-2026-05-05-1530",
+          startTime: "2026-05-05T15:30:00+00:00",
+          endTime: "2026-05-05T17:00:00+00:00",
+          durationMinutes: 90,
+          canBook: true
+        }
+      ]);
+      assert.deepEqual(payload.summary, {
+        selected_date_label: "Tuesday, May 5",
+        total_appointments: 3,
+        booked_revenue: 150,
+        open_slots: 4,
+        totalAppointments: 3,
+        bookedRevenue: 150,
+        bookedMinutes: 90,
+        comparisonVsLastWeekPercent: 50,
+        freeMinutesRemaining: 360,
+        openGapCount: 4
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("hides selected-day calendar slots for off days and past dates", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-06T12:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      appointments: [],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 2,
+          start_time: "09:00:00",
+          end_time: "17:00:00",
+          is_active: true
+        }
+      ],
+      stylist_off_days: [
+        {
+          id: "off-day-1",
+          user_id: userId,
+          date: "2026-05-12",
+          label: "Personal day",
+          reason: null,
+          is_recurring: false,
+          created_at: "2026-05-01T12:00:00.000Z",
+          updated_at: "2026-05-01T12:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const pastResponse = await runWithErrorHandler(
+        (request, res) => calendarController.getDay(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { date: "2026-05-05" }
+        })
+      );
+      const offDayResponse = await runWithErrorHandler(
+        (request, res) => calendarController.getDay(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { date: "2026-05-12" }
+        })
+      );
+
+      assert.equal(pastResponse.statusCode, 200);
+      assert.deepEqual((pastResponse.body as { availableSlots: unknown[] }).availableSlots, []);
+      assert.equal((pastResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
+      assert.equal((pastResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
+
+      assert.equal(offDayResponse.statusCode, 200);
+      assert.deepEqual((offDayResponse.body as { availableSlots: unknown[] }).availableSlots, []);
+      assert.equal((offDayResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
+      assert.equal((offDayResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("starts today's selected-day calendar slots after the current rounded interval", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-05-05T10:07:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      appointments: [],
+      availability: [
+        {
+          id: "availability-1",
+          user_id: userId,
+          day_of_week: 2,
+          start_time: "09:00:00",
+          end_time: "12:00:00",
+          is_active: true
+        }
+      ],
+      stylist_off_days: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => calendarController.getDay(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { date: "2026-05-05" }
+        })
+      );
+      const payload = response.body as {
+        availableSlots: Array<{ id: string; startTime: string; endTime: string; durationMinutes: number; canBook: boolean }>;
+        summary: { freeMinutesRemaining: number; openGapCount: number };
+      };
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(payload.availableSlots, [
+        {
+          id: "slot-2026-05-05-1015",
+          startTime: "2026-05-05T10:15:00+00:00",
+          endTime: "2026-05-05T12:00:00+00:00",
+          durationMinutes: 105,
+          canBook: true
+        }
+      ]);
+      assert.equal(payload.summary.freeMinutesRemaining, 105);
+      assert.equal(payload.summary.openGapCount, 1);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
   it("stores internal booking_source by default for authenticated appointment creation", async () => {
     const appointmentDate = "2026-05-06T13:00:00.000Z";
     const supabase = installMockSupabase({
@@ -3158,7 +3431,7 @@ describe("API handlers", () => {
     }
   });
 
-  it("treats final public bookings as new-client when only submitted email matches despite a stale returning-client token", async () => {
+  it("uses a returning-client booking context token for final public booking validation", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
     const returningOnlySlotIso = zonedDateTimeToUtc(monday, "UTC", 11, 0, 0, 0).toISOString();
@@ -3261,20 +3534,10 @@ describe("API handlers", () => {
         })
       );
 
-      assert.equal(response.statusCode, 409);
-      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
-      assert.equal(
-        (response.body as { error: { details: { reason: string; matchedClientFound: boolean; finalIsExistingClient: boolean } } }).error.details.reason,
-        "outside_availability"
-      );
-      assert.equal(
-        (response.body as { error: { details: { matchedClientFound: boolean } } }).error.details.matchedClientFound,
-        false
-      );
-      assert.equal(
-        (response.body as { error: { details: { finalIsExistingClient: boolean } } }).error.details.finalIsExistingClient,
-        false
-      );
+      assert.equal(response.statusCode, 201);
+      assert.equal((response.body as { data: { appointment_date: string } }).data.appointment_date, returningOnlySlotIso);
+      assert.equal(supabase.state.appointments.length, 1);
+      assert.notEqual(supabase.state.appointments[0]?.client_id, "client-1");
     } finally {
       supabase.restore();
     }
@@ -4616,7 +4879,7 @@ describe("API handlers", () => {
     }
   });
 
-  it("does not use the booking context token alone during final public booking validation", async () => {
+  it("uses the booking context token for final public booking validation while still creating a client from submitted contact", async () => {
     const today = getCurrentLocalDate("UTC");
     const monday = getNextLocalDay(addDays(today, 1), 1);
     const requestedDateTime = zonedDateTimeToUtc(monday, "UTC", 14, 0, 0, 0).toISOString();
@@ -4709,17 +4972,11 @@ describe("API handlers", () => {
         })
       );
 
-      assert.equal(response.statusCode, 409);
-      assert.equal((response.body as { error: { message: string } }).error.message, "Requested time is no longer available");
-      assert.equal(
-        (response.body as { error: { details: { reason: string; finalIsExistingClient: boolean } } }).error.details.reason,
-        "outside_availability"
-      );
-      assert.equal(
-        (response.body as { error: { details: { finalIsExistingClient: boolean } } }).error.details.finalIsExistingClient,
-        false
-      );
-      assert.equal(supabase.state.appointments.length, 0);
+      assert.equal(response.statusCode, 201);
+      assert.equal((response.body as { data: { appointment_date: string } }).data.appointment_date, requestedDateTime);
+      assert.equal(supabase.state.clients.length, 1);
+      assert.equal(supabase.state.appointments.length, 1);
+      assert.equal(supabase.state.appointments[0]?.client_id, supabase.state.clients[0]?.id);
     } finally {
       supabase.restore();
     }

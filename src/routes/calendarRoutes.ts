@@ -7,3 +7,4 @@ import { getCalendarDaySchema } from "../validators/calendarValidators";
 export const calendarRouter = Router();
 
 calendarRouter.get("/", validate({ query: getCalendarDaySchema }), asyncHandler(calendarController.getDay));
+calendarRouter.get("/day", validate({ query: getCalendarDaySchema }), asyncHandler(calendarController.getDay));

@@ -329,6 +329,32 @@ export interface InternalAppointmentContext {
   blockedTimes: PublicAvailabilitySlot[];
 }
 
+export interface CalendarAvailableSlot {
+  id: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  canBook: boolean;
+}
+
+export interface CalendarDayResponse {
+  date: string;
+  appointments: Array<Record<string, unknown>>;
+  availableSlots: CalendarAvailableSlot[];
+  summary: {
+    selected_date_label: string;
+    total_appointments: number;
+    booked_revenue: number;
+    open_slots: number;
+    totalAppointments: number;
+    bookedRevenue: number;
+    bookedMinutes: number;
+    comparisonVsLastWeekPercent: number | null;
+    freeMinutesRemaining: number;
+    openGapCount: number;
+  };
+}
+
 export interface ActivityEventItem {
   id: string;
   activity_type: ActivityType;

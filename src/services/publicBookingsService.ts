@@ -164,6 +164,8 @@ const persistGuestEmailIfMissing = async (
 const getAppointmentEnd = (appointmentDate: string, durationMinutes: number): string =>
   getAppointmentEndIso(appointmentDate, durationMinutes);
 
+const conflictDiagnosticsVersion = "slot-conflicts-v1";
+
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
@@ -192,7 +194,7 @@ export const publicBookingsService = {
       typeof payload.booking_context_token === "string" ? payload.booking_context_token : undefined,
       stylist.slug as string
     );
-    const isExistingClient = Boolean(matchedClient);
+    const isExistingClient = bookingContext?.isExistingClient ?? Boolean(matchedClient);
 
     const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
       userId,
@@ -209,9 +211,12 @@ export const publicBookingsService = {
       bookingContextIsExistingClient: bookingContext?.isExistingClient ?? null,
       matchedClientFound: Boolean(matchedClient),
       finalIsExistingClient: isExistingClient,
+      conflictDiagnosticsVersion: slotEvaluation.ok || slotEvaluation.reason !== "appointment_conflict"
+        ? undefined
+        : conflictDiagnosticsVersion,
       conflicts: slotEvaluation.ok || slotEvaluation.reason !== "appointment_conflict"
         ? undefined
-        : slotEvaluation.conflicts?.map((conflict) => ({
+        : (slotEvaluation.conflicts ?? []).map((conflict) => ({
           id: conflict.id,
           start: conflict.appointment_date,
           end: getAppointmentEnd(conflict.appointment_date, conflict.duration_minutes),
