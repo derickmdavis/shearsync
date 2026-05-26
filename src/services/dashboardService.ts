@@ -27,13 +27,14 @@ const DASHBOARD_APPOINTMENT_SELECT = `
 `;
 
 const toDashboardAppointment = (appointment: Row): Row => {
-  const client = (appointment.client ?? null) as Row | null;
+  const { client: rawClient, ...appointmentFields } = appointment;
+  const client = (rawClient ?? null) as Row | null;
   const firstName = typeof client?.first_name === "string" ? client.first_name : "";
   const lastName = typeof client?.last_name === "string" ? client.last_name : "";
   const clientName = [firstName, lastName].filter(Boolean).join(" ").trim();
 
   return {
-    ...appointment,
+    ...appointmentFields,
     client_name: clientName || undefined
   };
 };

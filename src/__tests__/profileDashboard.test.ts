@@ -157,11 +157,17 @@ describe("Profile and dashboard handlers", () => {
 
       assert.equal(response.statusCode, 200);
       assert.equal(nextAppointment?.id, "future-001");
+      assert.equal(nextAppointment?.client_name, "Taylor Client");
+      assert.equal("client" in (nextAppointment ?? {}), false);
       assert.equal(upcomingAppointments.length, 1);
       assert.equal(upcomingAppointments[0]?.id, "future-001");
+      assert.equal(upcomingAppointments[0]?.client_name, "Taylor Client");
+      assert.equal("client" in (upcomingAppointments[0] ?? {}), false);
       assert.ok(appointments.some((appointment) => appointment.id === "future-001"));
       assert.equal(recentAppointments.length, 100);
       assert.equal(recentAppointments[0]?.id, "past-105");
+      assert.equal(recentAppointments[0]?.client_name, "Taylor Client");
+      assert.equal("client" in (recentAppointments[0] ?? {}), false);
     } finally {
       supabase.restore();
     }
