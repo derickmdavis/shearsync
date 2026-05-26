@@ -16,9 +16,6 @@ import { createPublicWaitlistEntrySchema } from "../validators/waitlistValidator
 export const publicRouter = Router();
 
 publicRouter.get("/stylists/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.getStylist));
-publicRouter.get("/stylist/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.getStylist));
-publicRouter.get("/booking/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.getStylist));
-publicRouter.get("/bookings/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.getStylist));
 publicRouter.get(
   "/services/:slug",
   validate({ params: slugParamSchema, query: getPublicServicesSchema }),

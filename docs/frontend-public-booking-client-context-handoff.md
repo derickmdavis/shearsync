@@ -10,6 +10,8 @@ The backend now supports that by minting a short-lived `bookingContextToken` fro
 
 ## Required Flow
 
+Public booking pages should use `/book/:slug` as the canonical browser URL. The profile API route is only `GET /api/public/stylists/:slug`; older singular/profile booking aliases are no longer supported.
+
 1. Load stylist profile with `GET /api/public/stylists/:slug`.
 2. Read `data.booking_enabled` from the profile response.
 3. If `booking_enabled` is `false`, do not call services, raw availability, slots, or final booking create. Show an "online booking unavailable" state instead.
@@ -64,6 +66,22 @@ Behavior:
 - with a valid token for a new client, restricted services are filtered out
 - without a token, the backend falls back to new-client filtering
 - with an invalid or expired token, the backend returns `400`
+
+Response service items now use the canonical camelCase service contract:
+
+```ts
+type ServiceCatalogItem = {
+  id: string;
+  name: string;
+  durationMinutes: number;
+  price: number;
+  isActive: boolean;
+  category?: string;
+  description?: string;
+  isDefault: boolean;
+  sortOrder: number;
+};
+```
 
 ### 3. Raw availability endpoint
 

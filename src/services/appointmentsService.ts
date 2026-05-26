@@ -49,6 +49,36 @@ const toContextTimeRange = (appointment: Row, timeZone: string): { start: string
   };
 };
 
+const toClientName = (client: Row | null): string | undefined => {
+  if (!client) {
+    return undefined;
+  }
+
+  const firstName = typeof client.first_name === "string" ? client.first_name : "";
+  const lastName = typeof client.last_name === "string" ? client.last_name : "";
+  const clientName = `${firstName} ${lastName}`.trim();
+
+  return clientName.length > 0 ? clientName : undefined;
+};
+
+const withAppointmentDetailFields = (appointment: Row, client: Row | null): Row => {
+  const appointmentDate = typeof appointment.appointment_date === "string" ? appointment.appointment_date : undefined;
+  const durationMinutes = toDurationMinutes(appointment.duration_minutes);
+  const serviceName = typeof appointment.service_name === "string" ? appointment.service_name : undefined;
+  const clientName = toClientName(client);
+
+  return {
+    ...appointment,
+    ...(clientName ? { client_name: clientName } : {}),
+    ...(appointmentDate ? {
+      start_time: appointmentDate,
+      end_time: getAppointmentEndIso(appointmentDate, durationMinutes)
+    } : {}),
+    ...(serviceName ? { services: [serviceName] } : {}),
+    revenue: appointment.revenue ?? appointment.price ?? 0
+  };
+};
+
 interface AppointmentUpdateOptions {
   cancelledBy?: "client" | "stylist";
 }
@@ -110,7 +140,7 @@ export const appointmentsService = {
 
     handleSupabaseError(error, "Unable to load internal appointment context");
     const existingAppointments = (data ?? []) as RowList;
-    const availableSlots: InternalAppointmentContext["availableSlots"] = [];
+    const conflictFreeSlots: InternalAppointmentContext["conflictFreeSlots"] = [];
 
     for (
       let candidateMinutes = 0;
@@ -133,7 +163,7 @@ export const appointmentsService = {
         continue;
       }
 
-      availableSlots.push({
+      conflictFreeSlots.push({
         start: formatInstantInTimeZoneOffset(candidateUtc, timeZone),
         end: formatInstantInTimeZoneOffset(getAppointmentEndIso(candidateIso, durationMinutes), timeZone),
         label: formatDateInTimeZone(candidateUtc, timeZone, {
@@ -145,7 +175,11 @@ export const appointmentsService = {
 
     return {
       date: dateText,
-      availableSlots,
+      mode: "conflict_free",
+      respectsAvailability: false,
+      respectsBookingRules: false,
+      respectsOffDays: false,
+      conflictFreeSlots,
       existingAppointments: existingAppointments.map((appointment) => toContextTimeRange(appointment, timeZone)),
       blockedTimes: []
     };
@@ -175,6 +209,25 @@ export const appointmentsService = {
 
     handleSupabaseError(error, "Unable to load appointment");
     return requireFound(data, "Appointment not found");
+  },
+
+  async getById(userId: string, appointmentId: string): Promise<Row> {
+    const appointment = await this.getOwned(userId, appointmentId);
+    const clientId = typeof appointment.client_id === "string" ? appointment.client_id : null;
+
+    if (!clientId) {
+      return withAppointmentDetailFields(appointment, null);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("clients")
+      .select("id, first_name, last_name")
+      .eq("id", clientId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    handleSupabaseError(error, "Unable to load appointment client");
+    return withAppointmentDetailFields(appointment, data ?? null);
   },
 
   async create(userId: string, payload: Row, options: AppointmentCreateOptions = {}): Promise<Row> {

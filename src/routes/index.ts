@@ -9,7 +9,6 @@ import { activityRouter } from "./activityRoutes";
 import { appointmentRouter } from "./appointmentRoutes";
 import { authRouter } from "./authRoutes";
 import { calendarRouter } from "./calendarRoutes";
-import { clientActionsRouter } from "./clientActionsRoutes";
 import { clientRouter } from "./clientRoutes";
 import { dashboardRouter } from "./dashboardRoutes";
 import { healthRouter } from "./healthRoutes";
@@ -26,11 +25,7 @@ import { waitlistRouter } from "./waitlistRoutes";
 export const apiRouter = Router();
 
 apiRouter.use(healthRouter);
-apiRouter.get(
-  ["/booking/:slug", "/book/:slug"],
-  validate({ params: slugParamSchema }),
-  asyncHandler(publicController.redirectToBookingPage)
-);
+apiRouter.get("/book/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.redirectToBookingPage));
 apiRouter.use("/api/public", publicRouter);
 apiRouter.use("/internal", internalRouter);
 apiRouter.use("/me", requireAuth);
@@ -39,7 +34,6 @@ apiRouter.use("/api", requireAuth);
 apiRouter.use(authRouter);
 apiRouter.use("/api/account", accountRouter);
 apiRouter.use("/api/activity", activityRouter);
-apiRouter.use("/api/client-actions", clientActionsRouter);
 apiRouter.use("/api/clients", clientRouter);
 apiRouter.use("/api/appointments", appointmentRouter);
 apiRouter.use("/api/calendar", calendarRouter);

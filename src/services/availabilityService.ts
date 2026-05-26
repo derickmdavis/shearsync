@@ -316,7 +316,7 @@ export const availabilityService = {
         service: {
           id: service.id as string,
           name: service.name as string,
-          duration_minutes: serviceDuration,
+          durationMinutes: serviceDuration,
           price: Number(service.price ?? 0)
         },
         slots: [],
@@ -396,7 +396,7 @@ export const availabilityService = {
       service: {
         id: service.id as string,
         name: service.name as string,
-        duration_minutes: serviceDuration,
+        durationMinutes: serviceDuration,
         price: Number(service.price ?? 0)
       },
       slots: scheduledSlots.slots,

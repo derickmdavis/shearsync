@@ -49,12 +49,19 @@ export interface WaitlistJoinedActivityMetadata {
   source: "public_booking" | "stylist_created" | "manual";
 }
 
+export interface ClientRebookNeededActivityMetadata {
+  client_name: string;
+  last_appointment_date: string;
+  last_service_name: string | null;
+}
+
 export type ActivityEventMetadata =
   | BookingCreatedActivityMetadata
   | AppointmentCancelledActivityMetadata
   | AppointmentRescheduledActivityMetadata
   | ReminderSentActivityMetadata
-  | WaitlistJoinedActivityMetadata;
+  | WaitlistJoinedActivityMetadata
+  | ClientRebookNeededActivityMetadata;
 
 export interface AuthUser {
   id: string;
@@ -90,11 +97,9 @@ export interface BookingSettings {
 export interface ServiceCatalogItem {
   id: string;
   name: string;
-  duration: number;
   durationMinutes: number;
   price: number;
-  priceAmount: number;
-  visible: boolean;
+  isActive: boolean;
   category?: string;
   description?: string;
   isDefault: boolean;
@@ -309,7 +314,7 @@ export interface PublicAvailabilitySlotsResponse {
   service: {
     id: string;
     name: string;
-    duration_minutes: number;
+    durationMinutes: number;
     price: number;
   };
   slots: PublicAvailabilitySlot[];
@@ -324,7 +329,11 @@ export interface InternalAppointmentContextSlot extends PublicAvailabilitySlot {
 
 export interface InternalAppointmentContext {
   date: string;
-  availableSlots: InternalAppointmentContextSlot[];
+  mode: "conflict_free";
+  respectsAvailability: false;
+  respectsBookingRules: false;
+  respectsOffDays: false;
+  conflictFreeSlots: InternalAppointmentContextSlot[];
   existingAppointments: PublicAvailabilitySlot[];
   blockedTimes: PublicAvailabilitySlot[];
 }
@@ -370,6 +379,7 @@ export interface ActivityGroupSummary {
   reschedules: number;
   reminders_sent: number;
   waitlist_joins: number;
+  rebook_needed: number;
 }
 
 export interface ActivityDayGroup {
@@ -379,12 +389,13 @@ export interface ActivityDayGroup {
   events: ActivityEventItem[];
 }
 
-export type ActivityFeedCategory = "updates" | "approvals" | "waitlist";
+export type ActivityFeedCategory = "updates" | "approvals" | "waitlist" | "rebook";
 
 export interface ActivityFeedCounts {
   updates: number;
   approvals: number;
   waitlist: number;
+  rebook: number;
 }
 
 export interface ActivityFeedResponse {
@@ -396,46 +407,4 @@ export interface ActivityFeedResponse {
 
 export interface AppointmentActivityResponse {
   events: ActivityEventItem[];
-}
-
-export type ClientActionPriority = "high" | "medium" | "low";
-
-export interface PendingAppointmentApprovalPreviewItem {
-  appointment_id: string;
-  client_id: string | null;
-  client_name: string | null;
-  appointment_date: string;
-  service_name: string | null;
-  status: "pending";
-}
-
-export interface PendingAppointmentApprovalActionItem {
-  id: "pending-appointment-approvals";
-  type: "pending_appointment_approvals";
-  label: string;
-  priority: "high";
-  count: number;
-  preview: PendingAppointmentApprovalPreviewItem[];
-}
-
-export interface ClientRequiringRebookPreviewItem {
-  client_id: string;
-  client_name: string | null;
-  last_appointment_date: string;
-  last_service_name: string | null;
-}
-
-export interface ClientsRequiringRebookActionItem {
-  id: "clients-requiring-rebook";
-  type: "clients_requiring_rebook";
-  label: string;
-  priority: "medium";
-  count: number;
-  preview: ClientRequiringRebookPreviewItem[];
-}
-
-export type ClientActionItem = PendingAppointmentApprovalActionItem | ClientsRequiringRebookActionItem;
-
-export interface ClientActionsResponse {
-  items: ClientActionItem[];
 }

@@ -66,7 +66,6 @@ There is no separate guest-booking subsystem. Public bookings feed directly into
   - `/api/activity/*`
   - `/api/appointments/*`
   - `/api/calendar/*`
-  - `/api/client-actions/*`
   - `/api/clients/*`
   - `/api/dashboard/*`
   - `/api/photos/*`
@@ -93,7 +92,6 @@ Most business logic lives in `src/services/*`:
 - `activityEventsService`
 - `dashboardService`
 - `calendarService`
-- `clientActionsService`
 - `profileOverviewService`
 - `entitlementsService`
 - `remindersService`
@@ -346,6 +344,7 @@ Because the API uses the service role, these policies are not the primary runtim
 - auth identity: `/me`
 - authenticated API: `/api/*`
 - public API: `/api/public/*`
+- public booking browser redirect: `/book/:slug`
 
 ### Response wrappers
 
@@ -436,6 +435,7 @@ Important implementation detail:
 
 ### Date and time serialization
 
+- API date-only keys, such as `date`, `requested_date`, `start_date`, and `end_date`, are interpreted as calendar dates in the stylist's business timezone unless an endpoint explicitly documents UTC behavior.
 - Stored appointment timestamps are ISO 8601 UTC strings in `timestamptz` columns.
 - Many public slot responses are returned in business-local offset format, for example:
   - `2026-05-05T09:00:00+00:00`
@@ -570,10 +570,11 @@ Important constraints and assumptions:
 - matching is always stylist-scoped
 - duplicate prevention in public booking is based on phone/email matching, not name
 
-Compatibility behavior:
+Schema behavior:
 
-- `clientsService` has defensive logic to strip optional columns from writes if the target database is missing them.
-- Current migrations indicate these columns should exist, but the code still contains backwards-compatibility shims.
+- Client profile columns are part of the required production schema.
+- The API fails startup and `GET /health` if required `users` or `clients` columns are missing.
+- Client writes no longer strip unknown/missing required columns to work around stale database environments.
 
 ### `public.appointments`
 
@@ -663,9 +664,8 @@ Ownership rules:
 
 Important notes:
 
-- private service endpoints transform rows into camelCase catalog objects
-- public service endpoint returns raw DB rows
-- `is_active` is the source of public visibility and private `visible`
+- private and public service endpoints transform rows into canonical camelCase catalog objects
+- `is_active` is the database source for API `isActive`
 - `is_default` is used by booking intake service recommendation fallback
 
 ### `public.availability`
@@ -1003,7 +1003,7 @@ Important waitlist distinction:
 - Query params:
   - `limit` default `25`, max `100`
   - `cursor?`
-  - `category?`: `updates`, `approvals`, or `waitlist`
+  - `category?`: `updates`, `approvals`, `waitlist`, or `rebook`
   - `activity_type?`
   - `start_date?` as `YYYY-MM-DD`
   - `end_date?` as `YYYY-MM-DD`
@@ -1016,6 +1016,7 @@ Important waitlist distinction:
   - `updates`: `booking_created` with current appointment status not `pending`, `appointment_cancelled`, and `appointment_rescheduled`
   - `approvals`: appointments whose current status is `pending`
   - `waitlist`: `waitlist_joined`
+  - `rebook`: clients whose most recent non-cancelled appointment is in the 3-to-6-month rebook window and who have no non-cancelled future appointment
 - `counts` are total counts for each category after date filtering, before cursor/limit pagination.
 - Group shape:
   - `date`
@@ -1028,18 +1029,7 @@ Important waitlist distinction:
   - this value means the appointment status now, not status at the time the activity row was written
 - Filters use business-local day boundaries.
 
-### 7.6 `GET /api/client-actions`
-
-- Auth: required
-- Controller: `clientActionsController.getSummary`
-- Purpose: action-center summary for the authenticated stylist
-- Main service: `clientActionsService.getSummary`
-- Response: `{ data: { items } }`
-- Current `items` types:
-  - `pending_appointment_approvals`
-  - `clients_requiring_rebook`
-
-### 7.7 `GET /api/clients`
+### 7.6 `GET /api/clients`
 
 - Auth: required
 - Controller: `clientsController.list`
@@ -1081,7 +1071,7 @@ Important waitlist distinction:
   - strips `@` from instagram
   - dedupes tags
   - computes `phone_normalized` when `phone` is present
-  - writes compatibility-safe payload through `executeClientWriteWithCompatibility`
+  - writes the full sanitized payload and fails if the required schema is missing expected columns
 - Response: `{ data: fullClientRowWithDerivedSummaryFields }`
 
 ### 7.9 `GET /api/clients/:id`
@@ -1142,14 +1132,36 @@ Important waitlist distinction:
   - internal scheduling helper
   - suggests overlap-safe slots for a full local day
 - Main service: `appointmentsService.getInternalContext`
-- Response: `{ data: { date, availableSlots, existingAppointments, blockedTimes } }`
+- Response: `{ data: { date, mode, respectsAvailability, respectsBookingRules, respectsOffDays, conflictFreeSlots, existingAppointments, blockedTimes } }`
 - Important implementation details:
   - ignores saved availability windows
   - ignores public booking rules
+  - ignores off days
   - scans the full 24-hour local day in 15-minute increments
+  - `conflictFreeSlots` replaces the older misleading `availableSlots` name
+  - `mode` is always `"conflict_free"` today
+  - `respectsAvailability`, `respectsBookingRules`, and `respectsOffDays` are always `false` today
   - `blockedTimes` is always `[]` today
 
-### 7.15 `GET /api/appointments/:id/activity`
+### 7.15 `GET /api/appointments/:id`
+
+- Auth: required
+- Validator: `uuidParamSchema`
+- Controller: `appointmentsController.getById`
+- Purpose: canonical appointment detail read by appointment ID alone
+- Main service: `appointmentsService.getById`
+- Ownership:
+  - only returns appointments where `appointments.user_id` matches the authenticated user
+  - missing or cross-account appointments return `404 Appointment not found`
+- Response: `{ data: appointmentDetail }`
+- Detail aliases:
+  - `client_name` is derived from the owned client when available
+  - `start_time` mirrors `appointment_date`
+  - `end_time` is derived from `appointment_date + duration_minutes`
+  - `services` is derived from `service_name`
+  - `revenue` mirrors `revenue` if present, otherwise `price`, otherwise `0`
+
+### 7.16 `GET /api/appointments/:id/activity`
 
 - Auth: required
 - Validator: `uuidParamSchema`
@@ -1158,7 +1170,7 @@ Important waitlist distinction:
 - Main service: `activityEventsService.listByAppointment`
 - Response: `{ data: { events } }`
 
-### 7.16 `POST /api/appointments`
+### 7.17 `POST /api/appointments`
 
 - Auth: required
 - Validator: `createAppointmentSchema`
@@ -1181,7 +1193,7 @@ Important waitlist distinction:
   - `400 Client does not belong to the authenticated user`
   - `409 This time slot is already booked.`
 
-### 7.17 `PATCH /api/appointments/:id`
+### 7.18 `PATCH /api/appointments/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `updateAppointmentSchema`
@@ -1206,7 +1218,7 @@ Important waitlist distinction:
 - Important note:
   - There is no strict status transition state machine beyond the special pending decision endpoint.
 
-### 7.18 `PATCH /api/appointments/:id/decision`
+### 7.19 `PATCH /api/appointments/:id/decision`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `pendingAppointmentDecisionSchema`
@@ -1220,7 +1232,7 @@ Important waitlist distinction:
 - Errors:
   - `400 Only pending appointments can be accepted or rejected`
 
-### 7.19 `GET /api/calendar`
+### 7.20 `GET /api/calendar`
 
 - Auth: required
 - Validator: `getCalendarDaySchema`
@@ -1264,7 +1276,7 @@ Important waitlist distinction:
   - booked revenue/time statuses are `scheduled`, `pending`, and `completed`
   - `no_show` appointments can be returned in `appointments` but do not block availability or count toward booked revenue/time
 
-### 7.20 `GET /api/dashboard`
+### 7.21 `GET /api/dashboard`
 
 - Auth: required
 - Controller: `dashboardController.getSummary`
@@ -1282,7 +1294,7 @@ Important waitlist distinction:
   - `top_clients_by_spend`
   - `monthly_revenue_summary`
 
-### 7.21 `POST /api/photos`
+### 7.22 `POST /api/photos`
 
 - Auth: required
 - Validator: `createPhotoSchema`
@@ -1306,7 +1318,7 @@ Important waitlist distinction:
 }
 ```
 
-### 7.22 `GET /api/reminders`
+### 7.23 `GET /api/reminders`
 
 - Auth: required
 - Controller: `remindersController.list`
@@ -1315,7 +1327,7 @@ Important waitlist distinction:
 - Response: `{ data: Row[] }`
 - Order: `due_date asc`
 
-### 7.23 `POST /api/reminders`
+### 7.24 `POST /api/reminders`
 
 - Auth: required
 - Validator: `createReminderSchema`
@@ -1336,7 +1348,7 @@ Important waitlist distinction:
 - Important note:
   - current code does not verify that `appointment_id` belongs to the same stylist or client
 
-### 7.24 `PATCH /api/reminders/:id`
+### 7.25 `PATCH /api/reminders/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `updateReminderSchema`
@@ -1348,7 +1360,7 @@ Important waitlist distinction:
   - writes `reminder_sent` activity when resulting status is `sent`
 - Response: `{ data: reminderRow }`
 
-### 7.25 `GET /api/profile/overview`
+### 7.26 `GET /api/profile/overview`
 
 - Auth: required
 - Validator: `profileOverviewQuerySchema`
@@ -1365,8 +1377,11 @@ Important waitlist distinction:
 - Important note:
   - This endpoint bootstraps booking rules if missing.
   - It does not auto-create a `stylists` row.
+  - Upcoming revenue includes future `pending` and `scheduled` appointments only.
+  - Performance metric `id: "revenue"` is labeled `Booked Revenue` and includes `pending`, `scheduled`, and `completed` appointments in the selected period.
+  - Performance `avg-ticket` is booked average ticket for the selected period.
 
-### 7.26 `GET /api/services`
+### 7.27 `GET /api/services`
 
 - Auth: required
 - Controller: `servicesController.list`
@@ -1374,21 +1389,21 @@ Important waitlist distinction:
 - Main service: `servicesService.listByUserId`
 - Response: `{ data: ServiceCatalogItem[] }`
 - Returned field names are camelCase:
-  - `duration`, `durationMinutes`
-  - `price`, `priceAmount`
-  - `visible`
+  - `durationMinutes`
+  - `price`
+  - `isActive`
   - `isDefault`
   - `sortOrder`
 
-### 7.27 `POST /api/services`
+### 7.28 `POST /api/services`
 
 - Auth: required
 - Validator: `createServiceSchema`
 - Body:
   - `name`
-  - `duration` or `durationMinutes`
-  - `price` or `priceAmount`
-  - `visible`
+  - `durationMinutes`
+  - `price`
+  - `isActive`
   - optional `category`
   - optional `description`
   - optional `isDefault`
@@ -1398,7 +1413,7 @@ Important waitlist distinction:
   - if `sortOrder` absent, computes `max(sort_order) + 1`
 - Response: `{ data: ServiceCatalogItem }`
 
-### 7.28 `PATCH /api/services/reorder`
+### 7.29 `PATCH /api/services/reorder`
 
 - Auth: required
 - Validator: `reorderServicesSchema`
@@ -1414,7 +1429,7 @@ Important waitlist distinction:
   - `400 serviceIds must not contain duplicates`
   - `400 serviceIds must all belong to services owned by the authenticated user`
 
-### 7.29 `PATCH /api/services/:id`
+### 7.30 `PATCH /api/services/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `updateServiceSchema`
@@ -1425,7 +1440,7 @@ Important waitlist distinction:
 - Errors:
   - `404 Service not found`
 
-### 7.30 `DELETE /api/services/:id`
+### 7.31 `DELETE /api/services/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema`
@@ -1434,7 +1449,7 @@ Important waitlist distinction:
 - Important note:
   - appointments do not reference `service_id`, so deleting a service does not affect historical appointment snapshots
 
-### 7.30A `GET /api/off-days`
+### 7.31A `GET /api/off-days`
 
 - Auth: required
 - Validator: `listOffDaysQuerySchema`
@@ -1461,7 +1476,7 @@ Important waitlist distinction:
 }
 ```
 
-### 7.30B `POST /api/off-days`
+### 7.31B `POST /api/off-days`
 
 - Auth: required
 - Validator: `createOffDaySchema`
@@ -1476,7 +1491,7 @@ Important waitlist distinction:
 - Errors:
   - `409 An off day already exists for this date`
 
-### 7.30C `POST /api/off-days/bulk`
+### 7.31C `POST /api/off-days/bulk`
 
 - Auth: required
 - Validator: `bulkCreateOffDaysSchema`
@@ -1486,7 +1501,7 @@ Important waitlist distinction:
 - Main service: `offDaysService.createOffDays`
 - Response: `{ data: OffDay[] }`
 
-### 7.30D `PATCH /api/off-days/:id`
+### 7.31D `PATCH /api/off-days/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `updateOffDaySchema`
@@ -1501,7 +1516,7 @@ Important waitlist distinction:
   - `404 Off day not found`
   - `409 An off day already exists for this date`
 
-### 7.30E `DELETE /api/off-days/:id`
+### 7.31E `DELETE /api/off-days/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema`
@@ -1510,7 +1525,7 @@ Important waitlist distinction:
 - Errors:
   - `404 Off day not found`
 
-### 7.31 `GET /api/settings/profile`
+### 7.32 `GET /api/settings/profile`
 
 - Auth: required
 - Controller: `settingsController.getProfile`
@@ -1521,7 +1536,7 @@ Important waitlist distinction:
   - `business_name` is the canonical business/account name.
   - Public booking page display name is not stored here; use `GET /api/settings/booking`.
 
-### 7.32 `PATCH /api/settings/profile`
+### 7.33 `PATCH /api/settings/profile`
 
 - Auth: required
 - Validator: `updateProfileSchema`
@@ -1540,7 +1555,7 @@ Important waitlist distinction:
   - for example, `plan_tier` sent here is ignored rather than updated
   - Basic users may save `waitlist_enabled=true`, but effective/public waitlist availability remains false until their plan allows waitlist
 
-### 7.33 `GET /api/settings/booking`
+### 7.34 `GET /api/settings/booking`
 
 - Auth: required
 - Controller: `settingsController.getBooking`
@@ -1552,7 +1567,7 @@ Important waitlist distinction:
 - Source of truth:
   - `display_name` is the public booking page display name and is separate from `users.full_name`.
 
-### 7.34 `PATCH /api/settings/booking`
+### 7.35 `PATCH /api/settings/booking`
 
 - Auth: required
 - Validator: `updateBookingSettingsSchema`
@@ -1572,7 +1587,7 @@ Important waitlist distinction:
   - existing duplicate slug -> `409 Booking slug is already in use`
 - Response: `{ data: stylistRow }`
 
-### 7.35 `GET /api/settings/availability`
+### 7.36 `GET /api/settings/availability`
 
 - Auth: required
 - Controller: `settingsController.getAvailability`
@@ -1595,7 +1610,7 @@ Important waitlist distinction:
 }
 ```
 
-### 7.36 `PUT /api/settings/availability`
+### 7.37 `PUT /api/settings/availability`
 
 - Auth: required
 - Validator: `replaceAvailabilitySchema`
@@ -1617,7 +1632,7 @@ Important waitlist distinction:
   - inserts new rows
 - Response: `{ data: AvailabilitySettingsResponse }`
 
-### 7.37 `GET /api/settings/booking-rules`
+### 7.38 `GET /api/settings/booking-rules`
 
 - Auth: required
 - Controller: `settingsController.getBookingRules`
@@ -1627,7 +1642,7 @@ Important waitlist distinction:
   - auto-creates row with defaults if missing
 - Response: `{ data: BookingSettings }`
 
-### 7.38 `PATCH /api/settings/booking-rules`
+### 7.39 `PATCH /api/settings/booking-rules`
 
 - Auth: required
 - Validator: `updateBookingRulesSchema`
@@ -1640,7 +1655,7 @@ Important waitlist distinction:
   - only writes provided keys
 - Response: `{ data: BookingSettings }`
 
-### 7.39 `GET /api/public/stylists/:slug`
+### 7.40 `GET /api/public/stylists/:slug`
 
 - Auth: public
 - Validator: `slugParamSchema`
@@ -1652,7 +1667,7 @@ Important waitlist distinction:
   - works even when `booking_enabled = false`
   - this is how the public frontend knows to show an unavailable state
 
-### 7.40 `GET /api/public/services/:slug`
+### 7.41 `GET /api/public/services/:slug`
 
 - Auth: public
 - Validator: `slugParamSchema` + `getPublicServicesSchema`
@@ -1660,16 +1675,16 @@ Important waitlist distinction:
   - optional `booking_context_token`
 - Purpose: return active public services
 - Main service: `servicesService.listActiveByStylistSlug`
-- Response: `{ data: rawServiceRows[] }`
+- Response: `{ data: ServiceCatalogItem[] }`
 - Filters:
   - requires `booking_enabled = true`
   - filters to `is_active = true`
   - if no valid booking context token, treats caller as new client
   - if new client and booking rules restrict services, restricted service ids are removed
 - Important note:
-  - response is raw DB rows, not `ServiceCatalogItem`
+  - response uses the same canonical camelCase service item shape as private service catalog responses
 
-### 7.41 `GET /api/public/availability/:slug`
+### 7.42 `GET /api/public/availability/:slug`
 
 - Auth: public
 - Validator: `slugParamSchema` + `getPublicAvailabilitySchema`
@@ -1685,7 +1700,7 @@ Important waitlist distinction:
 - Important note:
   - this endpoint does not apply lead time, max window, same-day, or conflict filtering
 
-### 7.42 `GET /api/public/availability/:slug/slots`
+### 7.43 `GET /api/public/availability/:slug/slots`
 
 - Auth: public
 - Validator: `slugParamSchema` + `getPublicAvailabilitySlotsSchema`
@@ -1705,7 +1720,7 @@ Important waitlist distinction:
     "service": {
       "id": "uuid",
       "name": "Service Name",
-      "duration_minutes": 60,
+      "durationMinutes": 60,
       "price": 95
     },
     "slots": [
@@ -1740,7 +1755,7 @@ Important waitlist distinction:
 
 Intelligent Scheduling is a ranking/display feature, not a hard availability rule. It runs after all technical booking validation has produced valid slots. It never removes valid appointment times from the response; it only splits the best initial options from the remaining valid options.
 
-### 7.43 `POST /api/public/booking-intake`
+### 7.44 `POST /api/public/booking-intake`
 
 - Auth: public
 - Validator: `createPublicBookingIntakeSchema`
@@ -1766,7 +1781,7 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - `not_found`
   - `ambiguous`
 
-### 7.44 `POST /api/public/bookings`
+### 7.45 `POST /api/public/bookings`
 
 - Auth: public
 - Validator: `createPublicBookingSchema`
@@ -2330,7 +2345,7 @@ Implemented in `rebookService.evaluateClientRebookStatus()`:
 This same logic powers:
 
 - `GET /api/clients` derived `needs_rebook`
-- `GET /api/client-actions` item `clients_requiring_rebook`
+- `GET /api/activity?category=rebook` derived `client_rebook_needed` items
 
 ### Public booking interaction with client records
 
@@ -2373,24 +2388,14 @@ Public booking-created client rows use:
 
 ### Service creation and update
 
-Private service routes use camelCase request contracts and transformed responses.
-
-Accepted input aliases:
-
-- `duration` or `durationMinutes`
-- `price` or `priceAmount`
-
-Validation ensures:
-
-- if both duration fields are sent, they must match
-- if both price fields are sent, they must match
+Private service routes use a single camelCase request contract and transformed responses.
 
 Create requires:
 
 - `name`
-- one duration field
-- one price field
-- `visible`
+- `durationMinutes`
+- `price`
+- `isActive`
 
 ### Private response shape
 
@@ -2398,11 +2403,9 @@ Create requires:
 
 - `id`
 - `name`
-- `duration`
 - `durationMinutes`
 - `price`
-- `priceAmount`
-- `visible`
+- `isActive`
 - optional `category`
 - optional `description`
 - `isDefault`
@@ -2410,21 +2413,21 @@ Create requires:
 
 ### Public response shape
 
-`GET /api/public/services/:slug` returns raw DB rows from `services`:
+`GET /api/public/services/:slug` returns `ServiceCatalogItem` rows:
 
 - `id`
-- `user_id`
 - `name`
-- `duration_minutes`
+- `durationMinutes`
 - `price`
-- `is_active`
-- `is_default`
-- `sort_order`
-- and any other selected `*` fields
+- `isActive`
+- optional `category`
+- optional `description`
+- `isDefault`
+- `sortOrder`
 
 ### Visibility and active state
 
-- `visible` in private API maps directly to `services.is_active`
+- `isActive` in the API maps directly to `services.is_active`
 - public service list only exposes `is_active = true`
 
 ### Default service assumptions
@@ -2706,7 +2709,7 @@ Examples:
 - up to 100 upcoming non-cancelled appointments
 - next upcoming non-cancelled appointment
 - up to 100 past non-cancelled appointments
-- top clients ordered by `total_spend desc` or `updated_at desc` fallback
+- top clients ordered by `total_spend desc`
 - monthly completed revenue summary
 
 ### Next appointment logic
@@ -2724,25 +2727,23 @@ Dashboard `monthly_revenue_summary.completed_revenue` uses only:
 - `appointments.status = completed`
 - `appointment_date >= business-local month start`
 
-By contrast, some profile overview metrics and forecasts use all non-cancelled appointments, not only completed ones.
+Calendar booked revenue/time and Profile Overview booked performance metrics include:
+
+- `appointments.status = pending`
+- `appointments.status = scheduled`
+- `appointments.status = completed`
+
+Profile Overview upcoming revenue and forecasts include future:
+
+- `appointments.status = pending`
+- `appointments.status = scheduled`
+
+`cancelled` and `no_show` appointments do not count toward booked revenue, completed revenue, upcoming revenue, booked minutes, busy time, or booked average ticket.
 
 ### Date range and timezone assumptions
 
 - local "today" uses business timezone
 - month start uses business-local month start converted to UTC
-
-### Client action logic
-
-Separate route: `GET /api/client-actions`
-
-Returns:
-
-- pending appointment approvals
-- rebook candidates
-
-This route is likely the backend for a dashboard action center / home follow-up section.
-
----
 
 ## 15. Timezone and Date Handling
 
@@ -2819,7 +2820,7 @@ Tests in `src/__tests__/publicAvailability.test.ts` verify:
 - invalid `YYYY-MM-DD`
 - invalid phone
 - invalid timezone
-- inconsistent service duration/price alias fields
+- unknown service alias fields such as `duration`, `priceAmount`, or `visible`
 - invalid booking rules merged state
 
 ### Not-found behavior
@@ -3016,7 +3017,6 @@ Recommended high-signal checks before changing backend behavior:
 
 - `src/__tests__/apiRoutes.test.ts`
 - `src/__tests__/activity.test.ts`
-- `src/__tests__/clientActions.test.ts`
 - `src/__tests__/profileDashboard.test.ts`
 - `src/__tests__/publicAvailability.test.ts`
 
@@ -3048,5 +3048,5 @@ These tests are useful for:
 - Do not change public route paths.
 - Do not silently change the `PublicBookingIntakeResponse` shape.
 - Do not change slot datetime formatting without updating clients.
-- Remember that public services route returns raw DB rows today; changing it to the private camelCase catalog shape would be a breaking API change.
+- Public services now return the same canonical camelCase service item shape as private service catalog responses.
 - Final public booking accepts optional `booking_context_token`; making it required would be breaking.

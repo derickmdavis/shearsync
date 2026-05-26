@@ -379,6 +379,14 @@ describe("Profile and dashboard handlers", () => {
           status: "scheduled"
         },
         {
+          id: "appt-month-no-show",
+          user_id: userId,
+          client_id: "client-3",
+          appointment_date: getStartOfLocalDayUtc(currentMonthLastDate, "UTC").toISOString(),
+          price: 999,
+          status: "no_show"
+        },
+        {
           id: "appt-prev-month-1",
           user_id: userId,
           client_id: "client-2",
@@ -402,7 +410,7 @@ describe("Profile and dashboard handlers", () => {
           performance: {
             period: string;
             periodLabel: string;
-            metrics: Array<{ id: string; value: string; change: string; detail: string }>;
+            metrics: Array<{ id: string; label: string; value: string; change: string; detail: string }>;
           };
         };
       }).data;
@@ -413,15 +421,16 @@ describe("Profile and dashboard handlers", () => {
       assert.deepEqual(
         overview.performance.metrics.map((metric) => ({
           id: metric.id,
+          label: metric.label,
           value: metric.value,
           change: metric.change,
           detail: metric.detail
         })),
         [
-          { id: "revenue", value: "$300", change: "↑ 500%", detail: "vs last month" },
-          { id: "appointments", value: "2", change: "↑ 1", detail: "vs last month" },
-          { id: "rebooking-rate", value: "100%", change: "↑ 100%", detail: "vs last month" },
-          { id: "avg-ticket", value: "$150", change: "↑ 200%", detail: "vs last month" }
+          { id: "revenue", label: "Booked Revenue", value: "$300", change: "↑ 500%", detail: "vs last month" },
+          { id: "appointments", label: "Appointments", value: "2", change: "↑ 1", detail: "vs last month" },
+          { id: "rebooking-rate", label: "Rebooking Rate", value: "100%", change: "↑ 100%", detail: "vs last month" },
+          { id: "avg-ticket", label: "Avg. Ticket", value: "$150", change: "↑ 200%", detail: "vs last month" }
         ]
       );
     } finally {
@@ -509,7 +518,7 @@ describe("Profile and dashboard handlers", () => {
             performance: {
               period: string;
               periodLabel: string;
-              metrics: Array<{ id: string; value: string; change: string; detail: string }>;
+              metrics: Array<{ id: string; label: string; value: string; change: string; detail: string }>;
             };
           };
         }
@@ -518,15 +527,16 @@ describe("Profile and dashboard handlers", () => {
       assert.deepEqual(
         metrics.map((metric) => ({
           id: metric.id,
+          label: metric.label,
           value: metric.value,
           change: metric.change,
           detail: metric.detail
         })),
         [
-          { id: "revenue", value: "$100", change: "↑ 100%", detail: "vs last week" },
-          { id: "appointments", value: "1", change: "0", detail: "vs last week" },
-          { id: "rebooking-rate", value: "0%", change: "0%", detail: "vs last week" },
-          { id: "avg-ticket", value: "$100", change: "↑ 100%", detail: "vs last week" }
+          { id: "revenue", label: "Booked Revenue", value: "$100", change: "↑ 100%", detail: "vs last week" },
+          { id: "appointments", label: "Appointments", value: "1", change: "0", detail: "vs last week" },
+          { id: "rebooking-rate", label: "Rebooking Rate", value: "0%", change: "0%", detail: "vs last week" },
+          { id: "avg-ticket", label: "Avg. Ticket", value: "$100", change: "↑ 100%", detail: "vs last week" }
         ]
       );
     } finally {

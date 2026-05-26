@@ -3,7 +3,8 @@ export const ACTIVITY_TYPES = [
   "appointment_cancelled",
   "appointment_rescheduled",
   "reminder_sent",
-  "waitlist_joined"
+  "waitlist_joined",
+  "client_rebook_needed"
 ] as const;
 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
@@ -11,6 +12,6 @@ export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 export const isActivityType = (value: string): value is ActivityType =>
   (ACTIVITY_TYPES as readonly string[]).includes(value);
 
-export const ACTIVITY_CATEGORIES = ["updates", "approvals", "waitlist"] as const;
+export const ACTIVITY_CATEGORIES = ["updates", "approvals", "waitlist", "rebook"] as const;
 
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];

@@ -77,6 +77,12 @@ const waitlistJoinedMetadataSchema = z.object({
   source: z.enum(["public_booking", "stylist_created", "manual"])
 });
 
+const clientRebookNeededMetadataSchema = z.object({
+  client_name: z.string().min(1),
+  last_appointment_date: isoDateTimeSchema,
+  last_service_name: z.string().nullable()
+});
+
 const activityEventBaseSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -107,6 +113,11 @@ export const activityEventItemSchema = z.discriminatedUnion("activity_type", [
   activityEventBaseSchema.extend({
     activity_type: z.literal("waitlist_joined"),
     metadata: waitlistJoinedMetadataSchema.nullable()
+  }),
+  activityEventBaseSchema.extend({
+    activity_type: z.literal("client_rebook_needed"),
+    appointment_id: z.null(),
+    metadata: clientRebookNeededMetadataSchema
   })
 ]);
 
@@ -115,7 +126,8 @@ export const activityGroupSummarySchema = z.object({
   cancellations: z.number().int().nonnegative(),
   reschedules: z.number().int().nonnegative(),
   reminders_sent: z.number().int().nonnegative(),
-  waitlist_joins: z.number().int().nonnegative()
+  waitlist_joins: z.number().int().nonnegative(),
+  rebook_needed: z.number().int().nonnegative()
 });
 
 export const activityDayGroupSchema = z.object({
@@ -130,7 +142,8 @@ export const activityFeedResponseSchema = z.object({
   counts: z.object({
     updates: z.number().int().nonnegative(),
     approvals: z.number().int().nonnegative(),
-    waitlist: z.number().int().nonnegative()
+    waitlist: z.number().int().nonnegative(),
+    rebook: z.number().int().nonnegative()
   }).optional(),
   groups: z.array(activityDayGroupSchema),
   next_cursor: z.string().nullable()

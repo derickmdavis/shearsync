@@ -40,16 +40,6 @@ export const getMissingColumnName = (error: PostgrestError | null): string | nul
   return null;
 };
 
-export const isMissingColumnError = (error: PostgrestError | null, column?: string): boolean => {
-  const missingColumn = getMissingColumnName(error);
-
-  if (!missingColumn) {
-    return false;
-  }
-
-  return column ? missingColumn === column : true;
-};
-
 export const normalizeEmptyString = (value: string | undefined): string | undefined => {
   if (value === "") {
     return undefined;

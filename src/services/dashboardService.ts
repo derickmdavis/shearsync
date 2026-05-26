@@ -1,13 +1,13 @@
-import type { PostgrestError } from "@supabase/supabase-js";
 import {
   getCurrentLocalDate,
   getEndOfLocalDayUtc,
   getStartOfCurrentLocalMonthUtc,
   getStartOfLocalDayUtc
 } from "../lib/timezone";
+import { calculateAppointmentMetricTotals } from "../lib/appointmentMetrics";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
-import { handleSupabaseError, isMissingColumnError } from "./db";
+import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 
 const DASHBOARD_APPOINTMENT_SELECT = `
@@ -60,27 +60,13 @@ const dedupeAppointments = (appointments: Row[]): Row[] => {
   });
 };
 
-const loadTopClients = async (
-  userId: string
-): Promise<{ data: Row[] | null; error: PostgrestError | null }> => {
-  const initialResult = await supabaseAdmin
+const loadTopClients = async (userId: string) =>
+  supabaseAdmin
     .from("clients")
     .select("*")
     .eq("user_id", userId)
     .order("total_spend", { ascending: false })
     .limit(5);
-
-  if (!isMissingColumnError(initialResult.error, "total_spend")) {
-    return initialResult;
-  }
-
-  return supabaseAdmin
-    .from("clients")
-    .select("*")
-    .eq("user_id", userId)
-    .order("updated_at", { ascending: false })
-    .limit(5);
-};
 
 export const dashboardService = {
   async getSummary(userId: string): Promise<Row> {
@@ -139,7 +125,7 @@ export const dashboardService = {
           .limit(100),
         supabaseAdmin
           .from("appointments")
-          .select("price")
+          .select("price, status")
           .eq("user_id", userId)
           .eq("status", "completed")
           .gte("appointment_date", startOfCurrentMonthIso),
@@ -155,10 +141,7 @@ export const dashboardService = {
     handleSupabaseError(revenueResult.error, "Unable to load dashboard revenue");
     handleSupabaseError(topClientsResult.error, "Unable to load dashboard top clients");
 
-    const monthlyRevenue = (revenueResult.data ?? []).reduce((sum, row) => {
-      const price = typeof row.price === "number" ? row.price : Number(row.price ?? 0);
-      return sum + price;
-    }, 0);
+    const monthlyRevenue = calculateAppointmentMetricTotals((revenueResult.data ?? []) as Row[], "earned_revenue").revenue;
 
     const todayAppointments = mapDashboardAppointments(todayAppointmentsResult.data as Row[] | null | undefined);
     const upcomingAppointments = mapDashboardAppointments(upcomingAppointmentsResult.data as Row[] | null | undefined);

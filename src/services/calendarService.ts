@@ -10,6 +10,14 @@ import {
   zonedDateTimeToUtc
 } from "../lib/timezone";
 import { getAppointmentEndIso } from "../lib/appointments";
+import {
+  calculateAppointmentMetricTotals,
+  calculatePercentChange,
+  getAppointmentDurationMinutes,
+  isAppointmentIncludedInMetric,
+  toCents,
+  toMetricNumber
+} from "../lib/appointmentMetrics";
 import { supabaseAdmin } from "../lib/supabase";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import type { CalendarDayResponse } from "../types/api";
@@ -22,32 +30,13 @@ interface TimeInterval {
   end: number;
 }
 
-interface BookedTotals {
-  revenue: number;
-  minutes: number;
-  count: number;
-}
-
 const SLOT_INTERVAL_MINUTES = 15;
 const MIN_BOOKABLE_GAP_MINUTES = 30;
-const availabilityBlockingStatusSet = new Set(["scheduled", "pending", "completed"]);
-const bookedStatusSet = new Set(["scheduled", "pending", "completed"]);
 
 const timeToMinutes = (time: string): number => {
   const [hours, minutes] = time.split(":").map(Number);
   return hours * 60 + minutes;
 };
-
-const toNumber = (value: unknown): number => {
-  if (typeof value === "number") {
-    return value;
-  }
-
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const toCents = (value: number): number => Math.round(value * 100);
 
 const roundUpToInterval = (minutes: number, interval: number): number =>
   Math.ceil(minutes / interval) * interval;
@@ -117,7 +106,7 @@ const getAppointmentInterval = (appointment: Row, timeZone: string): TimeInterva
 
   const start = getMinutesSinceMidnightForInstant(appointment.appointment_date, timeZone);
   const end = getMinutesSinceMidnightForInstant(
-    getAppointmentEndIso(appointment.appointment_date, toNumber(appointment.duration_minutes)),
+    getAppointmentEndIso(appointment.appointment_date, getAppointmentDurationMinutes(appointment)),
     timeZone
   );
 
@@ -128,28 +117,8 @@ const getAppointmentInterval = (appointment: Row, timeZone: string): TimeInterva
   return { start, end };
 };
 
-const getBookedTotals = (appointments: Row[]): BookedTotals =>
-  appointments.reduce<BookedTotals>(
-    (totals, appointment) => {
-      if (!bookedStatusSet.has(String(appointment.status ?? ""))) {
-        return totals;
-      }
-
-      return {
-        revenue: totals.revenue + toNumber(appointment.revenue ?? appointment.price),
-        minutes: totals.minutes + toNumber(appointment.duration_minutes),
-        count: totals.count + 1
-      };
-    },
-    { revenue: 0, minutes: 0, count: 0 }
-  );
-
 const getRevenueComparisonPercent = (bookedRevenue: number, previousBookedRevenue: number): number | null => {
-  if (previousBookedRevenue === 0) {
-    return null;
-  }
-
-  return Math.round(((bookedRevenue - previousBookedRevenue) / previousBookedRevenue) * 100);
+  return calculatePercentChange(bookedRevenue, previousBookedRevenue);
 };
 
 const toCalendarAppointment = (appointment: Row): Row => {
@@ -158,13 +127,13 @@ const toCalendarAppointment = (appointment: Row): Row => {
   const lastName = typeof client?.last_name === "string" ? client.last_name : "";
   const clientName = [firstName, lastName].filter(Boolean).join(" ").trim() || null;
   const appointmentDate = typeof appointment.appointment_date === "string" ? appointment.appointment_date : null;
-  const durationMinutes = toNumber(appointment.duration_minutes);
+  const durationMinutes = getAppointmentDurationMinutes(appointment);
   const startTime = appointmentDate;
   const endTime = appointmentDate
     ? new Date(new Date(appointmentDate).getTime() + durationMinutes * 60_000).toISOString()
     : null;
   const serviceName = typeof appointment.service_name === "string" ? appointment.service_name : null;
-  const price = toNumber(appointment.price);
+  const price = toMetricNumber(appointment.price);
 
   return {
     ...appointment,
@@ -257,15 +226,15 @@ export const calendarService = {
         return leftTime - rightTime;
       }
     );
-    const selectedBookedTotals = getBookedTotals(appointments);
-    const previousBookedTotals = getBookedTotals((previousWeekAppointmentsResult.data ?? []) as Row[]);
+    const selectedBookedTotals = calculateAppointmentMetricTotals(appointments, "booked_revenue");
+    const previousBookedTotals = calculateAppointmentMetricTotals((previousWeekAppointmentsResult.data ?? []) as Row[], "booked_revenue");
     const today = getCurrentLocalDate(timeZone);
     const availabilityIntervals = mergeIntervals((availabilityResult.data ?? []).map((window) => ({
       start: typeof window.start_time === "string" ? timeToMinutes(window.start_time) : 0,
       end: typeof window.end_time === "string" ? timeToMinutes(window.end_time) : 0
     })));
     const busyIntervals = appointments
-      .filter((appointment) => availabilityBlockingStatusSet.has(String(appointment.status ?? "")))
+      .filter((appointment) => isAppointmentIncludedInMetric(appointment, "busy_time"))
       .map((appointment) => getAppointmentInterval(appointment, timeZone))
       .filter((interval): interval is TimeInterval => interval !== null);
     const now = new Date();

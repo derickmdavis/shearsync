@@ -22,6 +22,7 @@ import type {
   AppointmentRescheduledActivityMetadata,
   AppointmentStatus,
   BookingCreatedActivityMetadata,
+  ClientRebookNeededActivityMetadata,
   ReminderChannel,
   ReminderSentActivityMetadata,
   ReminderType,
@@ -30,6 +31,7 @@ import type {
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
+import { evaluateClientRebookStatus } from "./rebookService";
 
 interface ActivityFeedFilters {
   limit: number;
@@ -39,6 +41,8 @@ interface ActivityFeedFilters {
   start_date?: string;
   end_date?: string;
 }
+
+type PersistedActivityType = Exclude<ActivityType, "client_rebook_needed">;
 
 interface CursorPayload {
   occurred_at: string;
@@ -56,6 +60,12 @@ const ACTIVITY_EVENT_SELECT =
 
 const PENDING_APPROVAL_SELECT =
   "id, client_id, appointment_date, service_name, status, created_at";
+
+const REBOOK_CLIENT_SELECT =
+  "id, first_name, last_name, preferred_name";
+
+const REBOOK_APPOINTMENT_SELECT =
+  "id, client_id, appointment_date, service_name, status";
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
 
@@ -163,6 +173,19 @@ const normalizeActivityMetadata = (
         };
       }
       return null;
+    case "client_rebook_needed":
+      if (
+        typeof value.client_name === "string"
+        && typeof value.last_appointment_date === "string"
+        && (typeof value.last_service_name === "string" || value.last_service_name === null)
+      ) {
+        return {
+          client_name: value.client_name,
+          last_appointment_date: value.last_appointment_date,
+          last_service_name: value.last_service_name
+        };
+      }
+      return null;
   }
 };
 
@@ -212,6 +235,32 @@ const toPendingApprovalActivityItem = (
   };
 };
 
+const toClientRebookActivityItem = (
+  clientId: string,
+  client: Row | null,
+  lastAppointment: Row
+): ActivityEventItem => {
+  const clientNames = createClientNameParts(client);
+  const lastAppointmentDate = String(lastAppointment.appointment_date ?? "");
+  const lastServiceName = typeof lastAppointment.service_name === "string" ? lastAppointment.service_name : null;
+  const metadata: ClientRebookNeededActivityMetadata = {
+    client_name: clientNames.fullName,
+    last_appointment_date: lastAppointmentDate,
+    last_service_name: lastServiceName
+  };
+
+  return {
+    id: clientId,
+    activity_type: "client_rebook_needed",
+    title: `${clientNames.shortName} is due to rebook`,
+    description: lastServiceName ? `Last visit was ${lastServiceName}` : null,
+    occurred_at: lastAppointmentDate,
+    client_id: clientId,
+    appointment_id: null,
+    metadata
+  };
+};
+
 const toSummaryKey = (activityType: ActivityType): keyof ActivityGroupSummary => {
   switch (activityType) {
     case "booking_created":
@@ -224,6 +273,8 @@ const toSummaryKey = (activityType: ActivityType): keyof ActivityGroupSummary =>
       return "reminders_sent";
     case "waitlist_joined":
       return "waitlist_joins";
+    case "client_rebook_needed":
+      return "rebook_needed";
   }
 };
 
@@ -232,7 +283,8 @@ const createEmptySummary = (): ActivityGroupSummary => ({
   cancellations: 0,
   reschedules: 0,
   reminders_sent: 0,
-  waitlist_joins: 0
+  waitlist_joins: 0,
+  rebook_needed: 0
 });
 
 const createClientNameParts = (client: Row | null): ClientNameParts => {
@@ -285,6 +337,14 @@ const compareRowsDescending = (left: Row, right: Row): number => {
   }
 
   return String(right.id ?? "").localeCompare(String(left.id ?? ""));
+};
+
+const compareEventsDescending = (left: ActivityEventItem, right: ActivityEventItem): number => {
+  if (left.occurred_at !== right.occurred_at) {
+    return right.occurred_at.localeCompare(left.occurred_at);
+  }
+
+  return right.id.localeCompare(left.id);
 };
 
 const encodeCursor = (event: ActivityEventItem, category?: ActivityCategory): string =>
@@ -358,8 +418,10 @@ const shouldIncludeEventForCategory = (event: ActivityEventItem, category?: Acti
       return event.activity_type === "waitlist_joined";
     case "approvals":
       return false;
+    case "rebook":
+      return event.activity_type === "client_rebook_needed";
     default:
-      return true;
+      return event.activity_type !== "client_rebook_needed";
   }
 };
 
@@ -486,9 +548,67 @@ const getClientsById = async (stylistId: string, clientIds: string[]): Promise<M
     .map((row) => [row.id as string, row]));
 };
 
-const applyDateFilters = (rows: Row[], filters: ActivityFeedFilters, timeZone: string, column: string): Row[] =>
+const getClientRebookEvents = async (
+  stylistId: string,
+  timeZone: string,
+  filters: Pick<ActivityFeedFilters, "start_date" | "end_date"> = {}
+): Promise<ActivityEventItem[]> => {
+  const [clientsResult, appointmentsResult] = await Promise.all([
+    supabaseAdmin
+      .from("clients")
+      .select(REBOOK_CLIENT_SELECT)
+      .eq("user_id", stylistId),
+    supabaseAdmin
+      .from("appointments")
+      .select(REBOOK_APPOINTMENT_SELECT)
+      .eq("user_id", stylistId)
+      .neq("status", "cancelled")
+      .order("appointment_date", { ascending: true })
+  ]);
+
+  handleSupabaseError(clientsResult.error, "Unable to load rebook clients");
+  handleSupabaseError(appointmentsResult.error, "Unable to load rebook appointments");
+
+  const clientsById = new Map(((clientsResult.data ?? []) as Row[])
+    .filter((client) => typeof client.id === "string")
+    .map((client) => [client.id as string, client]));
+  const appointmentsByClientId = new Map<string, Row[]>();
+
+  for (const appointment of (appointmentsResult.data ?? []) as Row[]) {
+    const clientId = appointment.client_id;
+    if (typeof clientId !== "string") {
+      continue;
+    }
+
+    const existing = appointmentsByClientId.get(clientId) ?? [];
+    existing.push(appointment);
+    appointmentsByClientId.set(clientId, existing);
+  }
+
+  return applyDateFilters([...appointmentsByClientId.entries()]
+    .flatMap(([clientId, clientAppointments]) => {
+      const { lastQualifyingPastAppointment } = evaluateClientRebookStatus(clientAppointments, timeZone);
+      if (!lastQualifyingPastAppointment || typeof lastQualifyingPastAppointment.appointment_date !== "string") {
+        return [];
+      }
+
+      return [toClientRebookActivityItem(
+        clientId,
+        clientsById.get(clientId) ?? null,
+        lastQualifyingPastAppointment
+      )];
+    })
+    .sort(compareEventsDescending), filters, timeZone, "occurred_at");
+};
+
+const applyDateFilters = <T>(
+  rows: T[],
+  filters: Pick<ActivityFeedFilters, "start_date" | "end_date">,
+  timeZone: string,
+  column: string
+): T[] =>
   rows.filter((row) => {
-    const value = String(row[column] ?? "");
+    const value = String((row as Record<string, unknown>)[column] ?? "");
     if (filters.start_date && value < getStartOfLocalDayUtc(filters.start_date, timeZone).toISOString()) {
       return false;
     }
@@ -556,7 +676,8 @@ export const activityEventsService = {
     return {
       updates: activityEvents.filter((event) => shouldIncludeEventForCategory(event, "updates")).length,
       approvals: ((appointmentData ?? []) as Row[]).length,
-      waitlist: activityEvents.filter((event) => shouldIncludeEventForCategory(event, "waitlist")).length
+      waitlist: activityEvents.filter((event) => shouldIncludeEventForCategory(event, "waitlist")).length,
+      rebook: (await getClientRebookEvents(stylistId, timeZone, filters)).length
     };
   },
 
@@ -566,6 +687,14 @@ export const activityEventsService = {
 
     if (filters.category === "approvals") {
       return this.getPendingApprovalsFeed(stylistId, filters, timeZone, counts);
+    }
+
+    if (filters.category === "rebook") {
+      return this.getClientRebookFeed(stylistId, filters, timeZone, counts);
+    }
+
+    if (filters.activity_type === "client_rebook_needed") {
+      return this.getClientRebookFeed(stylistId, filters, timeZone, counts);
     }
 
     let query = supabaseAdmin
@@ -657,6 +786,28 @@ export const activityEventsService = {
       timeZone
     ));
     const nextCursor = filteredRows.length > filters.limit && events.length > 0
+      ? encodeCursor(events[events.length - 1] as ActivityEventItem, filters.category)
+      : null;
+
+    return withCategoryFields({
+      groups: groupEventsByDay(events, timeZone),
+      next_cursor: nextCursor
+    }, filters.category, counts);
+  },
+
+  async getClientRebookFeed(
+    stylistId: string,
+    filters: ActivityFeedFilters,
+    timeZone: string,
+    counts?: ActivityFeedCounts
+  ): Promise<ActivityFeedResponse> {
+    const sortedEvents = await getClientRebookEvents(stylistId, timeZone, filters);
+    const cursor = filters.cursor ? decodeCursor(filters.cursor, filters.category) : null;
+    const filteredEvents = cursor
+      ? sortedEvents.filter((event) => isBeforeCursor({ occurred_at: event.occurred_at, id: event.id }, cursor))
+      : sortedEvents;
+    const events = filteredEvents.slice(0, filters.limit);
+    const nextCursor = filteredEvents.length > filters.limit && events.length > 0
       ? encodeCursor(events[events.length - 1] as ActivityEventItem, filters.category)
       : null;
 
@@ -823,7 +974,7 @@ export const activityEventsService = {
     stylistId: string;
     clientId: string | null;
     appointmentId: string | null;
-    activityType: ActivityType;
+    activityType: PersistedActivityType;
     title: string;
     description: string | null;
     occurredAt: string;

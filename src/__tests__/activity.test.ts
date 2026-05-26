@@ -109,6 +109,11 @@ describe("Activity handlers", () => {
     assert.equal(query.activity_type, "waitlist_joined");
   });
 
+  it("accepts client_rebook_needed as a valid activity_type filter", () => {
+    const query = listActivityQuerySchema.parse({ activity_type: "client_rebook_needed" });
+    assert.equal(query.activity_type, "client_rebook_needed");
+  });
+
   it("rejects unsupported activity categories", () => {
     assert.throws(
       () => listActivityQuerySchema.parse({ category: "all" }),
@@ -469,7 +474,8 @@ describe("Activity handlers", () => {
               cancellations: 0,
               reschedules: 0,
               reminders_sent: 1,
-              waitlist_joins: 0
+              waitlist_joins: 0,
+              rebook_needed: 0
             },
             events: [
               {
@@ -511,7 +517,8 @@ describe("Activity handlers", () => {
               cancellations: 1,
               reschedules: 1,
               reminders_sent: 0,
-              waitlist_joins: 0
+              waitlist_joins: 0,
+              rebook_needed: 0
             },
             events: [
               {
@@ -610,7 +617,8 @@ describe("Activity handlers", () => {
               cancellations: 0,
               reschedules: 0,
               reminders_sent: 0,
-              waitlist_joins: 0
+              waitlist_joins: 0,
+              rebook_needed: 0
             },
             events: [
               {
@@ -883,7 +891,8 @@ describe("Activity handlers", () => {
             cancellations: 0,
             reschedules: 0,
             reminders_sent: 0,
-            waitlist_joins: 0
+            waitlist_joins: 0,
+            rebook_needed: 0
           },
           events: [
             {
@@ -966,7 +975,8 @@ describe("Activity handlers", () => {
             cancellations: 0,
             reschedules: 0,
             reminders_sent: 0,
-            waitlist_joins: 1
+            waitlist_joins: 1,
+            rebook_needed: 0
           },
           events: [
             {
@@ -1056,7 +1066,7 @@ describe("Activity handlers", () => {
       const payload = (response.body as {
         data: {
           category: string;
-          counts: { updates: number; approvals: number; waitlist: number };
+          counts: { updates: number; approvals: number; waitlist: number; rebook: number };
           groups: Array<{ events: Array<{ id: string; activity_type: string }> }>;
         };
       }).data;
@@ -1064,7 +1074,8 @@ describe("Activity handlers", () => {
       assert.deepEqual(payload.counts, {
         updates: 1,
         approvals: 1,
-        waitlist: 1
+        waitlist: 1,
+        rebook: 0
       });
       assert.deepEqual(payload.groups[0]?.events.map((event) => [event.id, event.activity_type]), [
         ["11111111-1111-4111-8111-111111111111", "waitlist_joined"]
@@ -1139,7 +1150,8 @@ describe("Activity handlers", () => {
         counts: {
           updates: 0,
           approvals: 1,
-          waitlist: 0
+          waitlist: 0,
+          rebook: 0
         },
         groups: [
           {
@@ -1150,7 +1162,8 @@ describe("Activity handlers", () => {
               cancellations: 0,
               reschedules: 0,
               reminders_sent: 0,
-              waitlist_joins: 0
+              waitlist_joins: 0,
+              rebook_needed: 0
             },
             events: [
               {
@@ -1167,6 +1180,152 @@ describe("Activity handlers", () => {
                   service_name: "Balayage",
                   appointment_start_time: "2026-05-14T15:00:00.000Z",
                   current_appointment_status: "pending"
+                }
+              }
+            ]
+          }
+        ],
+        next_cursor: null
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns clients needing rebook as an activity category", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-30T12:00:00.000Z") });
+    const rebookClientId = "12121212-1212-4212-8212-121212121212";
+    const secondRebookClientId = "34343434-3434-4434-8434-343434343434";
+    const tooRecentClientId = "56565656-5656-4656-8656-565656565656";
+    const futureBookedClientId = "78787878-7878-4787-8787-787878787878";
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [
+        { id: rebookClientId, user_id: userId, first_name: "Morgan", last_name: "Reed" },
+        { id: secondRebookClientId, user_id: userId, first_name: "Avery", last_name: "Cole" },
+        { id: tooRecentClientId, user_id: userId, first_name: "Jordan", last_name: "Parks" },
+        { id: futureBookedClientId, user_id: userId, first_name: "Riley", last_name: "Stone" }
+      ],
+      appointments: [
+        {
+          id: "10101010-1010-4010-8010-101010101010",
+          user_id: userId,
+          client_id: rebookClientId,
+          appointment_date: "2025-11-20T09:00:00.000Z",
+          service_name: "Color Refresh",
+          status: "completed"
+        },
+        {
+          id: "20202020-2020-4020-8020-202020202020",
+          user_id: userId,
+          client_id: secondRebookClientId,
+          appointment_date: "2026-01-30T09:00:00.000Z",
+          service_name: "Trim",
+          status: "completed"
+        },
+        {
+          id: "30303030-3030-4030-8030-303030303030",
+          user_id: userId,
+          client_id: tooRecentClientId,
+          appointment_date: "2026-02-01T09:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        },
+        {
+          id: "40404040-4040-4040-8040-404040404040",
+          user_id: userId,
+          client_id: futureBookedClientId,
+          appointment_date: "2026-01-15T09:00:00.000Z",
+          service_name: "Loc Retwist",
+          status: "completed"
+        },
+        {
+          id: "50505050-5050-4050-8050-505050505050",
+          user_id: userId,
+          client_id: futureBookedClientId,
+          appointment_date: "2026-05-12T09:00:00.000Z",
+          service_name: "Loc Retwist",
+          status: "scheduled"
+        }
+      ],
+      activity_events: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: listActivityQuerySchema.parse({ category: "rebook" }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.list(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as { data: unknown }).data;
+      activityFeedResponseSchema.parse(payload);
+      assert.deepEqual(payload, {
+        category: "rebook",
+        counts: {
+          updates: 0,
+          approvals: 0,
+          waitlist: 0,
+          rebook: 2
+        },
+        groups: [
+          {
+            date: "2026-01-30",
+            label: "Fri, Jan 30",
+            summary: {
+              new_bookings: 0,
+              cancellations: 0,
+              reschedules: 0,
+              reminders_sent: 0,
+              waitlist_joins: 0,
+              rebook_needed: 1
+            },
+            events: [
+              {
+                id: secondRebookClientId,
+                activity_type: "client_rebook_needed",
+                title: "Avery is due to rebook",
+                description: "Last visit was Trim",
+                occurred_at: "2026-01-30T09:00:00.000Z",
+                client_id: secondRebookClientId,
+                appointment_id: null,
+                metadata: {
+                  client_name: "Avery Cole",
+                  last_appointment_date: "2026-01-30T09:00:00.000Z",
+                  last_service_name: "Trim"
+                }
+              }
+            ]
+          },
+          {
+            date: "2025-11-20",
+            label: "Thu, Nov 20",
+            summary: {
+              new_bookings: 0,
+              cancellations: 0,
+              reschedules: 0,
+              reminders_sent: 0,
+              waitlist_joins: 0,
+              rebook_needed: 1
+            },
+            events: [
+              {
+                id: rebookClientId,
+                activity_type: "client_rebook_needed",
+                title: "Morgan is due to rebook",
+                description: "Last visit was Color Refresh",
+                occurred_at: "2025-11-20T09:00:00.000Z",
+                client_id: rebookClientId,
+                appointment_id: null,
+                metadata: {
+                  client_name: "Morgan Reed",
+                  last_appointment_date: "2025-11-20T09:00:00.000Z",
+                  last_service_name: "Color Refresh"
                 }
               }
             ]
@@ -1279,7 +1438,7 @@ describe("Activity handlers", () => {
       const payload = (response.body as {
         data: {
           category: string;
-          counts: { updates: number; approvals: number; waitlist: number };
+          counts: { updates: number; approvals: number; waitlist: number; rebook: number };
           groups: Array<{ events: Array<{ id: string }> }>;
         };
       }).data;
@@ -1287,7 +1446,8 @@ describe("Activity handlers", () => {
       assert.deepEqual(payload.counts, {
         updates: 1,
         approvals: 1,
-        waitlist: 1
+        waitlist: 1,
+        rebook: 0
       });
       assert.deepEqual(payload.groups[0]?.events.map((event) => event.id), [
         "22222222-2222-4222-8222-222222222222"

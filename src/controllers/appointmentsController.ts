@@ -26,6 +26,12 @@ export const appointmentsController = {
     res.json({ data: { events } });
   },
 
+  async getById(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const appointment = await appointmentsService.getById(userId, getRequiredParam(req, "id"));
+    res.json({ data: appointment });
+  },
+
   async create(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const appointment = await appointmentsService.create(userId, req.body);

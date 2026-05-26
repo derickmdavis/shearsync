@@ -56,11 +56,14 @@ Railway uses `npm run build` and `npm run start` from `railway.json`.
 
 1. Create a Supabase project.
 2. Create the tables in `supabase/schema.sql`.
-3. Enable Supabase Auth.
-4. Add the environment variables to `.env` locally and to Railway in production.
-5. Create a private Storage bucket for client photos when upload work begins.
+3. Apply all checked-in migrations before starting the API.
+4. Enable Supabase Auth.
+5. Add the environment variables to `.env` locally and to Railway in production.
+6. Create a private Storage bucket for client photos when upload work begins.
 
 The API validates bearer tokens through Supabase Auth using the configured `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Authenticated business data is also scoped by `user_id` in every service query.
+
+The API requires the production schema through `202605210001_dedupe_appointment_email_events`. Startup and `GET /health` fail clearly if required `users` or `clients` columns are missing.
 
 ## Routes
 
@@ -79,6 +82,7 @@ Authenticated routes:
 - `GET /api/clients/:id/appointments`
 - `POST /api/appointments`
 - `GET /api/appointments/internal-context?date=YYYY-MM-DD&durationMinutes=90`
+- `GET /api/appointments/:id`
 - `GET /api/appointments/:id/activity`
 - `PATCH /api/appointments/:id`
 - `GET /api/clients/:id/photos`
@@ -88,7 +92,6 @@ Authenticated routes:
 - `POST /api/reminders`
 - `PATCH /api/reminders/:id`
 - `GET /api/dashboard`
-- `GET /api/client-actions`
 - `GET /api/calendar?date=YYYY-MM-DD`
 - `GET /api/settings/profile`
 - `PATCH /api/settings/profile`
@@ -103,7 +106,7 @@ Client contract notes:
 
 - `GET /api/settings/booking` and `PATCH /api/settings/booking` include the stylist's business booking settings. The booking settings payload accepts optional `instagram`; the backend stores the handle without leading `@`.
 - `GET /api/clients` returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`.
-- `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as `clients_requiring_rebook` in `GET /api/client-actions`.
+- `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as the `rebook` category in `GET /api/activity`.
 - `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
 
 Appointment contract notes:
@@ -111,16 +114,15 @@ Appointment contract notes:
 - Authenticated `POST /api/appointments` defaults `booking_source` to `internal`, ignores public booking rules, and only enforces ownership plus overlap protection.
 - Public booking creation stores `booking_source: "public"`.
 - Public booking `notes` are stored on the appointment only; they are not copied into client/customer notes.
-- `GET /api/appointments/internal-context` returns overlap-safe internal slot suggestions for a given date and duration without applying public booking rules or saved availability windows.
+- `GET /api/appointments/internal-context` returns `conflictFreeSlots` for a given date and duration. These are overlap-safe internal suggestions only; the response explicitly does not apply saved availability windows, public booking rules, or off-day checks.
+- `GET /api/appointments/:id` returns one authenticated stylist-owned appointment by appointment ID, with frontend-friendly detail aliases including `client_name`, `start_time`, `end_time`, `services`, and `revenue` when derivable.
 - `GET /api/appointments/:id/activity` returns activity events for a single appointment in reverse chronological order for appointment detail/history UI.
 
-Client actions contract notes:
+Business metric contract notes:
 
-- `GET /api/client-actions` returns a typed `items` array for dashboard/action-center UI surfaces.
-- Current item types are `pending_appointment_approvals` and `clients_requiring_rebook`.
-- `clients_requiring_rebook` is based on the client's most recent non-cancelled appointment being 3 to 6 months old in the business timezone, with no non-cancelled future appointment scheduled.
-
-See [docs/frontend-client-actions-integration.md](docs/frontend-client-actions-integration.md) for the full frontend contract.
+- Shared metric semantics are documented in [docs/frontend-business-metrics-contract.md](docs/frontend-business-metrics-contract.md).
+- Booked revenue/minutes include `pending`, `scheduled`, and `completed`; earned/completed revenue includes `completed` only; upcoming revenue includes future `pending` and `scheduled`.
+- `cancelled` and `no_show` appointments do not count toward booked revenue, earned revenue, upcoming revenue, booked minutes, busy time, or booked average ticket.
 
 ## Activity Feed
 
@@ -128,10 +130,10 @@ The mobile Activity screen is a business timeline, not a chat inbox.
 
 - `GET /api/activity` and `GET /api/activity/feed` return recent operational events grouped by business-local day.
 - `GET /api/appointments/:id/activity` returns appointment-specific activity in reverse chronological order for detail/history UI.
-- The response is ordered most recent first and includes per-day summary counts for `new_bookings`, `cancellations`, `reschedules`, `reminders_sent`, and `waitlist_joins`.
-- Supported MVP event types are `booking_created`, `appointment_cancelled`, `appointment_rescheduled`, `reminder_sent`, and `waitlist_joined`.
+- The response is ordered most recent first and includes per-day summary counts for `new_bookings`, `cancellations`, `reschedules`, `reminders_sent`, `waitlist_joins`, and `rebook_needed`.
+- Supported MVP event types are `booking_created`, `appointment_cancelled`, `appointment_rescheduled`, `reminder_sent`, `waitlist_joined`, and the derived `client_rebook_needed`.
 - Query params: `limit`, `cursor`, `category`, `activity_type`, `start_date`, `end_date`.
-- Category feeds support `updates`, `approvals`, and `waitlist`, echo the selected `category`, and include total `counts` for all three categories before pagination.
+- Category feeds support `updates`, `approvals`, `waitlist`, and `rebook`, echo the selected `category`, and include total `counts` for all categories before pagination.
 - Pagination is cursor-based and paginates by event, not by day-group count.
 
 Activity events are created automatically by backend mutations:
@@ -160,6 +162,7 @@ Activity metadata is also normalized server-side so the mobile app can inspect t
 
 Public booking routes:
 
+- `GET /book/:slug` redirects to the public booking web app and is the canonical browser URL.
 - `GET /api/public/stylists/:slug`
 - `GET /api/public/services/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug?booking_context_token=...`
@@ -318,7 +321,7 @@ The actual file upload should be wired to Supabase Storage once bucket names, si
 2. Create a Railway project from the repo.
 3. Add the Supabase environment variables.
 4. Deploy.
-5. Check `GET /health`.
+5. Check `GET /health`. A non-200 response means the API or required database schema is not ready.
 
 Railway will run the build and start commands from `railway.json`.
 

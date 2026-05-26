@@ -25,7 +25,7 @@ export const publicController = {
     }
 
     const slug = getRequiredParam(req, "slug");
-    const redirectUrl = new URL(`/booking/${slug}`, webAppUrl);
+    const redirectUrl = new URL(`/book/${slug}`, webAppUrl);
     res.redirect(302, redirectUrl.toString());
   },
 

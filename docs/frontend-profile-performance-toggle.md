@@ -65,7 +65,7 @@ The response now includes `data.performance.period` so the frontend can confirm 
       "metrics": [
         {
           "id": "revenue",
-          "label": "Revenue",
+          "label": "Booked Revenue",
           "value": "$285",
           "change": "↑ 17%",
           "detail": "vs last week"
@@ -111,12 +111,12 @@ Uses the current local calendar month in the business timezone:
 
 These four performance cards switch together:
 
-- `Revenue`
+- `Booked Revenue`
 - `Appointments`
 - `Rebooking Rate`
 - `Avg. Ticket`
 
-Each metric uses the selected period and updates its comparison text accordingly.
+Each metric uses the selected period and updates its comparison text accordingly. `Booked Revenue`, `Appointments`, `Rebooking Rate`, and `Avg. Ticket` use booked metric semantics: `pending`, `scheduled`, and `completed` appointments are included; `cancelled` and `no_show` appointments are excluded.
 
 ## Recommended Frontend Behavior
 

@@ -7,6 +7,14 @@ import {
   getLocalDayOfWeekForDate,
   getStartOfLocalDayUtc
 } from "../lib/timezone";
+import {
+  addAppointmentToMetricTotals,
+  calculateAverageTicket,
+  calculateRebookingRate,
+  createAppointmentMetricTotals,
+  getAppointmentValue,
+  isAppointmentIncludedInMetric
+} from "../lib/appointmentMetrics";
 import { supabaseAdmin } from "../lib/supabase";
 import type {
   BookingSettings,
@@ -29,6 +37,7 @@ interface AppointmentRow extends Row {
   appointment_date: string;
   price: number | string;
   client_id: string | null;
+  status: string;
 }
 
 interface AvailabilityRow extends Row {
@@ -172,62 +181,6 @@ const getPlanLabel = (user: Row | null): string => {
 
 const getAvatarImageId = (user: Row | null): string | null => {
   return typeof user?.avatar_image_id === "string" ? user.avatar_image_id : null;
-};
-
-const toPriceNumber = (value: number | string | null | undefined): number => {
-  if (typeof value === "number") {
-    return value;
-  }
-
-  return Number(value ?? 0);
-};
-
-interface AppointmentMetricsAccumulator {
-  appointmentCount: number;
-  revenue: number;
-  perClientCounts: Map<string, number>;
-}
-
-const createAppointmentMetricsAccumulator = (): AppointmentMetricsAccumulator => ({
-  appointmentCount: 0,
-  revenue: 0,
-  perClientCounts: new Map()
-});
-
-const addAppointmentToMetricsAccumulator = (
-  accumulator: AppointmentMetricsAccumulator,
-  appointment: AppointmentRow
-) => {
-  accumulator.appointmentCount += 1;
-  accumulator.revenue += toPriceNumber(appointment.price);
-
-  if (!appointment.client_id) {
-    return;
-  }
-
-  accumulator.perClientCounts.set(
-    appointment.client_id,
-    (accumulator.perClientCounts.get(appointment.client_id) ?? 0) + 1
-  );
-};
-
-const getRebookingRate = (metrics: AppointmentMetricsAccumulator): number => {
-  const totalClients = metrics.perClientCounts.size;
-
-  if (totalClients === 0) {
-    return 0;
-  }
-
-  const rebookedClients = [...metrics.perClientCounts.values()].filter((count) => count > 1).length;
-  return Math.round((rebookedClients / totalClients) * 100);
-};
-
-const getAverageTicket = (metrics: AppointmentMetricsAccumulator): number => {
-  if (metrics.appointmentCount === 0) {
-    return 0;
-  }
-
-  return metrics.revenue / metrics.appointmentCount;
 };
 
 const isWithinRange = (instant: string, startIso: string, endIso: string): boolean =>
@@ -400,7 +353,7 @@ export const profileOverviewService = {
     const [appointmentsResult, availabilityResult] = await Promise.all([
       supabaseAdmin
         .from("appointments")
-        .select("appointment_date, price, client_id")
+        .select("appointment_date, price, client_id, status")
         .eq("user_id", userId)
         .neq("status", "cancelled")
         .gte("appointment_date", appointmentsQueryStartIso)
@@ -418,8 +371,8 @@ export const profileOverviewService = {
     handleSupabaseError(availabilityResult.error, "Unable to load profile overview availability");
 
     const appointments = (appointmentsResult.data ?? []) as AppointmentRow[];
-    const currentPerformanceMetrics = createAppointmentMetricsAccumulator();
-    const previousPerformanceMetrics = createAppointmentMetricsAccumulator();
+    const currentPerformanceMetrics = createAppointmentMetricTotals();
+    const previousPerformanceMetrics = createAppointmentMetricTotals();
     let nextWeekRevenue = 0;
     let nextMonthRevenue = 0;
     let nextMonthAppointmentCount = 0;
@@ -427,9 +380,9 @@ export const profileOverviewService = {
 
     for (const appointment of appointments) {
       const appointmentDate = appointment.appointment_date;
-      const price = toPriceNumber(appointment.price);
+      const price = getAppointmentValue(appointment);
 
-      if (appointmentDate >= nowIso) {
+      if (appointmentDate >= nowIso && isAppointmentIncludedInMetric(appointment, "upcoming_revenue")) {
         if (appointmentDate < nextWeekEndIso) {
           nextWeekRevenue += price;
         }
@@ -448,16 +401,19 @@ export const profileOverviewService = {
         }
       }
 
-      if (isWithinRange(appointmentDate, previousThirtyDaysStartIso, nowIso)) {
+      if (
+        isWithinRange(appointmentDate, previousThirtyDaysStartIso, nowIso)
+        && isAppointmentIncludedInMetric(appointment, "booked_revenue")
+      ) {
         previousThirtyDaysRevenue += price;
       }
 
       if (isWithinRange(appointmentDate, performanceWindows.currentStartIso, performanceWindows.currentEndIso)) {
-        addAppointmentToMetricsAccumulator(currentPerformanceMetrics, appointment);
+        addAppointmentToMetricTotals(currentPerformanceMetrics, appointment, "booked_revenue");
       }
 
       if (isWithinRange(appointmentDate, performanceWindows.previousStartIso, performanceWindows.currentStartIso)) {
-        addAppointmentToMetricsAccumulator(previousPerformanceMetrics, appointment);
+        addAppointmentToMetricTotals(previousPerformanceMetrics, appointment, "booked_revenue");
       }
     }
 
@@ -470,10 +426,10 @@ export const profileOverviewService = {
     const upcomingRevenueTrend = formatPercentChange(nextMonthRevenue, previousThirtyDaysRevenue);
     const currentPerformanceRevenue = currentPerformanceMetrics.revenue;
     const previousPerformanceRevenue = previousPerformanceMetrics.revenue;
-    const currentPerformanceRebookingRate = getRebookingRate(currentPerformanceMetrics);
-    const previousPerformanceRebookingRate = getRebookingRate(previousPerformanceMetrics);
-    const currentPerformanceAverageTicket = getAverageTicket(currentPerformanceMetrics);
-    const previousPerformanceAverageTicket = getAverageTicket(previousPerformanceMetrics);
+    const currentPerformanceRebookingRate = calculateRebookingRate(currentPerformanceMetrics);
+    const previousPerformanceRebookingRate = calculateRebookingRate(previousPerformanceMetrics);
+    const currentPerformanceAverageTicket = calculateAverageTicket(currentPerformanceMetrics);
+    const previousPerformanceAverageTicket = calculateAverageTicket(previousPerformanceMetrics);
     const bookingSummary = buildBookingRulesSummary(bookingSettings);
     const servicesSummary = buildServicesSummary(services);
     const messagingSummary = buildMessagingSummary();
@@ -483,7 +439,7 @@ export const profileOverviewService = {
     const performanceMetrics = [
       buildMetric(
         "revenue",
-        "Revenue",
+        "Booked Revenue",
         formatCurrency(currentPerformanceRevenue),
         formatPercentChange(currentPerformanceRevenue, previousPerformanceRevenue),
         performanceWindows.comparisonLabel
@@ -491,8 +447,8 @@ export const profileOverviewService = {
       buildMetric(
         "appointments",
         "Appointments",
-        String(currentPerformanceMetrics.appointmentCount),
-        formatNumberChange(currentPerformanceMetrics.appointmentCount, previousPerformanceMetrics.appointmentCount),
+        String(currentPerformanceMetrics.count),
+        formatNumberChange(currentPerformanceMetrics.count, previousPerformanceMetrics.count),
         performanceWindows.comparisonLabel
       ),
       buildMetric(
@@ -552,7 +508,7 @@ export const profileOverviewService = {
       services: services.map((service) => ({
         id: service.id,
         name: service.name,
-        duration: formatMinutes(service.duration),
+        duration: formatMinutes(service.durationMinutes),
         price: formatCurrency(service.price)
       })),
       bookingRules: bookingSummary.items,

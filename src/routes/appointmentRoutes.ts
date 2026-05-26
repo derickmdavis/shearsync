@@ -22,6 +22,7 @@ appointmentRouter.get(
   validate({ params: uuidParamSchema }),
   asyncHandler(appointmentsController.listActivity)
 );
+appointmentRouter.get("/:id", validate({ params: uuidParamSchema }), asyncHandler(appointmentsController.getById));
 appointmentRouter.post("/", validate({ body: createAppointmentSchema }), asyncHandler(appointmentsController.create));
 appointmentRouter.patch(
   "/:id",

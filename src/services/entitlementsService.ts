@@ -12,7 +12,7 @@ import {
 } from "../lib/plans";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
-import { handleSupabaseError, isMissingColumnError } from "./db";
+import { handleSupabaseError } from "./db";
 
 const toWholeNumber = (value: unknown, fallback: number): number => {
   const parsed = Number(value);
@@ -62,19 +62,8 @@ const loadEntitlementUserRow = async (userId: string, fallbackMessage: string): 
     .eq("id", userId)
     .maybeSingle();
 
-  if (!isMissingColumnError(error)) {
-    handleSupabaseError(error, fallbackMessage);
-    return (data as Row | null) ?? null;
-  }
-
-  const fallback = await supabaseAdmin
-    .from("users")
-    .select("id")
-    .eq("id", userId)
-    .maybeSingle();
-
-  handleSupabaseError(fallback.error, fallbackMessage);
-  return (fallback.data as Row | null) ?? null;
+  handleSupabaseError(error, fallbackMessage);
+  return (data as Row | null) ?? null;
 };
 
 export const entitlementsService = {

@@ -54,6 +54,8 @@ Current behavior:
 
 - generates 15-minute slot starts across the full day
 - filters only by overlap with existing appointments
+- returns the suggestions as `conflictFreeSlots`
+- does not respect saved availability, public booking rules, or off days
 - does not use weekly availability windows
 - does not use public booking rules
 

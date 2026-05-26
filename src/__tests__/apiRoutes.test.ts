@@ -17,7 +17,7 @@ process.env.SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET ?? "test-publi
 
 const { env } = require("../config/env") as typeof import("../config/env");
 const { installMockSupabase } = require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
-const { supabaseAnon } = require("../lib/supabase") as typeof import("../lib/supabase");
+const { supabaseAdmin, supabaseAnon } = require("../lib/supabase") as typeof import("../lib/supabase");
 const { appointmentsController } = require("../controllers/appointmentsController") as typeof import("../controllers/appointmentsController");
 const { publicController } = require("../controllers/publicController") as typeof import("../controllers/publicController");
 const { waitlistController } = require("../controllers/waitlistController") as typeof import("../controllers/waitlistController");
@@ -30,6 +30,8 @@ const { clientsController } = require("../controllers/clientsController") as typ
 const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
 const { entitlementsService } = require("../services/entitlementsService") as typeof import("../services/entitlementsService");
 const { clientsService } = require("../services/clientsService") as typeof import("../services/clientsService");
+const { schemaReadinessService } =
+  require("../services/schemaReadinessService") as typeof import("../services/schemaReadinessService");
 const { appointmentEmailEventsService } =
   require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { parseEnv } = require("../config/env") as typeof import("../config/env");
@@ -138,6 +140,7 @@ const getNextLocalDay = (startDate: string, targetDayOfWeek: number): string => 
 interface MockResponse {
   statusCode: number;
   body: unknown;
+  redirectedTo?: string;
 }
 
 const createMockResponse = () => {
@@ -157,6 +160,16 @@ const createMockResponse = () => {
     },
     send(payload?: unknown) {
       response.body = payload ?? null;
+      return this;
+    },
+    redirect(codeOrUrl: number | string, maybeUrl?: string) {
+      if (typeof codeOrUrl === "number") {
+        response.statusCode = codeOrUrl;
+        response.redirectedTo = maybeUrl;
+      } else {
+        response.statusCode = 302;
+        response.redirectedTo = codeOrUrl;
+      }
       return this;
     }
   } as Partial<Response> as Response;
@@ -262,6 +275,62 @@ describe("API handlers", () => {
         }),
       /AUTH_MODE must be production when NODE_ENV is production/
     );
+  });
+
+  it("fails schema readiness when a required column is missing", async () => {
+    const fromMock = mock.method(supabaseAdmin, "from", (table: string) => ({
+      select: () => ({
+        limit: async () => ({
+          data: [],
+          error:
+            table === "clients"
+              ? {
+                  code: "PGRST204",
+                  message: "Could not find the 'total_spend' column of 'clients' in the schema cache",
+                  details: null,
+                  hint: null
+                }
+              : null
+        })
+      })
+    }));
+
+    try {
+      await assert.rejects(
+        () => schemaReadinessService.assertReady(),
+        (error: unknown) => {
+          assert.equal((error as { statusCode?: number }).statusCode, 503);
+          assert.match((error as Error).message, /Database schema is out of date/);
+          assert.equal(
+            ((error as { details?: { missingColumn?: string } }).details)?.missingColumn,
+            "total_spend"
+          );
+          return true;
+        }
+      );
+    } finally {
+      fromMock.mock.restore();
+    }
+  });
+
+  it("redirects public booking slugs to the canonical /book URL", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    const previousClientAppUrl = env.CLIENT_APP_URL;
+    env.WEB_APP_URL = "https://booking.example.com";
+    env.CLIENT_APP_URL = undefined;
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.redirectToBookingPage(request, res),
+        createMockRequest({ params: { slug: "maya-johnson" } })
+      );
+
+      assert.equal(response.statusCode, 302);
+      assert.equal(response.redirectedTo, "https://booking.example.com/book/maya-johnson");
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
+      env.CLIENT_APP_URL = previousClientAppUrl;
+    }
   });
 
   it("resolves a valid JWT auth user", async () => {
@@ -520,11 +589,9 @@ describe("API handlers", () => {
           {
             id: "service-1",
             name: "Cut",
-            duration: 45,
             durationMinutes: 45,
             price: 65,
-            priceAmount: 65,
-            visible: true,
+            isActive: true,
             category: "Cut",
             description: "Precision cut",
             isDefault: true,
@@ -533,11 +600,9 @@ describe("API handlers", () => {
           {
             id: "service-2",
             name: "Color",
-            duration: 90,
             durationMinutes: 90,
             price: 120,
-            priceAmount: 120,
-            visible: true,
+            isActive: true,
             category: "Color",
             description: "Gloss and tone",
             isDefault: false,
@@ -554,7 +619,7 @@ describe("API handlers", () => {
     const req = createMockRequest({
       body: {
         name: "",
-        visible: true
+        isActive: true
       }
     });
 
@@ -562,6 +627,22 @@ describe("API handlers", () => {
 
     assert.equal(response.statusCode, 400);
     assert.equal((response.body as { error: { message: string } }).error.message, "Validation failed");
+  });
+
+  it("rejects legacy service aliases", async () => {
+    const response = await runValidation(
+      createMockRequest({
+        body: {
+          name: "Balayage",
+          duration: 150,
+          priceAmount: 180,
+          visible: true
+        }
+      }),
+      { body: createServiceSchema }
+    );
+
+    assert.equal(response?.statusCode, 400);
   });
 
   it("accepts the expanded create client payload", async () => {
@@ -866,10 +947,10 @@ describe("API handlers", () => {
         body: createServiceSchema.parse({
           name: "Balayage",
           durationMinutes: 150,
-          priceAmount: 180,
+          price: 180,
           category: "Color",
           description: "Optional client-facing notes",
-          visible: true
+          isActive: true
         })
       });
       const createResponse = await runWithErrorHandler((request, res) => servicesController.create(request, res), createReq);
@@ -879,11 +960,9 @@ describe("API handlers", () => {
         data: {
           id: string;
           name: string;
-          duration: number;
           durationMinutes: number;
           price: number;
-          priceAmount: number;
-          visible: boolean;
+          isActive: boolean;
           category?: string;
           description?: string;
           isDefault: boolean;
@@ -898,7 +977,7 @@ describe("API handlers", () => {
         params: { id: created.id },
         body: updateServiceSchema.parse({
           price: 195,
-          visible: false,
+          isActive: false,
           description: "Updated description"
         })
       });
@@ -909,8 +988,7 @@ describe("API handlers", () => {
       assert.deepEqual((updateResponse.body as { data: object }).data, {
         ...created,
         price: 195,
-        priceAmount: 195,
-        visible: false,
+        isActive: false,
         description: "Updated description"
       });
 
@@ -1868,7 +1946,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [
@@ -2108,13 +2186,12 @@ describe("API handlers", () => {
         data: [
           {
             id: "service-2",
-            user_id: userId,
             name: "Consultation",
-            duration_minutes: 30,
+            durationMinutes: 30,
             price: 25,
-            is_active: true,
-            is_default: false,
-            sort_order: 2
+            isActive: true,
+            isDefault: false,
+            sortOrder: 2
           }
         ]
       });
@@ -2134,23 +2211,21 @@ describe("API handlers", () => {
         data: [
           {
             id: ownedServiceId,
-            user_id: userId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95,
-            is_active: true,
-            is_default: false,
-            sort_order: 1
+            isActive: true,
+            isDefault: false,
+            sortOrder: 1
           },
           {
             id: "service-2",
-            user_id: userId,
             name: "Consultation",
-            duration_minutes: 30,
+            durationMinutes: 30,
             price: 25,
-            is_active: true,
-            is_default: false,
-            sort_order: 2
+            isActive: true,
+            isDefault: false,
+            sortOrder: 2
           }
         ]
       });
@@ -2315,6 +2390,149 @@ describe("API handlers", () => {
     }
   });
 
+  it("returns an owned appointment detail by appointment ID", async () => {
+    const appointmentId = "66666666-6666-4666-8666-666666666666";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const appointmentDate = "2026-05-25T18:00:00.000Z";
+    const supabase = installMockSupabase({
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Avery",
+          last_name: "Brooks"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentDate,
+          service_name: "Balayage",
+          duration_minutes: 60,
+          price: 180,
+          notes: "Appointment-specific notes",
+          status: "scheduled",
+          booking_source: "internal",
+          created_at: "2026-05-20T15:00:00.000Z",
+          updated_at: "2026-05-24T19:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => appointmentsController.getById(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: appointmentId }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        data: {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentDate,
+          service_name: "Balayage",
+          duration_minutes: 60,
+          price: 180,
+          notes: "Appointment-specific notes",
+          status: "scheduled",
+          booking_source: "internal",
+          created_at: "2026-05-20T15:00:00.000Z",
+          updated_at: "2026-05-24T19:00:00.000Z",
+          client_name: "Avery Brooks",
+          start_time: appointmentDate,
+          end_time: "2026-05-25T19:00:00.000Z",
+          services: ["Balayage"],
+          revenue: 180
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not return another user's appointment detail", async () => {
+    const appointmentId = "66666666-6666-4666-8666-666666666666";
+    const supabase = installMockSupabase({
+      clients: [],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: otherUserId,
+          client_id: "77777777-7777-4777-8777-777777777777",
+          appointment_date: "2026-05-25T18:00:00.000Z",
+          service_name: "Balayage",
+          duration_minutes: 60,
+          status: "scheduled"
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => appointmentsController.getById(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: appointmentId }
+        })
+      );
+
+      assert.equal(response.statusCode, 404);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Appointment not found",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns 404 for a missing appointment detail", async () => {
+    const appointmentId = "66666666-6666-4666-8666-666666666666";
+    const supabase = installMockSupabase({
+      clients: [],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => appointmentsController.getById(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: appointmentId }
+        })
+      );
+
+      assert.equal(response.statusCode, 404);
+      assert.deepEqual(response.body, {
+        error: {
+          message: "Appointment not found",
+          details: undefined
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects invalid appointment detail IDs", async () => {
+    const response = await runValidation(
+      createMockRequest({ params: { id: "not-an-id" } }),
+      { params: uuidParamSchema }
+    );
+
+    assert.equal(response?.statusCode, 400);
+    assert.equal((response?.body as { error: { message: string } }).error.message, "Validation failed");
+  });
+
   it("blocks overlapping appointments instead of only exact timestamp collisions", async () => {
     const appointmentDate = "2026-05-05T10:00:00.000Z";
     const overlappingDate = "2026-05-05T10:30:00.000Z";
@@ -2401,7 +2619,11 @@ describe("API handlers", () => {
       const payload = response.body as {
         data: {
           date: string;
-          availableSlots: Array<{ start: string; end: string; label: string }>;
+          mode: "conflict_free";
+          respectsAvailability: false;
+          respectsBookingRules: false;
+          respectsOffDays: false;
+          conflictFreeSlots: Array<{ start: string; end: string; label: string }>;
           existingAppointments: Array<{ start: string; end: string }>;
           blockedTimes: unknown[];
         };
@@ -2409,6 +2631,10 @@ describe("API handlers", () => {
 
       assert.equal(response.statusCode, 200);
       assert.equal(payload.data.date, date);
+      assert.equal(payload.data.mode, "conflict_free");
+      assert.equal(payload.data.respectsAvailability, false);
+      assert.equal(payload.data.respectsBookingRules, false);
+      assert.equal(payload.data.respectsOffDays, false);
       assert.deepEqual(payload.data.existingAppointments, [
         {
           start: "2026-05-05T10:00:00+00:00",
@@ -2416,10 +2642,10 @@ describe("API handlers", () => {
         }
       ]);
       assert.deepEqual(payload.data.blockedTimes, []);
-      assert.equal(payload.data.availableSlots.some((slot) => slot.start === "2026-05-05T09:00:00+00:00"), true);
-      assert.equal(payload.data.availableSlots.some((slot) => slot.start === "2026-05-05T10:00:00+00:00"), false);
-      assert.equal(payload.data.availableSlots.some((slot) => slot.start === "2026-05-05T10:30:00+00:00"), false);
-      assert.equal(payload.data.availableSlots.some((slot) => slot.start === "2026-05-05T11:00:00+00:00"), true);
+      assert.equal(payload.data.conflictFreeSlots.some((slot) => slot.start === "2026-05-05T09:00:00+00:00"), true);
+      assert.equal(payload.data.conflictFreeSlots.some((slot) => slot.start === "2026-05-05T10:00:00+00:00"), false);
+      assert.equal(payload.data.conflictFreeSlots.some((slot) => slot.start === "2026-05-05T10:30:00+00:00"), false);
+      assert.equal(payload.data.conflictFreeSlots.some((slot) => slot.start === "2026-05-05T11:00:00+00:00"), true);
     } finally {
       supabase.restore();
     }
@@ -2810,7 +3036,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [
@@ -2991,7 +3217,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [],
@@ -3021,7 +3247,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [
@@ -3220,7 +3446,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [
@@ -3259,7 +3485,7 @@ describe("API handlers", () => {
           service: {
             id: ownedServiceId,
             name: "Silk Press",
-            duration_minutes: 60,
+            durationMinutes: 60,
             price: 95
           },
           slots: [

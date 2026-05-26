@@ -1,26 +1,13 @@
-import type { PostgrestError } from "@supabase/supabase-js";
 import { ApiError, requireFound } from "../lib/errors";
 import { normalizePhone } from "../lib/phone";
 import { supabaseAdmin } from "../lib/supabase";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import type { Row, RowList } from "./db";
-import { getMissingColumnName, handleSupabaseError, isMissingColumnError, normalizeEmptyString } from "./db";
+import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
 
 const CLIENT_LIST_SELECT =
   "id, user_id, first_name, last_name, phone, email, birthday, notes, created_at, updated_at";
-
-const CLIENT_COMPATIBILITY_COLUMNS = new Set([
-  "preferred_name",
-  "phone_normalized",
-  "instagram",
-  "preferred_contact_method",
-  "tags",
-  "source",
-  "reminder_consent",
-  "total_spend",
-  "last_visit_at"
-]);
 
 const CLIENT_OPTIONAL_DEFAULTS: Row = {
   preferred_name: null,
@@ -142,48 +129,6 @@ const enrichClients = (clients: RowList, appointments: RowList, timeZone: string
   });
 };
 
-const removeUnsupportedClientColumn = (payload: Row, column: string): Row | null => {
-  if (!CLIENT_COMPATIBILITY_COLUMNS.has(column) || !(column in payload)) {
-    return null;
-  }
-
-  const nextPayload = { ...payload };
-  delete nextPayload[column];
-  return nextPayload;
-};
-
-const executeClientWriteWithCompatibility = async <T>(
-  payload: Row,
-  execute: (nextPayload: Row) => PromiseLike<{ data: T; error: PostgrestError | null }>,
-  fallbackMessage: string
-): Promise<T> => {
-  let nextPayload = payload;
-  const removedColumns = new Set<string>();
-
-  while (true) {
-    const result = await execute(nextPayload);
-
-    if (!result.error) {
-      return result.data;
-    }
-
-    const missingColumn = getMissingColumnName(result.error);
-    if (!missingColumn || removedColumns.has(missingColumn)) {
-      handleSupabaseError(result.error, fallbackMessage);
-      throw new Error("Unreachable");
-    }
-
-    const strippedPayload = removeUnsupportedClientColumn(nextPayload, missingColumn);
-    if (!strippedPayload) {
-      handleSupabaseError(result.error, fallbackMessage);
-      throw new Error("Unreachable");
-    }
-
-    removedColumns.add(missingColumn);
-    nextPayload = strippedPayload;
-  }
-};
-
 export const clientsService = {
   async list(userId: string): Promise<RowList> {
     const { data: clients, error } = await supabaseAdmin
@@ -217,16 +162,13 @@ export const clientsService = {
   },
 
   async create(userId: string, payload: Row): Promise<Row> {
-    const data = await executeClientWriteWithCompatibility<Row | null>(
-      { ...sanitizeClientPayload(payload), user_id: userId },
-      (nextPayload) =>
-        supabaseAdmin
-          .from("clients")
-          .insert(nextPayload)
-          .select("*")
-          .single(),
-      "Unable to create client"
-    );
+    const { data, error } = await supabaseAdmin
+      .from("clients")
+      .insert({ ...sanitizeClientPayload(payload), user_id: userId })
+      .select("*")
+      .single();
+
+    handleSupabaseError(error, "Unable to create client");
     const createdClient = requireFound(data, "Client was not created");
     return this.getById(userId, createdClient.id as string);
   },
@@ -258,18 +200,15 @@ export const clientsService = {
   },
 
   async update(userId: string, clientId: string, updates: Row): Promise<Row> {
-    const data = await executeClientWriteWithCompatibility<Row | null>(
-      sanitizeClientPayload(updates),
-      (nextPayload) =>
-        supabaseAdmin
-          .from("clients")
-          .update(nextPayload)
-          .eq("id", clientId)
-          .eq("user_id", userId)
-          .select("*")
-          .maybeSingle(),
-      "Unable to update client"
-    );
+    const { data, error } = await supabaseAdmin
+      .from("clients")
+      .update(sanitizeClientPayload(updates))
+      .eq("id", clientId)
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+
+    handleSupabaseError(error, "Unable to update client");
     requireFound(data, "Client not found");
     return this.getById(userId, clientId);
   },
@@ -296,11 +235,9 @@ export const clientsService = {
         .eq("user_id", userId)
         .eq("phone_normalized", phoneNormalized);
 
-      if (!isMissingColumnError(error, "phone_normalized")) {
-        handleSupabaseError(error, "Unable to match booking client");
-      }
+      handleSupabaseError(error, "Unable to match booking client");
 
-      if (!error && (data ?? []).length > 0) {
+      if ((data ?? []).length > 0) {
         return data ?? [];
       }
     }

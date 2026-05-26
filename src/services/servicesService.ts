@@ -23,9 +23,9 @@ interface ServiceRow extends Row {
 
 interface ServiceCatalogCreateInput {
   name: string;
-  duration: number;
+  durationMinutes: number;
   price: number;
-  visible: boolean;
+  isActive: boolean;
   category?: string;
   description?: string;
   isDefault?: boolean;
@@ -40,13 +40,11 @@ const SERVICE_SELECT =
 const toServiceCatalogItem = (row: ServiceRow): ServiceCatalogItem => ({
   id: row.id,
   name: row.name,
-  duration: row.duration_minutes,
   durationMinutes: row.duration_minutes,
   price: Number(row.price),
-  priceAmount: Number(row.price),
-  visible: row.is_active,
-  category: row.category ?? undefined,
-  description: row.description ?? undefined,
+  isActive: row.is_active,
+  ...(row.category ? { category: row.category } : {}),
+  ...(row.description ? { description: row.description } : {}),
   isDefault: row.is_default,
   sortOrder: row.sort_order
 });
@@ -71,13 +69,13 @@ export const servicesService = {
     options?: {
       bookingContextToken?: string;
     }
-  ): Promise<RowList> {
+  ): Promise<ServiceCatalogItem[]> {
     const stylist = await stylistsService.getBySlug(slug);
     stylistsService.assertPublicBookingEnabled(stylist);
 
     const { data, error } = await supabaseAdmin
       .from("services")
-      .select("*")
+      .select(SERVICE_SELECT)
       .eq("user_id", stylist.user_id)
       .eq("is_active", true)
       .order("sort_order", { ascending: true })
@@ -85,19 +83,21 @@ export const servicesService = {
       .order("name", { ascending: true });
 
     handleSupabaseError(error, "Unable to load services");
-    const services = data ?? [];
+    const services = (data ?? []) as ServiceRow[];
     const bookingContext = resolvePublicBookingContextToken(options?.bookingContextToken, slug);
 
     if (bookingContext?.isExistingClient) {
-      return services;
+      return services.map((service) => toServiceCatalogItem(service));
     }
 
     const bookingRules = await bookingRulesService.getByUserId(stylist.user_id as string);
     if (!bookingRules.restrictServicesForNewClients || bookingRules.restrictedServiceIds.length === 0) {
-      return services;
+      return services.map((service) => toServiceCatalogItem(service));
     }
 
-    return services.filter((service) => !bookingRules.restrictedServiceIds.includes(service.id as string));
+    return services
+      .filter((service) => !bookingRules.restrictedServiceIds.includes(service.id))
+      .map((service) => toServiceCatalogItem(service));
   },
 
   async getActiveForStylist(userId: string, serviceId: string): Promise<Row | null> {
@@ -150,9 +150,9 @@ export const servicesService = {
         name: payload.name,
         description: payload.description,
         category: payload.category,
-        duration_minutes: payload.duration,
+        duration_minutes: payload.durationMinutes,
         price: payload.price,
-        is_active: payload.visible,
+        is_active: payload.isActive,
         is_default: payload.isDefault ?? false,
         sort_order: sortOrder
       })
@@ -167,9 +167,9 @@ export const servicesService = {
     const updates: Row = {};
 
     if (payload.name !== undefined) updates.name = payload.name;
-    if (payload.duration !== undefined) updates.duration_minutes = payload.duration;
+    if (payload.durationMinutes !== undefined) updates.duration_minutes = payload.durationMinutes;
     if (payload.price !== undefined) updates.price = payload.price;
-    if (payload.visible !== undefined) updates.is_active = payload.visible;
+    if (payload.isActive !== undefined) updates.is_active = payload.isActive;
     if (payload.category !== undefined) updates.category = payload.category;
     if (payload.description !== undefined) updates.description = payload.description;
     if (payload.isDefault !== undefined) updates.is_default = payload.isDefault;
