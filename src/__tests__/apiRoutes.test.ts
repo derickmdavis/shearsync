@@ -190,6 +190,14 @@ const createMockRequest = (overrides: Partial<Request> = {}): Request =>
     ...overrides
   }) as Request;
 
+type ClientsListTestResponse = {
+  data: Array<{ id: string; last_service?: string | null; next_appointment_at?: string | null }>;
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  nextCursor: string | null;
+};
+
 const withBookingContextTokenPlaceholder = <T extends { data: { bookingContextToken: string } }>(payload: T): T => {
   assert.equal(typeof payload.data.bookingContextToken, "string");
   assert.ok(payload.data.bookingContextToken.length > 20);
@@ -261,6 +269,137 @@ describe("API handlers", () => {
 
     assert.equal(parsed.AUTH_MODE, "production");
     assert.equal(parsed.ENABLE_DEV_AUTH_FALLBACK, false);
+  });
+
+  it("paginates and sorts client list results before enriching appointment metadata", async () => {
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "America/Denver" }],
+      clients: [
+        {
+          id: "client-low",
+          user_id: userId,
+          first_name: "Maya",
+          last_name: "Lopez",
+          total_spend: 75,
+          updated_at: "2026-04-24T12:00:00.000Z"
+        },
+        {
+          id: "client-high",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          total_spend: 350,
+          updated_at: "2026-04-25T12:00:00.000Z"
+        },
+        {
+          id: "client-mid",
+          user_id: userId,
+          first_name: "Noah",
+          last_name: "Kim",
+          total_spend: 150,
+          updated_at: "2026-04-26T12:00:00.000Z"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-page-client",
+          user_id: userId,
+          client_id: "client-mid",
+          appointment_date: "2026-06-01T16:00:00.000Z",
+          service_name: "Haircut",
+          duration_minutes: 45,
+          status: "scheduled"
+        },
+        {
+          id: "appointment-non-page-client",
+          user_id: userId,
+          client_id: "client-high",
+          appointment_date: "2026-06-02T16:00:00.000Z",
+          service_name: "Color",
+          duration_minutes: 90,
+          status: "scheduled"
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: { page: 2, pageSize: 1, sort: "spend", direction: "desc", filter: "all" } as unknown as Request["query"]
+      });
+      const response = await runWithErrorHandler((request, res) => clientsController.list(request, res), req);
+      const body = response.body as ClientsListTestResponse;
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(body.data.map((client) => client.id), ["client-mid"]);
+      assert.equal(body.data[0]?.last_service, null);
+      assert.equal(body.data[0]?.next_appointment_at, "2026-06-01T16:00:00.000Z");
+      assert.equal(body.page, 2);
+      assert.equal(body.pageSize, 1);
+      assert.equal(body.totalCount, 3);
+      assert.equal(body.nextCursor, "3");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("searches client list results within the authenticated stylist and supports vip filtering", async () => {
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "America/Denver" }],
+      clients: [
+        {
+          id: "client-owned-match",
+          user_id: userId,
+          first_name: "Maria",
+          last_name: "Santos",
+          email: "maria@example.com",
+          tags: ["VIP"],
+          updated_at: "2026-04-25T12:00:00.000Z"
+        },
+        {
+          id: "client-owned-non-vip",
+          user_id: userId,
+          first_name: "Maria",
+          last_name: "Lopez",
+          email: "lopez@example.com",
+          tags: ["Color"],
+          updated_at: "2026-04-26T12:00:00.000Z"
+        },
+        {
+          id: "client-foreign-match",
+          user_id: otherUserId,
+          first_name: "Maria",
+          last_name: "Foreign",
+          email: "foreign@example.com",
+          tags: ["VIP"],
+          updated_at: "2026-04-27T12:00:00.000Z"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: {
+          search: "maria",
+          page: 1,
+          pageSize: 25,
+          sort: "name",
+          direction: "asc",
+          filter: "vip"
+        } as unknown as Request["query"]
+      });
+      const response = await runWithErrorHandler((request, res) => clientsController.list(request, res), req);
+      const body = response.body as ClientsListTestResponse;
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(body.data.map((client) => client.id), ["client-owned-match"]);
+      assert.equal(body.totalCount, 1);
+      assert.equal(body.nextCursor, null);
+    } finally {
+      supabase.restore();
+    }
   });
 
   it("rejects production configuration when AUTH_MODE is dev", () => {
@@ -816,7 +955,11 @@ describe("API handlers", () => {
             needs_rebook: true,
             last_service: "Haircut"
           }
-        ]
+        ],
+        page: 1,
+        pageSize: 25,
+        totalCount: 2,
+        nextCursor: null
       });
     } finally {
       supabase.restore();

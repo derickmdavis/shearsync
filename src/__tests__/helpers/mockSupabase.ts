@@ -10,7 +10,9 @@ type Filter =
   | { type: "neq"; column: string; value: unknown }
   | { type: "in"; column: string; values: unknown[] }
   | { type: "gte"; column: string; value: unknown }
-  | { type: "lt"; column: string; value: unknown };
+  | { type: "lt"; column: string; value: unknown }
+  | { type: "or"; conditions: OrFilter[] };
+type OrFilter = { column: string; operator: "ilike" | "cs"; value: string };
 
 interface SelectOptions {
   count?: "exact";
@@ -27,6 +29,8 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   private filters: Filter[] = [];
   private sorts: SortDirection[] = [];
   private limitCount?: number;
+  private rangeStart?: number;
+  private rangeEnd?: number;
   private singleMode: "many" | "single" | "maybeSingle" = "many";
   private pendingInsert: TableRow[] = [];
   private pendingUpdate: TableRow | null = null;
@@ -84,6 +88,29 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
     return this;
   }
 
+  or(filters: string) {
+    const conditions = filters
+      .split(",")
+      .map((filter) => filter.trim())
+      .map((filter): OrFilter | null => {
+        const match = /^([^.]*)\.(ilike|cs)\.(.*)$/.exec(filter);
+
+        if (!match) {
+          return null;
+        }
+
+        const [, column, operator, rawValue] = match;
+        const value =
+          operator === "cs" ? rawValue.replace(/^\{"/, "").replace(/"\}$/, "").replace(/^\{/, "").replace(/\}$/, "") : rawValue;
+
+        return { column, operator: operator as OrFilter["operator"], value };
+      })
+      .filter((filter): filter is OrFilter => filter !== null);
+
+    this.filters.push({ type: "or", conditions });
+    return this;
+  }
+
   order(column: string, options?: { ascending?: boolean }) {
     this.sorts.push({ column, ascending: options?.ascending !== false });
     return this;
@@ -91,6 +118,12 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
 
   limit(count: number) {
     this.limitCount = count;
+    return this;
+  }
+
+  range(start: number, end: number) {
+    this.rangeStart = start;
+    this.rangeEnd = end;
     return this;
   }
 
@@ -135,22 +168,37 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   private applyFilters(rows: TableRow[]): TableRow[] {
     return rows.filter((row) =>
       this.filters.every((filter) => {
-        const value = row[filter.column];
-
         switch (filter.type) {
           case "eq":
-            return value === filter.value;
+            return row[filter.column] === filter.value;
           case "neq":
-            return value !== filter.value;
+            return row[filter.column] !== filter.value;
           case "in":
-            return filter.values.includes(value);
+            return filter.values.includes(row[filter.column]);
           case "gte":
-            return String(value ?? "") >= String(filter.value ?? "");
+            return String(row[filter.column] ?? "") >= String(filter.value ?? "");
           case "lt":
-            return String(value ?? "") < String(filter.value ?? "");
+            return String(row[filter.column] ?? "") < String(filter.value ?? "");
+          case "or":
+            return filter.conditions.some((condition) => this.matchesOrFilter(row, condition));
         }
       })
     );
+  }
+
+  private matchesOrFilter(row: TableRow, filter: OrFilter): boolean {
+    const value = row[filter.column];
+
+    if (filter.operator === "ilike") {
+      const pattern = filter.value.replace(/^%/, "").replace(/%$/, "").toLowerCase();
+      return String(value ?? "").toLowerCase().includes(pattern);
+    }
+
+    if (!Array.isArray(value)) {
+      return false;
+    }
+
+    return value.some((item) => String(item) === filter.value);
   }
 
   private applySorts(rows: TableRow[]): TableRow[] {
@@ -190,7 +238,11 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
 
   private finalizeRows(rows: TableRow[]) {
     const sortedRows = this.applySorts(rows);
-    const limitedRows = this.limitCount !== undefined ? sortedRows.slice(0, this.limitCount) : sortedRows;
+    const rangedRows =
+      this.rangeStart !== undefined && this.rangeEnd !== undefined
+        ? sortedRows.slice(this.rangeStart, this.rangeEnd + 1)
+        : sortedRows;
+    const limitedRows = this.limitCount !== undefined ? rangedRows.slice(0, this.limitCount) : rangedRows;
 
     if (this.singleMode === "single") {
       return {
@@ -210,13 +262,14 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
       return {
         data: null,
         error: null,
-        count: limitedRows.length
+        count: sortedRows.length
       };
     }
 
     return {
       data: limitedRows.map((row) => cloneRow(row)),
-      error: null
+      error: null,
+      count: this.selectOptions.count === "exact" ? sortedRows.length : undefined
     };
   }
 

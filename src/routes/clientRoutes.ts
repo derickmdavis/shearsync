@@ -4,12 +4,12 @@ import { clientsController } from "../controllers/clientsController";
 import { photosController } from "../controllers/photosController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
-import { createClientSchema, updateClientSchema } from "../validators/clientValidators";
+import { createClientSchema, listClientsQuerySchema, updateClientSchema } from "../validators/clientValidators";
 import { uuidParamSchema } from "../validators/common";
 
 export const clientRouter = Router();
 
-clientRouter.get("/", asyncHandler(clientsController.list));
+clientRouter.get("/", validate({ query: listClientsQuerySchema }), asyncHandler(clientsController.list));
 clientRouter.post("/", validate({ body: createClientSchema }), asyncHandler(clientsController.create));
 clientRouter.get("/:id", validate({ params: uuidParamSchema }), asyncHandler(clientsController.getById));
 clientRouter.patch(
@@ -24,4 +24,3 @@ clientRouter.get(
   asyncHandler(appointmentsController.listByClient)
 );
 clientRouter.get("/:id/photos", validate({ params: uuidParamSchema }), asyncHandler(photosController.listByClient));
-

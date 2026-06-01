@@ -5,8 +5,8 @@ import { clientsService } from "../services/clientsService";
 export const clientsController = {
   async list(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
-    const clients = await clientsService.list(userId);
-    res.json({ data: clients });
+    const result = await clientsService.list(userId, req.query);
+    res.json(result);
   },
 
   async create(req: Request, res: Response) {

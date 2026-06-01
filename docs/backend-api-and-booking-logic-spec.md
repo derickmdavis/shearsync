@@ -1034,17 +1034,26 @@ Important waitlist distinction:
 - Auth: required
 - Controller: `clientsController.list`
 - Purpose: list stylist-owned clients with summary metadata
-- Validator: none
+- Validator: `listClientsQuerySchema`
 - Main service: `clientsService.list`
-- Response: `{ data: Row[] }`
+- Query:
+  - `search`: optional text search across name, preferred name, email, phone, normalized phone, Instagram, notes, and exact tag matches
+  - `page`: 1-based page number, default `1`
+  - `pageSize`: default `25`, max `100`
+  - `sort`: `updated`, `updated_at`, `name`, `spend`, `total_spend`, `last_visit`, `last_visit_at`
+  - `direction`: `asc` or `desc`, default `desc`
+  - `filter`: `all`, `active`, or `vip`
+- Response: `{ data: Row[], page: number, pageSize: number, totalCount: number, nextCursor: string | null }`
 - Additional derived fields per row:
   - `next_appointment_at`
   - `has_future_appointment`
   - `needs_rebook`
   - `last_service`
 - Important implementation detail:
-  - The code query explicitly selects a narrow field list, then fills missing optional fields with defaults in memory.
-  - Needs verification: mock tests do not enforce column projection, so live Supabase responses may be narrower than test snapshots suggest.
+  - Pagination, search, supported filters, and sort are applied to `clients` before appointment summary enrichment.
+  - Appointment summary enrichment only loads appointment rows for the returned page of clients.
+  - `active` currently maps to all clients because there is no client archive/status column.
+  - `needs_rebook`, `needs_follow_up`, and `has_future_appointment` are not accepted list filters yet; they need SQL-backed summary state to paginate correctly.
 
 ### 7.8 `POST /api/clients`
 
@@ -2313,11 +2322,13 @@ Optional fields can generally be cleared with `null` where schema allows it.
 
 ### Search/sort/filter behavior
 
-There is no general text search or filtering API for clients in this repo.
-
 Current list behavior:
 
-- order by `updated_at desc`
+- scoped by authenticated stylist `user_id`
+- supports backend text search
+- supports page/pageSize pagination
+- supports `updated_at`, `name`, `total_spend`, and `last_visit_at` sorting
+- supports `all`, `active`, and `vip` filters
 
 ### Client detail aggregation
 
