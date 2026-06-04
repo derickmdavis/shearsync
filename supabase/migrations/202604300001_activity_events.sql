@@ -26,8 +26,8 @@ create index if not exists reminders_user_id_sent_at_idx
 
 create table if not exists public.activity_events (
   id uuid primary key default gen_random_uuid(),
-  stylist_id uuid not null references public.users(id) on delete cascade,
-  client_id uuid references public.clients(id) on delete set null,
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id),
   appointment_id uuid references public.appointments(id) on delete set null,
   activity_type text not null,
   title text not null,
@@ -40,8 +40,8 @@ create table if not exists public.activity_events (
     check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent'))
 );
 
-create index if not exists activity_events_stylist_occurred_at_idx
-  on public.activity_events(stylist_id, occurred_at desc, id desc);
+create index if not exists activity_events_user_occurred_at_idx
+  on public.activity_events(user_id, occurred_at desc, id desc);
 
 create index if not exists activity_events_appointment_id_idx
   on public.activity_events(appointment_id);
@@ -52,8 +52,8 @@ create index if not exists activity_events_client_id_idx
 create index if not exists activity_events_activity_type_idx
   on public.activity_events(activity_type);
 
-create unique index if not exists activity_events_stylist_dedupe_key_idx
-  on public.activity_events(stylist_id, dedupe_key);
+create unique index if not exists activity_events_user_dedupe_key_idx
+  on public.activity_events(user_id, dedupe_key);
 
 alter table public.activity_events enable row level security;
 
@@ -69,7 +69,7 @@ begin
     create policy activity_events_select_own
       on public.activity_events
       for select
-      using (auth.uid() = stylist_id);
+      using (auth.uid() = user_id);
   end if;
 end
 $$;

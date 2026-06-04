@@ -9,12 +9,15 @@ const REQUIRED_TABLE_COLUMNS = {
   users: [
     "id",
     "email",
+    "location_label",
+    "avatar_image_id",
     "timezone",
     "plan_tier",
     "plan_status",
     "sms_monthly_limit",
     "sms_used_this_month",
     "waitlist_enabled",
+    "plan_started_at",
     "plan_updated_at"
   ],
   clients: [
@@ -34,7 +37,9 @@ const REQUIRED_TABLE_COLUMNS = {
     "source",
     "reminder_consent",
     "total_spend",
-    "last_visit_at"
+    "last_visit_at",
+    "deleted_at",
+    "deleted_reason"
   ]
 } as const;
 

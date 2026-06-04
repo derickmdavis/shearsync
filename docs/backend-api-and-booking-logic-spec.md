@@ -280,7 +280,7 @@ Failure behavior:
 Private services enforce ownership through query filters such as:
 
 - `.eq("user_id", userId)`
-- `.eq("stylist_id", userId)`
+- `.eq("user_id", userId)`
 
 Examples:
 
@@ -288,7 +288,7 @@ Examples:
 - appointments: `id + user_id`
 - reminders: `id + user_id`
 - photos: `user_id + client_id`
-- activity events: `stylist_id`
+- activity events: `user_id`
 
 `clientsService.assertOwned()` converts a cross-stylist or missing client lookup into:
 
@@ -469,19 +469,20 @@ Fields actively used by code:
 - `full_name`
 - `phone_number`
 - `business_name`
+- `location_label`
+- `avatar_image_id`
 - `timezone`
-- `location_label` (referenced by code; not guaranteed in all schema snapshots)
-- `avatar_image_id` (referenced by code; not guaranteed in all schema snapshots)
-- `plan_tier` (referenced by code; not in checked-in base schema)
-- `plan_status` (referenced by code; not in checked-in base schema)
-- `sms_monthly_limit` (referenced by code; not in checked-in base schema)
-- `sms_used_this_month` (referenced by code; not in checked-in base schema)
+- `plan_tier`
+- `plan_status`
+- `sms_monthly_limit`
+- `sms_used_this_month`
+- `plan_started_at` (present in the Supabase production column export; not currently read by code)
 - `waitlist_enabled`
-- `plan_updated_at` (written by code; not in checked-in base schema)
+- `plan_updated_at`
 
 Relationships:
 
-- PK referenced by most other tables through `user_id` or `stylist_id`.
+- PK referenced by most other tables through `user_id`.
 - `id` references `auth.users(id)` in `schema.sql`.
 
 Ownership rules:
@@ -492,6 +493,8 @@ Important notes:
 
 - `usersService.ensureAuthUser()` lazily creates the row with `id` and `email`.
 - `resolveBusinessTimeZone()` falls back to `"UTC"` if timezone is missing or invalid.
+- `timezone` defaults to `'America/Denver'::text` in the aligned schema.
+- `location_label` and `avatar_image_id` are optional profile/settings fields.
 - `waitlist_enabled` is the stylist-controlled waitlist on/off setting. It defaults to `true` for backwards compatibility, but the public waitlist is only effectively enabled when the plan allows waitlist, `plan_status != "cancelled"`, and `waitlist_enabled = true`.
 
 ### `public.stylists`
@@ -510,6 +513,9 @@ Fields actively used:
 - `cover_photo_url`
 - `instagram`
 - `booking_enabled`
+- `intelligent_scheduling_enabled`
+- `created_at`
+- `updated_at`
 
 Relationships:
 
@@ -550,6 +556,8 @@ Fields actively used:
 - `reminder_consent`
 - `total_spend`
 - `last_visit_at`
+- `deleted_at`
+- `deleted_reason`
 - `created_at`
 - `updated_at`
 
@@ -594,6 +602,7 @@ Fields actively used:
 - `notes`
 - `status`
 - `booking_source`
+- `appointment_time_range` (present in the Supabase production column export; not read directly by API code)
 - `created_at`
 - `updated_at`
 
@@ -625,6 +634,8 @@ Important constraints:
   - `appointments_user_id_appointment_date_active_idx`
   - unique on `(user_id, appointment_date)` where `status <> 'cancelled'`
 - code also checks duration overlaps in application logic, not only exact start-time uniqueness
+- `status` defaults to `scheduled`.
+- `booking_source` is non-null and defaults to `internal`.
 
 Important modeling note:
 
@@ -652,7 +663,9 @@ Fields actively used:
 - `is_active`
 - `is_default`
 - `sort_order`
+- `visible`
 - `created_at`
+- `updated_at`
 
 Relationships:
 
@@ -758,6 +771,8 @@ Purpose:
 
 Fields actively used:
 
+- `id`
+- `user_id`
 - `lead_time_hours`
 - `same_day_booking_allowed`
 - `same_day_booking_cutoff`
@@ -775,6 +790,8 @@ Fields actively used:
 - `new_client_booking_window_days`
 - `restrict_services_for_new_clients`
 - `restricted_service_ids`
+- `created_at`
+- `updated_at`
 
 Relationships:
 
@@ -839,6 +856,7 @@ Reminder type values:
 
 Important note:
 
+- `client_id` is required and `status` defaults to `open`.
 - the backend records reminder activity when reminder status becomes `sent`
 - it does not actually send SMS or email
 
@@ -884,7 +902,7 @@ Purpose:
 Fields actively used:
 
 - `id`
-- `stylist_id`
+- `user_id`
 - `client_id`
 - `appointment_id`
 - `activity_type`
@@ -897,7 +915,7 @@ Fields actively used:
 
 Relationships:
 
-- `stylist_id -> users.id`
+- `user_id -> users.id`
 - `client_id -> clients.id`
 - `appointment_id -> appointments.id`
 
@@ -907,11 +925,34 @@ Activity types:
 - `appointment_cancelled`
 - `appointment_rescheduled`
 - `reminder_sent`
+- `waitlist_joined`
 
 Important constraints:
 
-- unique index on `(stylist_id, dedupe_key)`
+- unique index on `(user_id, dedupe_key)`
 - code pre-checks dedupe, then insert races are handled by the unique index
+- The production schema was renamed from the older `stylist_id` column to `user_id` because the value references `public.users.id`, not `public.stylists.id`.
+- `client_id` is required for client timeline integrity. `appointment_id` remains nullable for activity types that are not tied to an appointment.
+
+### `public.plan_usage_events`
+
+Purpose:
+
+- Production table intended for plan/usage metering events.
+- `entitlementsService.recordUsageEvent()` is currently a no-op, so this table exists in production but is not yet actively written by this backend.
+
+Fields in the supplied Supabase production column export:
+
+- `id`
+- `user_id`
+- `event_type`
+- `quantity`
+- `metadata`
+- `created_at`
+
+Relationships:
+
+- `user_id -> users.id`
 
 ---
 
@@ -2637,7 +2678,7 @@ Examples:
 
 `createIfMissing()`:
 
-1. checks for existing `(stylist_id, dedupe_key)`
+1. checks for existing `(user_id, dedupe_key)`
 2. returns early if found
 3. tries insert
 4. ignores unique violation race
@@ -2958,7 +2999,7 @@ These are visible in the current code and should be treated as implementation re
 
 ### Schema/code drift
 
-- Code references `users.location_label`, `avatar_image_id`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, and `plan_updated_at`.
+- The aligned schema includes `users.location_label`, `avatar_image_id`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, and `waitlist_enabled`.
 - These columns are not present in the checked-in base `supabase/schema.sql`.
 - They may exist in the live database but are not fully represented in the baseline schema file.
 

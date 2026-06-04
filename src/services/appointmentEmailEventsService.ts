@@ -242,7 +242,7 @@ export const appointmentEmailEventsService = {
     const { data, error } = await supabaseAdmin
       .from("appointment_email_events")
       .insert({
-        stylist_id: stylistId,
+        user_id: stylistId,
         client_id: clientId,
         appointment_id: appointmentId,
         email_type: emailType,

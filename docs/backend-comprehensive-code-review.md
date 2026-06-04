@@ -6,7 +6,7 @@ Generated from the authored repository files in `src/`, `supabase/`, `docs/`, ro
 
 The backend is a Node 20, TypeScript, Express API using Supabase Auth/Postgres/Storage-facing metadata, Zod validation, and a service-layer pattern. Routes are thin; controllers extract auth/user/params; services own database reads/writes, derived fields, appointment conflict checks, public booking policy, waitlist gating, activity feed events, and appointment email queueing.
 
-All authenticated business routes are mounted after `requireAuth`, which validates a Supabase bearer token via `supabaseAnon.auth.getClaims()` or uses an explicit dev fallback when configured. The backend then uses the Supabase service role client (`supabaseAdmin`) for database operations and manually scopes by `user_id` or `stylist_id`.
+All authenticated business routes are mounted after `requireAuth`, which validates a Supabase bearer token via `supabaseAnon.auth.getClaims()` or uses an explicit dev fallback when configured. The backend then uses the Supabase service role client (`supabaseAdmin`) for database operations and manually scopes by `user_id`.
 
 Important write side effects:
 
@@ -57,7 +57,7 @@ app.use(errorHandler);
 
 Public routes under `/api/public` and redirect `/book/:slug` do not require auth. `/internal/appointment-emails/process` uses internal secret auth. `/me` and all `/api/*` routes after the middleware gate require Supabase auth.
 
-The service role client bypasses RLS, so code-level scoping is critical. Most service queries include `.eq("user_id", userId)` or `.eq("stylist_id", stylistId)`. Public management token loading is the main exception, but it verifies appointment `user_id`, `client_id`, and original `appointment_date` against token claims.
+The service role client bypasses RLS, so code-level scoping is critical. Most service queries include `.eq("user_id", userId)`. Public management token loading is the main exception, but it verifies appointment `user_id`, `client_id`, and original `appointment_date` against token claims.
 
 ## Endpoint Matrix
 
@@ -164,7 +164,7 @@ Cursor is base64url JSON:
 { occurred_at: event.occurred_at, id: event.id, category }
 ```
 
-Activity writes are idempotent per `stylist_id + dedupe_key`.
+Activity writes are idempotent per `user_id + dedupe_key`.
 
 ### Services
 
@@ -326,15 +326,15 @@ Primary authored schema is `supabase/schema.sql`; migrations evolve it.
 
 ### `users`
 
-Fields: `id`, `email`, `full_name`, `phone_number`, `business_name`, `timezone`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `waitlist_enabled`, `plan_updated_at`, timestamps. It is the account/profile row and entitlement source.
+Fields: `id`, `email`, `full_name`, `phone_number`, `business_name`, `location_label`, `avatar_image_id`, timestamps, `timezone`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, `waitlist_enabled`. It is the account/profile row and entitlement source.
 
 ### `clients`
 
-Fields: `id`, `user_id`, `first_name`, `last_name`, `preferred_name`, `phone`, `phone_normalized`, `email`, `instagram`, `birthday`, `notes`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, `last_visit_at`, timestamps.
+Fields: `id`, `user_id`, `first_name`, `last_name`, `preferred_name`, `phone`, `phone_normalized`, `email`, `instagram`, `birthday`, `notes`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, `last_visit_at`, `deleted_at`, `deleted_reason`, timestamps.
 
 ### `appointments`
 
-Fields: `id`, `user_id`, `client_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, timestamps. Active exact-start unique index exists on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps.
+Fields: `id`, `user_id`, `client_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, nullable `appointment_time_range`, timestamps. DB/API default for `status` is `scheduled`; `booking_source` is non-null and defaults to `internal`. Active exact-start unique index exists in the checked-in schema on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps.
 
 ### `photos`
 
@@ -342,15 +342,15 @@ Fields: `id`, `user_id`, `client_id`, `file_path`, `photo_type`, `caption`, `cre
 
 ### `reminders`
 
-Fields: `id`, `user_id`, `client_id`, nullable `appointment_id`, `title`, `due_date`, `status`, `channel`, `reminder_type`, `sent_at`, `notes`, timestamps.
+Fields: `id`, `user_id`, `client_id`, `title`, `due_date`, `status`, `notes`, timestamps, nullable `appointment_id`, `channel`, `reminder_type`, `sent_at`. DB/API default for `status` is `open`.
 
 ### `activity_events`
 
-Fields: `id`, `stylist_id`, nullable `client_id`, nullable `appointment_id`, `activity_type`, `title`, `description`, `occurred_at`, `metadata`, `dedupe_key`, `created_at`. Unique index on `(stylist_id, dedupe_key)`.
+Fields: `id`, `user_id`, `client_id`, nullable `appointment_id`, `activity_type`, `title`, `description`, `occurred_at`, nullable `metadata`, `created_at`, `dedupe_key`. Code treats `dedupe_key` as required for idempotency and the checked-in schema has a unique index on `(user_id, dedupe_key)`.
 
 ### `appointment_email_events`
 
-Fields: `id`, `stylist_id`, `client_id`, `appointment_id`, `email_type`, `recipient_email`, `status`, `idempotency_key`, `provider`, `provider_message_id`, `template_data`, `error`, `attempt_count`, `last_attempt_at`, `sent_at`, timestamps. Unique index on `idempotency_key`.
+Fields: `id`, `user_id`, `client_id`, `appointment_id`, `email_type`, `recipient_email`, `status`, `idempotency_key`, `provider`, `provider_message_id`, `template_data`, `error`, `attempt_count`, `last_attempt_at`, `sent_at`, timestamps. Unique index on `idempotency_key`.
 
 ### `stylists`
 
@@ -362,7 +362,11 @@ Fields mirror the booking-rules mapping above. One row per `user_id`.
 
 ### `services`
 
-Fields: `id`, `user_id`, `name`, `description`, `category`, `duration_minutes`, `price`, `is_active`, `is_default`, `sort_order`, timestamps.
+Fields: `id`, `user_id`, `name`, `description`, `category`, `duration_minutes`, `price`, `is_active`, `is_default`, `sort_order`, `visible`, timestamps.
+
+### `plan_usage_events`
+
+Fields in the supplied Supabase production export: `id`, `user_id`, `event_type`, `quantity`, `metadata`, `created_at`. `user_id` references `users.id`. The backend has a placeholder `entitlementsService.recordUsageEvent()` method, but it is currently a no-op.
 
 ### `availability`
 
@@ -461,7 +465,7 @@ Tests cover API routing/auth, activity, appointment email delivery, appointment 
 
 ## Tech Debt, Risks, And Specific Concerns
 
-1. **Service role bypasses RLS.** This is common for backend APIs, but every query must keep correct `user_id`/`stylist_id` scoping. A missed filter would become a cross-tenant data leak.
+1. **Service role bypasses RLS.** This is common for backend APIs, but every query must keep correct `user_id` scoping. A missed filter would become a cross-tenant data leak.
 
 2. **Availability replacement is not atomic.** `replaceWeeklyForUser()` deletes all rows then inserts new rows. If insert fails, the user has no availability. This should ideally be an RPC transaction.
 
@@ -497,7 +501,7 @@ Tests cover API routing/auth, activity, appointment email delivery, appointment 
 
 18. **`preserveAppointmentHistory` is stored but not used.** Rejected pending appointments are cancelled; no alternate behavior exists.
 
-19. **Location/avatar fields used by profile may not exist in base schema.** `usersService.updateProfile()` accepts `location_label` and `avatar_image_id`, and profile overview reads them, but they are not present in `supabase/schema.sql` shown here.
+19. **Client delete is still physical in API code while schema now supports soft delete.** `clients.deleted_at` and `deleted_reason` exist to preserve history, but `clientsService.remove()` still deletes rows.
 
 20. **Database schema and migrations differ in references.** Base schema `waitlist_entries.user_id` references `auth.users(id)`, while most app services treat it as the stylist user. It works when `public.users.id` mirrors `auth.users.id`, but consistency would be cleaner with `public.users(id)`.
 
@@ -517,7 +521,7 @@ Tests cover API routing/auth, activity, appointment email delivery, appointment 
 2. Add a real database exclusion constraint for active appointment time ranges or equivalent transactional locking.
 3. Remove or gate `PATCH /api/account/plan` behind trusted admin/internal auth before production billing.
 4. Enforce stored cancellation/reschedule rules: cancellation cutoff, max reschedules, late fee metadata.
-5. Add missing migrations for `users.location_label` and `users.avatar_image_id` if those fields are intended.
+5. Switch `DELETE /api/clients/:id` to soft-delete by setting `clients.deleted_at`/`deleted_reason` once the frontend is ready for archived/removed clients.
 6. Decide whether client matching should include email and implement it explicitly.
 7. Normalize response shape or document exceptions in OpenAPI-style contract.
 8. Keep all deploy targets migrated through the required schema version before routing traffic.

@@ -305,7 +305,7 @@ describe("API handlers", () => {
           id: "appointment-page-client",
           user_id: userId,
           client_id: "client-mid",
-          appointment_date: "2026-06-01T16:00:00.000Z",
+          appointment_date: "2099-06-01T16:00:00.000Z",
           service_name: "Haircut",
           duration_minutes: 45,
           status: "scheduled"
@@ -314,7 +314,7 @@ describe("API handlers", () => {
           id: "appointment-non-page-client",
           user_id: userId,
           client_id: "client-high",
-          appointment_date: "2026-06-02T16:00:00.000Z",
+          appointment_date: "2099-06-02T16:00:00.000Z",
           service_name: "Color",
           duration_minutes: 90,
           status: "scheduled"
@@ -333,7 +333,7 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 200);
       assert.deepEqual(body.data.map((client) => client.id), ["client-mid"]);
       assert.equal(body.data[0]?.last_service, null);
-      assert.equal(body.data[0]?.next_appointment_at, "2026-06-01T16:00:00.000Z");
+      assert.equal(body.data[0]?.next_appointment_at, "2099-06-01T16:00:00.000Z");
       assert.equal(body.page, 2);
       assert.equal(body.pageSize, 1);
       assert.equal(body.totalCount, 3);
@@ -1535,7 +1535,8 @@ describe("API handlers", () => {
         }
       ],
       clients: [],
-      waitlist_entries: []
+      waitlist_entries: [],
+      activity_events: []
     });
 
     try {
@@ -1560,18 +1561,7 @@ describe("API handlers", () => {
       assert.equal(entry.status, "active");
       assert.equal(supabase.state.waitlist_entries.length, 1);
       assert.equal(supabase.state.waitlist_entries[0]?.source, "public_booking");
-      assert.equal(supabase.state.activity_events.length, 1);
-      assert.equal(supabase.state.activity_events[0]?.activity_type, "waitlist_joined");
-      assert.equal(supabase.state.activity_events[0]?.title, "Ava Martinez joined the waitlist");
-      assert.equal(supabase.state.activity_events[0]?.client_id, null);
-      assert.equal(supabase.state.activity_events[0]?.appointment_id, null);
-      assert.deepEqual(supabase.state.activity_events[0]?.metadata, {
-        client_name: "Ava Martinez",
-        service_name: null,
-        requested_date: getCurrentLocalDate("UTC"),
-        requested_time_preference: "Morning preferred",
-        source: "public_booking"
-      });
+      assert.equal(supabase.state.activity_events.length, 0);
     } finally {
       supabase.restore();
     }
@@ -2543,7 +2533,10 @@ describe("API handlers", () => {
           id: clientId,
           user_id: userId,
           first_name: "Avery",
-          last_name: "Brooks"
+          last_name: "Brooks",
+          phone: "(720) 555-0134",
+          email: "avery@example.com",
+          preferred_contact_method: "text"
         }
       ],
       appointments: [
@@ -2589,6 +2582,10 @@ describe("API handlers", () => {
           created_at: "2026-05-20T15:00:00.000Z",
           updated_at: "2026-05-24T19:00:00.000Z",
           client_name: "Avery Brooks",
+          client_phone: "(720) 555-0134",
+          client_email: "avery@example.com",
+          client_preferred_contact_method: "text",
+          client_contact: "(720) 555-0134",
           start_time: appointmentDate,
           end_time: "2026-05-25T19:00:00.000Z",
           services: ["Balayage"],

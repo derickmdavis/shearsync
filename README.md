@@ -115,7 +115,7 @@ Appointment contract notes:
 - Public booking creation stores `booking_source: "public"`.
 - Public booking `notes` are stored on the appointment only; they are not copied into client/customer notes.
 - `GET /api/appointments/internal-context` returns `conflictFreeSlots` for a given date and duration. These are overlap-safe internal suggestions only; the response explicitly does not apply saved availability windows, public booking rules, or off-day checks.
-- `GET /api/appointments/:id` returns one authenticated stylist-owned appointment by appointment ID, with frontend-friendly detail aliases including `client_name`, `start_time`, `end_time`, `services`, and `revenue` when derivable.
+- `GET /api/appointments/:id` returns one authenticated stylist-owned appointment by appointment ID, with frontend-friendly detail aliases including `client_name`, `client_phone`, `client_email`, `client_preferred_contact_method`, `client_contact`, `start_time`, `end_time`, `services`, and `revenue` when derivable. `client_contact` uses the linked client's phone first, then email, and is `null` when no contact is available.
 - `GET /api/appointments/:id/activity` returns activity events for a single appointment in reverse chronological order for appointment detail/history UI.
 
 Business metric contract notes:

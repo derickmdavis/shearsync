@@ -1,8 +1,8 @@
 create table if not exists public.appointment_email_events (
   id uuid primary key default gen_random_uuid(),
-  stylist_id uuid not null references public.users(id) on delete cascade,
-  client_id uuid not null references public.clients(id) on delete cascade,
-  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id),
+  appointment_id uuid not null references public.appointments(id),
   email_type text not null,
   recipient_email text not null,
   status text not null default 'queued',
@@ -21,8 +21,8 @@ create table if not exists public.appointment_email_events (
 create unique index if not exists appointment_email_events_idempotency_key_idx
   on public.appointment_email_events(idempotency_key);
 
-create index if not exists appointment_email_events_stylist_status_idx
-  on public.appointment_email_events(stylist_id, status, created_at);
+create index if not exists appointment_email_events_user_status_idx
+  on public.appointment_email_events(user_id, status, created_at);
 
 create index if not exists appointment_email_events_appointment_id_idx
   on public.appointment_email_events(appointment_id);
@@ -41,7 +41,7 @@ begin
     create policy appointment_email_events_select_own
       on public.appointment_email_events
       for select
-      using (auth.uid() = stylist_id);
+      using (auth.uid() = user_id);
   end if;
 end
 $$;

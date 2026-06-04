@@ -6,13 +6,16 @@ create table if not exists public.users (
   full_name text,
   phone_number text,
   business_name text,
-  timezone text not null default 'UTC',
+  location_label text,
+  avatar_image_id text,
+  timezone text not null default 'America/Denver',
   plan_tier text not null default 'basic' check (plan_tier in ('basic', 'pro', 'premium')),
   plan_status text not null default 'active' check (plan_status in ('trialing', 'active', 'past_due', 'cancelled')),
   sms_monthly_limit integer not null default 0,
   sms_used_this_month integer not null default 0,
+  plan_started_at timestamptz default now(),
   waitlist_enabled boolean not null default true,
-  plan_updated_at timestamptz,
+  plan_updated_at timestamptz default now(),
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -35,6 +38,8 @@ create table if not exists public.clients (
   reminder_consent boolean,
   total_spend numeric(10, 2),
   last_visit_at timestamptz,
+  deleted_at timestamptz,
+  deleted_reason text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -50,6 +55,7 @@ create table if not exists public.appointments (
   notes text,
   status text not null default 'scheduled',
   booking_source text not null default 'internal' check (booking_source in ('public', 'internal')),
+  appointment_time_range tstzrange,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -85,8 +91,8 @@ create table if not exists public.reminders (
 
 create table if not exists public.activity_events (
   id uuid primary key default gen_random_uuid(),
-  stylist_id uuid not null references public.users(id) on delete cascade,
-  client_id uuid references public.clients(id) on delete set null,
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id),
   appointment_id uuid references public.appointments(id) on delete set null,
   activity_type text not null,
   title text not null,
@@ -100,9 +106,9 @@ create table if not exists public.activity_events (
 
 create table if not exists public.appointment_email_events (
   id uuid primary key default gen_random_uuid(),
-  stylist_id uuid not null references public.users(id) on delete cascade,
-  client_id uuid not null references public.clients(id) on delete cascade,
-  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id),
+  appointment_id uuid not null references public.appointments(id),
   email_type text not null,
   recipient_email text not null,
   status text not null default 'queued',
@@ -177,6 +183,7 @@ create table if not exists public.services (
   is_active boolean default true,
   is_default boolean not null default false,
   sort_order integer not null default 1,
+  visible boolean not null default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -264,15 +271,15 @@ create index if not exists waitlist_entries_user_id_idx on public.waitlist_entri
 create index if not exists waitlist_entries_user_date_idx on public.waitlist_entries(user_id, requested_date);
 create index if not exists waitlist_entries_user_status_idx on public.waitlist_entries(user_id, status);
 create index if not exists waitlist_entries_user_created_at_idx on public.waitlist_entries(user_id, created_at desc);
-create index if not exists activity_events_stylist_occurred_at_idx on public.activity_events(stylist_id, occurred_at desc, id desc);
+create index if not exists activity_events_user_occurred_at_idx on public.activity_events(user_id, occurred_at desc, id desc);
 create index if not exists activity_events_appointment_id_idx on public.activity_events(appointment_id);
 create index if not exists activity_events_client_id_idx on public.activity_events(client_id);
 create index if not exists activity_events_activity_type_idx on public.activity_events(activity_type);
-create unique index if not exists activity_events_stylist_dedupe_key_idx on public.activity_events(stylist_id, dedupe_key);
+create unique index if not exists activity_events_user_dedupe_key_idx on public.activity_events(user_id, dedupe_key);
 create unique index if not exists appointment_email_events_idempotency_key_idx
   on public.appointment_email_events(idempotency_key);
-create index if not exists appointment_email_events_stylist_status_idx
-  on public.appointment_email_events(stylist_id, status, created_at);
+create index if not exists appointment_email_events_user_status_idx
+  on public.appointment_email_events(user_id, status, created_at);
 create index if not exists appointment_email_events_appointment_id_idx
   on public.appointment_email_events(appointment_id);
 
@@ -302,7 +309,7 @@ begin
     create policy activity_events_select_own
       on public.activity_events
       for select
-      using (auth.uid() = stylist_id);
+      using (auth.uid() = user_id);
   end if;
 end
 $$;

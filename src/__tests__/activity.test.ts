@@ -161,7 +161,7 @@ describe("Activity handlers", () => {
         id: supabase.state.activity_events[0]?.id,
         created_at: supabase.state.activity_events[0]?.created_at,
         updated_at: supabase.state.activity_events[0]?.updated_at,
-        stylist_id: userId,
+        user_id: userId,
         client_id: clientId,
         appointment_id: supabase.state.appointments[0]?.id,
         activity_type: "booking_created",
@@ -374,7 +374,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           client_id: clientId,
           appointment_id: appointmentId,
           activity_type: "booking_created",
@@ -389,7 +389,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           client_id: clientId,
           appointment_id: appointmentId,
           activity_type: "reminder_sent",
@@ -405,7 +405,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "33333333-3333-4333-8333-333333333333",
-          stylist_id: userId,
+          user_id: userId,
           client_id: secondClientId,
           appointment_id: secondAppointmentId,
           activity_type: "appointment_cancelled",
@@ -421,7 +421,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "44444444-4444-4444-8444-444444444444",
-          stylist_id: userId,
+          user_id: userId,
           client_id: thirdClientId,
           appointment_id: thirdAppointmentId,
           activity_type: "appointment_rescheduled",
@@ -437,7 +437,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "55555555-5555-4555-8555-555555555555",
-          stylist_id: otherUserId,
+          user_id: otherUserId,
           client_id: foreignClientId,
           appointment_id: foreignAppointmentId,
           activity_type: "booking_created",
@@ -580,7 +580,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           client_id: clientId,
           appointment_id: appointmentId,
           activity_type: "booking_created",
@@ -656,7 +656,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "booking_created",
           title: "Event 1",
           description: null,
@@ -669,7 +669,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "reminder_sent",
           title: "Event 2",
           description: null,
@@ -683,7 +683,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "33333333-3333-4333-8333-333333333333",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "appointment_cancelled",
           title: "Event 3",
           description: null,
@@ -742,7 +742,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           appointment_id: appointmentId,
           activity_type: "reminder_sent",
           title: "SMS reminder sent to Sarah",
@@ -757,7 +757,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           appointment_id: appointmentId,
           activity_type: "booking_created",
           title: "Sarah booked Balayage",
@@ -771,7 +771,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "33333333-3333-4333-8333-333333333333",
-          stylist_id: userId,
+          user_id: userId,
           appointment_id: secondAppointmentId,
           activity_type: "booking_created",
           title: "Foreign event",
@@ -844,7 +844,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "booking_created",
           title: "Booking event",
           description: null,
@@ -857,7 +857,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "reminder_sent",
           title: "Reminder event",
           description: null,
@@ -927,7 +927,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "waitlist_joined",
           title: "Ava Martinez joined the waitlist",
           description: "Requested 2026-05-14 for Color",
@@ -942,7 +942,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "booking_created",
           title: "Booking event",
           description: null,
@@ -1024,7 +1024,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "waitlist_joined",
           title: "Ava Martinez joined the waitlist",
           description: "Requested 2026-05-14 for Color",
@@ -1039,7 +1039,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "appointment_cancelled",
           title: "Cancellation event",
           description: null,
@@ -1119,7 +1119,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "reminder_sent",
           title: "Reminder event",
           description: null,
@@ -1364,7 +1364,7 @@ describe("Activity handlers", () => {
       activity_events: [
         {
           id: "11111111-1111-4111-8111-111111111111",
-          stylist_id: userId,
+          user_id: userId,
           client_id: clientId,
           appointment_id: appointmentId,
           activity_type: "booking_created",
@@ -1379,7 +1379,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
-          stylist_id: userId,
+          user_id: userId,
           client_id: secondClientId,
           appointment_id: secondAppointmentId,
           activity_type: "booking_created",
@@ -1394,7 +1394,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "33333333-3333-4333-8333-333333333333",
-          stylist_id: userId,
+          user_id: userId,
           activity_type: "waitlist_joined",
           title: "Ava Martinez joined the waitlist",
           description: "Requested 2026-05-14",
@@ -1409,7 +1409,7 @@ describe("Activity handlers", () => {
         },
         {
           id: "44444444-4444-4444-8444-444444444444",
-          stylist_id: userId,
+          user_id: userId,
           client_id: secondClientId,
           appointment_id: secondAppointmentId,
           activity_type: "reminder_sent",

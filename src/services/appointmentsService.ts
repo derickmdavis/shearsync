@@ -61,15 +61,26 @@ const toClientName = (client: Row | null): string | undefined => {
   return clientName.length > 0 ? clientName : undefined;
 };
 
+const toStringOrNull = (value: unknown): string | null => (
+  typeof value === "string" && value.trim().length > 0 ? value : null
+);
+
 const withAppointmentDetailFields = (appointment: Row, client: Row | null): Row => {
   const appointmentDate = typeof appointment.appointment_date === "string" ? appointment.appointment_date : undefined;
   const durationMinutes = toDurationMinutes(appointment.duration_minutes);
   const serviceName = typeof appointment.service_name === "string" ? appointment.service_name : undefined;
   const clientName = toClientName(client);
+  const clientPhone = toStringOrNull(client?.phone);
+  const clientEmail = toStringOrNull(client?.email);
+  const clientPreferredContactMethod = toStringOrNull(client?.preferred_contact_method);
 
   return {
     ...appointment,
     ...(clientName ? { client_name: clientName } : {}),
+    client_phone: clientPhone,
+    client_email: clientEmail,
+    client_preferred_contact_method: clientPreferredContactMethod,
+    client_contact: clientPhone ?? clientEmail,
     ...(appointmentDate ? {
       start_time: appointmentDate,
       end_time: getAppointmentEndIso(appointmentDate, durationMinutes)
@@ -221,7 +232,7 @@ export const appointmentsService = {
 
     const { data, error } = await supabaseAdmin
       .from("clients")
-      .select("id, first_name, last_name")
+      .select("id, first_name, last_name, phone, email, preferred_contact_method")
       .eq("id", clientId)
       .eq("user_id", userId)
       .maybeSingle();

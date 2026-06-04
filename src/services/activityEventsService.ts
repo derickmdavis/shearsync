@@ -639,7 +639,7 @@ export const activityEventsService = {
     const activityQuery = supabaseAdmin
       .from("activity_events")
       .select(ACTIVITY_EVENT_SELECT)
-      .eq("stylist_id", stylistId);
+      .eq("user_id", stylistId);
 
     if (filters.start_date) {
       activityQuery.gte("occurred_at", getStartOfLocalDayUtc(filters.start_date, timeZone).toISOString());
@@ -700,7 +700,7 @@ export const activityEventsService = {
     let query = supabaseAdmin
       .from("activity_events")
       .select(ACTIVITY_EVENT_SELECT)
-      .eq("stylist_id", stylistId);
+      .eq("user_id", stylistId);
 
     if (filters.category === "waitlist") {
       query = query.eq("activity_type", "waitlist_joined");
@@ -831,7 +831,7 @@ export const activityEventsService = {
     const { data, error } = await supabaseAdmin
       .from("activity_events")
       .select(ACTIVITY_EVENT_SELECT)
-      .eq("stylist_id", stylistId)
+      .eq("user_id", stylistId)
       .eq("appointment_id", appointmentId)
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false });
@@ -954,12 +954,17 @@ export const activityEventsService = {
   },
 
   async recordWaitlistJoined(stylistId: string, waitlistEntry: Row): Promise<void> {
+    const clientId = typeof waitlistEntry.client_id === "string" ? waitlistEntry.client_id : null;
+    if (!clientId) {
+      return;
+    }
+
     const metadata = createWaitlistJoinedMetadata(waitlistEntry);
     const serviceText = metadata.service_name ? ` for ${metadata.service_name}` : "";
 
     await this.createIfMissing({
       stylistId,
-      clientId: typeof waitlistEntry.client_id === "string" ? waitlistEntry.client_id : null,
+      clientId,
       appointmentId: null,
       activityType: "waitlist_joined",
       title: `${metadata.client_name} joined the waitlist`,
@@ -972,7 +977,7 @@ export const activityEventsService = {
 
   async createIfMissing(input: {
     stylistId: string;
-    clientId: string | null;
+    clientId: string;
     appointmentId: string | null;
     activityType: PersistedActivityType;
     title: string;
@@ -984,7 +989,7 @@ export const activityEventsService = {
     const { data: existing, error: existingError } = await supabaseAdmin
       .from("activity_events")
       .select("id")
-      .eq("stylist_id", input.stylistId)
+      .eq("user_id", input.stylistId)
       .eq("dedupe_key", input.dedupeKey)
       .maybeSingle();
 
@@ -996,7 +1001,7 @@ export const activityEventsService = {
     const { error } = await supabaseAdmin
       .from("activity_events")
       .insert({
-        stylist_id: input.stylistId,
+        user_id: input.stylistId,
         client_id: input.clientId,
         appointment_id: input.appointmentId,
         activity_type: input.activityType,

@@ -76,12 +76,12 @@ do $$
 begin
   if to_regclass('public.appointment_email_events') is not null then
     delete from public.appointment_email_events
-    where stylist_id = 'd87fb2aa-e129-450c-ad09-a7853a891590';
+    where user_id = 'd87fb2aa-e129-450c-ad09-a7853a891590';
   end if;
 
   if to_regclass('public.activity_events') is not null then
     delete from public.activity_events
-    where stylist_id = 'd87fb2aa-e129-450c-ad09-a7853a891590';
+    where user_id = 'd87fb2aa-e129-450c-ad09-a7853a891590';
   end if;
 
   if to_regclass('public.waitlist_entries') is not null then
@@ -719,7 +719,7 @@ event_rows as (
 )
 insert into public.activity_events (
   id,
-  stylist_id,
+  user_id,
   client_id,
   appointment_id,
   activity_type,
@@ -756,17 +756,19 @@ with waitlist_events as (
   select
     row_number() over (order by created_at, id) as event_no,
     id,
+    client_id,
     service_id,
     client_name,
     requested_date,
     requested_time_preference
   from public.waitlist_entries
   where user_id = 'd87fb2aa-e129-450c-ad09-a7853a891590'
+    and client_id is not null
   limit 8
 )
 insert into public.activity_events (
   id,
-  stylist_id,
+  user_id,
   client_id,
   appointment_id,
   activity_type,
@@ -785,7 +787,7 @@ select
     substr(md5('seed-activity-waitlist-' || event_no), 21, 12)
   )::uuid,
   'd87fb2aa-e129-450c-ad09-a7853a891590',
-  null,
+  client_id,
   null,
   'waitlist_joined',
   client_name || ' joined the waitlist',
