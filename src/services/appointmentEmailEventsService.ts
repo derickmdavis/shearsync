@@ -41,6 +41,12 @@ interface AppointmentEmailTemplateData {
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
 
+const confirmationEmailTypes: AppointmentEmailType[] = [
+  "appointment_scheduled",
+  "appointment_pending",
+  "appointment_confirmed"
+];
+
 const getAppointmentEmailIdempotencyKey = (
   emailType: AppointmentEmailType,
   appointmentId: string,
@@ -117,6 +123,18 @@ const loadExistingEmailEventByIdempotencyKey = async (idempotencyKey: string): P
 
   handleSupabaseError(error, "Unable to validate appointment email uniqueness");
   return ((data ?? []) as Row[])[0] ?? null;
+};
+
+const isEmailConfirmationsEnabled = async (userId: string): Promise<boolean> => {
+  const { data, error } = await supabaseAdmin
+    .from("automation_settings")
+    .select("enabled")
+    .eq("user_id", userId)
+    .eq("key", "email_confirmations")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to load email confirmation automation setting");
+  return data?.enabled !== false;
 };
 
 const loadStylist = async (stylistId: string): Promise<Row | null> => {
@@ -200,6 +218,10 @@ export const appointmentEmailEventsService = {
     emailType: AppointmentEmailType,
     options: QueueAppointmentEmailOptions = {}
   ): Promise<Row | null> {
+    if (confirmationEmailTypes.includes(emailType) && !(await isEmailConfirmationsEnabled(stylistId))) {
+      return null;
+    }
+
     const appointmentId = String(appointment.id ?? "");
     const clientId = String(appointment.client_id ?? "");
     const appointmentStartTime = String(appointment.appointment_date ?? "");

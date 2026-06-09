@@ -7,6 +7,7 @@ export const activityCategorySchema = z.enum(ACTIVITY_CATEGORIES);
 export const automationControlKeySchema = z.enum([
   "rebook_nudges",
   "appointment_reminders",
+  "email_confirmations",
   "no_show_follow_up",
   "waitlist_match"
 ]);

@@ -313,7 +313,7 @@ create table if not exists public.automation_settings (
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   constraint automation_settings_key_check
-    check (key in ('rebook_nudges', 'appointment_reminders', 'no_show_follow_up', 'waitlist_match')),
+    check (key in ('rebook_nudges', 'appointment_reminders', 'email_confirmations', 'no_show_follow_up', 'waitlist_match')),
   constraint automation_settings_user_key_unique unique (user_id, key)
 );
 

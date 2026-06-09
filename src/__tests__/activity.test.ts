@@ -1634,6 +1634,8 @@ describe("Activity handlers", () => {
       assert.equal(payload.automation_health.status, "warning");
       assert.equal(payload.automation_impact_this_week.booked_count, 0);
       assert.equal(payload.automation_impact_this_week.reminders_sent_count, 1);
+      assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.enabled, true);
+      assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.status_label, "On for bookings");
       assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
       assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "2 scheduled");
 
@@ -1646,6 +1648,16 @@ describe("Activity handlers", () => {
       const updateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), updateReq);
       assert.equal(updateResponse.statusCode, 200);
       assert.equal(supabase.state.automation_settings[0]?.enabled, true);
+
+      const emailUpdateReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: { key: "email_confirmations" },
+        body: { enabled: false }
+      });
+
+      const emailUpdateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), emailUpdateReq);
+      assert.equal(emailUpdateResponse.statusCode, 200);
+      assert.equal(supabase.state.automation_settings.find((setting) => setting.key === "email_confirmations")?.enabled, false);
     } finally {
       supabase.restore();
       mock.timers.reset();
@@ -1740,7 +1752,12 @@ describe("Activity handlers", () => {
         openings_filled_count: 0
       });
       assert.deepEqual(payload.recent_activity, []);
-      assert.equal(payload.automation_controls.length, 4);
+      assert.equal(payload.automation_controls.length, 5);
+      assert.equal(
+        (payload.automation_controls as Array<{ key?: string; enabled?: boolean }>)
+          .find((control) => control.key === "email_confirmations")?.enabled,
+        true
+      );
       assert.equal(queryLog.some((entry) => entry.operation === "in" && entry.values.length === 0), false);
     } finally {
       supabase.restore();

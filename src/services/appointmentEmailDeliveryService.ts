@@ -74,6 +74,11 @@ const defaultProcessLimit = 25;
 const defaultMaxAttempts = 3;
 const defaultStaleSendingAfterMinutes = 15;
 const nonEssentialMessageTypes: MessageType[] = ["appointment_reminder", "rebooking_prompt", "marketing", "business_recap"];
+const confirmationEmailTypes: AppointmentEmailType[] = [
+  "appointment_scheduled",
+  "appointment_pending",
+  "appointment_confirmed"
+];
 
 const noopEmailProvider: EmailProvider = {
   async send(): Promise<EmailProviderResult> {
@@ -180,6 +185,18 @@ const getEmailEventMessageType = (emailEvent: Row): MessageType => {
   }
 
   return getAppointmentMessageType(emailEvent.email_type as AppointmentEmailType);
+};
+
+const isEmailConfirmationsEnabled = async (userId: string): Promise<boolean> => {
+  const { data, error } = await supabaseAdmin
+    .from("automation_settings")
+    .select("enabled")
+    .eq("user_id", userId)
+    .eq("key", "email_confirmations")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to load email confirmation automation setting");
+  return data?.enabled !== false;
 };
 
 const getUnsubscribeLabel = (messageType: MessageType): string | null => {
@@ -525,6 +542,33 @@ export const appointmentEmailDeliveryService = {
         const stylistId = typeof claimedEvent.stylist_id === "string" ? claimedEvent.stylist_id : userId || null;
         const messageType = getEmailEventMessageType(claimedEvent);
         const recipientEmail = getString(claimedEvent.recipient_email, "");
+        if (
+          userId
+          && confirmationEmailTypes.includes(claimedEvent.email_type as AppointmentEmailType)
+          && !(await isEmailConfirmationsEnabled(userId))
+        ) {
+          await communicationEventsService.logCommunicationEvent({
+            userId,
+            clientId,
+            stylistId,
+            channel: "email",
+            messageType,
+            toAddress: recipientEmail,
+            toNormalized: normalizeEmail(recipientEmail),
+            provider: null,
+            status: "skipped_opted_out",
+            errorCode: "disabled",
+            errorMessage: "Email confirmations automation disabled",
+            metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+          });
+          await markEmailEvent(String(claimedEvent.id ?? ""), {
+            status: "skipped",
+            error: "Email confirmations automation disabled"
+          });
+          result.skipped += 1;
+          continue;
+        }
+
         const canSend = userId
           ? await communicationPreferencesService.canSendCommunication({
             userId,

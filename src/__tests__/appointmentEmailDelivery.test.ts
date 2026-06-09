@@ -17,6 +17,8 @@ const {
   require("../services/appointmentEmailDeliveryService") as typeof import("../services/appointmentEmailDeliveryService");
 const { communicationPreferencesService } =
   require("../services/communicationPreferences") as typeof import("../services/communicationPreferences");
+const { appointmentEmailEventsService } =
+  require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { communicationPreferenceTokensService } =
   require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
 const { communicationsService } =
@@ -185,6 +187,194 @@ describe("appointment email delivery", () => {
       assert.equal(supabase.state.appointment_email_events[0]?.provider_message_id, "provider-message-1");
       assert.equal(supabase.state.appointment_email_events[0]?.sent_at, "2026-05-10T12:00:00.000Z");
       assert.equal(supabase.state.appointment_email_events[0]?.error, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not queue appointment confirmation emails when automation is disabled", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: TEST_USER_ID,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [],
+      appointment_email_events: [],
+      automation_settings: [
+        {
+          id: "automation-setting-1",
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: false
+        }
+      ]
+    });
+
+    try {
+      const queued = await appointmentEmailEventsService.queueAppointmentEmail(
+        TEST_USER_ID,
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2099-05-12T16:00:00.000Z",
+          duration_minutes: 45,
+          service_name: "Trim",
+          status: "scheduled"
+        },
+        "appointment_scheduled"
+      );
+
+      assert.equal(queued, null);
+      assert.equal(supabase.state.appointment_email_events.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("still queues cancellation emails when email confirmations are disabled", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: TEST_USER_ID,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [],
+      appointment_email_events: [],
+      automation_settings: [
+        {
+          id: "automation-setting-1",
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: false
+        }
+      ]
+    });
+
+    try {
+      const queued = await appointmentEmailEventsService.queueAppointmentEmail(
+        TEST_USER_ID,
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2099-05-12T16:00:00.000Z",
+          duration_minutes: 45,
+          service_name: "Trim",
+          status: "cancelled"
+        },
+        "appointment_cancelled",
+        { cancelledBy: "stylist" }
+      );
+
+      assert.ok(queued);
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_cancelled");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips queued appointment confirmation emails when automation is disabled before processing", async () => {
+    const sentMessages: EmailMessage[] = [];
+    const provider: EmailProvider = {
+      async send(message) {
+        sentMessages.push(message);
+        return {
+          status: "sent",
+          provider: "test-provider"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "appointment_pending",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            appointment_start_time: "2099-05-12T16:00:00.000Z",
+            appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 10:45 AM MDT",
+            business_display_name: "Maya Johnson Hair",
+            duration_minutes: 45
+          }
+        }
+      ],
+      automation_settings: [
+        {
+          id: "automation-setting-1",
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: false
+        }
+      ],
+      communication_events: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 0,
+        skipped: 1,
+        failed: 0
+      });
+      assert.equal(sentMessages.length, 0);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "Email confirmations automation disabled");
+      assert.equal(supabase.state.communication_events[0]?.status, "skipped_opted_out");
+      assert.equal(supabase.state.communication_events[0]?.error_code, "disabled");
     } finally {
       supabase.restore();
     }

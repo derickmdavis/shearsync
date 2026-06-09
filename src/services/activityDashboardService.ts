@@ -10,6 +10,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 const AUTOMATION_KEYS = [
   "rebook_nudges",
   "appointment_reminders",
+  "email_confirmations",
   "no_show_follow_up",
   "waitlist_match"
 ] as const;
@@ -19,6 +20,7 @@ export type AutomationControlKey = (typeof AUTOMATION_KEYS)[number];
 const AUTOMATION_LABELS: Record<AutomationControlKey, string> = {
   rebook_nudges: "Rebook Nudges",
   appointment_reminders: "Appointment Reminders",
+  email_confirmations: "Email Confirmations",
   no_show_follow_up: "No Show Follow-up",
   waitlist_match: "Waitlist Match"
 };
@@ -477,6 +479,12 @@ export const activityDashboardService = {
         enabled: getEnabled(settings, "appointment_reminders"),
         status_label: `${reminderQueue.length} scheduled`,
         scheduled_count: reminderQueue.length
+      },
+      {
+        key: "email_confirmations",
+        label: AUTOMATION_LABELS.email_confirmations,
+        enabled: getEnabled(settings, "email_confirmations"),
+        status_label: getEnabled(settings, "email_confirmations") ? "On for bookings" : "Paused"
       },
       {
         key: "no_show_follow_up",
