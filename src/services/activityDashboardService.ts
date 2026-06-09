@@ -177,6 +177,10 @@ const loadCancellationReviewItems = async (userId: string, timeZone: string) => 
   return cancellationEvents
     .map((event) => {
       const appointmentId = getString(event, "appointment_id");
+      if (!appointmentId) {
+        return null;
+      }
+
       const appointment = appointmentId ? appointmentsById.get(appointmentId) : undefined;
       if (appointment && appointment.status !== "cancelled") {
         return null;

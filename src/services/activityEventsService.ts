@@ -79,6 +79,25 @@ const isAppointmentStatus = (value: unknown): value is AppointmentStatus =>
   || value === "cancelled"
   || value === "no_show";
 
+const normalizeActivityType = (value: unknown): ActivityType | null => {
+  if (value === "appointment_created") {
+    return "booking_created";
+  }
+
+  if (
+    value === "booking_created"
+    || value === "appointment_cancelled"
+    || value === "appointment_rescheduled"
+    || value === "reminder_sent"
+    || value === "waitlist_joined"
+    || value === "client_rebook_needed"
+  ) {
+    return value;
+  }
+
+  return null;
+};
+
 const normalizeActivityMetadata = (
   activityType: ActivityType,
   value: unknown,
@@ -189,8 +208,12 @@ const normalizeActivityMetadata = (
   }
 };
 
-const toRowActivityItem = (row: Row, appointmentStatuses = new Map<string, AppointmentStatus>()): ActivityEventItem => {
-  const activityType = row.activity_type as ActivityType;
+const toRowActivityItem = (row: Row, appointmentStatuses = new Map<string, AppointmentStatus>()): ActivityEventItem | null => {
+  const activityType = normalizeActivityType(row.activity_type);
+  if (!activityType) {
+    return null;
+  }
+
   const appointmentId = typeof row.appointment_id === "string" ? row.appointment_id : null;
   const currentAppointmentStatus = appointmentId ? appointmentStatuses.get(appointmentId) : undefined;
 
@@ -652,9 +675,12 @@ export const activityEventsService = {
     const { data: activityData, error: activityError } = await activityQuery;
     handleSupabaseError(activityError, "Unable to load activity counts");
 
-    const activityRows = (activityData ?? []) as Row[];
+    const activityRows = ((activityData ?? []) as Row[])
+      .filter((row) => normalizeActivityType(row.activity_type) !== null);
     const appointmentStatuses = await getAppointmentStatuses(stylistId, activityRows);
-    const activityEvents = activityRows.map((row) => toRowActivityItem(row, appointmentStatuses));
+    const activityEvents = activityRows
+      .map((row) => toRowActivityItem(row, appointmentStatuses))
+      .filter((event): event is ActivityEventItem => event !== null);
 
     const appointmentsQuery = supabaseAdmin
       .from("appointments")
@@ -722,10 +748,13 @@ export const activityEventsService = {
 
     handleSupabaseError(error, "Unable to load activity feed");
 
-    const sortedRows = ((data ?? []) as Row[]).sort(compareRowsDescending);
+    const sortedRows = ((data ?? []) as Row[])
+      .filter((row) => normalizeActivityType(row.activity_type) !== null)
+      .sort(compareRowsDescending);
     const appointmentStatuses = await getAppointmentStatuses(stylistId, sortedRows);
     const sortedEvents = sortedRows
       .map((row) => toRowActivityItem(row, appointmentStatuses))
+      .filter((event): event is ActivityEventItem => event !== null)
       .filter((event) => shouldIncludeEventForCategory(event, filters.category));
     const cursor = filters.cursor ? decodeCursor(filters.cursor, filters.category) : null;
     const filteredEvents = cursor
@@ -840,7 +869,11 @@ export const activityEventsService = {
     const appointmentStatuses = isAppointmentStatus((appointment as Row).status)
       ? new Map([[appointmentId, (appointment as Row).status as AppointmentStatus]])
       : new Map<string, AppointmentStatus>();
-    return ((data ?? []) as Row[]).sort(compareRowsDescending).map((row) => toRowActivityItem(row, appointmentStatuses));
+    return ((data ?? []) as Row[])
+      .filter((row) => normalizeActivityType(row.activity_type) !== null)
+      .sort(compareRowsDescending)
+      .map((row) => toRowActivityItem(row, appointmentStatuses))
+      .filter((event): event is ActivityEventItem => event !== null);
   },
 
   async recordBookingCreated(stylistId: string, appointment: Row): Promise<void> {

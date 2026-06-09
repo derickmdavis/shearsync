@@ -1747,4 +1747,91 @@ describe("Activity handlers", () => {
       mock.timers.reset();
     }
   });
+
+  it("keeps the activity dashboard valid with legacy activity rows and deleted cancellation appointments", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-06-07T17:00:00.000Z",
+          service_name: "Haircut",
+          duration_minutes: 60,
+          status: "scheduled",
+          created_at: "2026-06-01T12:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
+        }
+      ],
+      reminders: [],
+      waitlist_entries: [],
+      activity_events: [
+        {
+          id: "45454545-4545-4545-8545-454545454545",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "appointment_created",
+          title: "Sarah booked Haircut",
+          description: null,
+          occurred_at: "2026-06-05T18:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Haircut",
+            appointment_start_time: "2026-06-07T17:00:00.000Z"
+          }
+        },
+        {
+          id: "56565656-5656-4565-8565-565656565656",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: null,
+          activity_type: "appointment_cancelled",
+          title: "Sarah cancelled Haircut",
+          description: null,
+          occurred_at: "2026-06-05T17:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Haircut",
+            appointment_start_time: "2026-06-07T17:00:00.000Z",
+            cancelled_by: "client"
+          }
+        }
+      ],
+      appointment_email_events: [],
+      automation_settings: []
+    });
+
+    try {
+      const dashboardReq = createMockRequest({
+        user: { id: userId } as Request["user"]
+      });
+
+      const dashboardResponse = await runWithErrorHandler((request, res) => activityController.dashboard(request, res), dashboardReq);
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: {
+          recent_activity: Array<{ activity_type: string; appointment_id: string | null }>;
+          cancellation_review_count: number;
+          cancellation_review_items: Array<{ appointment_id: string | null }>;
+        };
+      }).data;
+
+      assert.equal(payload.recent_activity[0]?.activity_type, "booking_created");
+      assert.equal(payload.recent_activity.some((event) => event.activity_type === "appointment_created"), false);
+      assert.equal(payload.cancellation_review_count, 0);
+      assert.deepEqual(payload.cancellation_review_items, []);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
 });
