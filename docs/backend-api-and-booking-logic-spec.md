@@ -595,6 +595,7 @@ Fields actively used:
 - `id`
 - `user_id`
 - `client_id`
+- `service_id`
 - `appointment_date`
 - `service_name`
 - `duration_minutes`
@@ -602,7 +603,7 @@ Fields actively used:
 - `notes`
 - `status`
 - `booking_source`
-- `appointment_time_range` (present in the Supabase production column export; not read directly by API code)
+- `appointment_time_range`
 - `created_at`
 - `updated_at`
 
@@ -610,6 +611,7 @@ Relationships:
 
 - `user_id -> users.id`
 - `client_id -> clients.id`
+- `service_id -> services.id` nullable, `on delete set null`
 
 Ownership rules:
 
@@ -636,14 +638,16 @@ Important constraints:
 - code also checks duration overlaps in application logic, not only exact start-time uniqueness
 - `status` defaults to `scheduled`.
 - `booking_source` is non-null and defaults to `internal`.
+- `appointment_time_range` is maintained by the appointment service as `[appointment_date, appointment_date + duration_minutes)` and has a GiST index for future range queries.
 
 Important modeling note:
 
-- appointments do not store `service_id`
-- they store service snapshot fields:
+- appointments may store nullable `service_id` for structured service reporting and automation logic
+- appointments still store service snapshot fields for historical accuracy:
   - `service_name`
   - `duration_minutes`
   - `price`
+- if the catalog service is deleted, `service_id` is cleared while the snapshot fields remain
 
 ### `public.services`
 
@@ -954,6 +958,111 @@ Relationships:
 
 - `user_id -> users.id`
 
+### `public.client_communication_preferences`
+
+Purpose:
+
+- Durable per-business-owner communication preferences for a client/contact.
+- Email appointment communication defaults on through DB defaults.
+- SMS defaults off until explicit opt-in.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `client_id`
+- `stylist_id`
+- `email`
+- `email_normalized`
+- `phone`
+- `phone_normalized`
+- email preference booleans and email opt-out metadata
+- SMS preference booleans, SMS opt-in metadata, and SMS opt-out metadata
+- `created_at`
+- `updated_at`
+
+Important constraints:
+
+- unique `(user_id, email_normalized)` when `email_normalized is not null`
+- unique `(user_id, phone_normalized)` when `phone_normalized is not null`
+- at least one normalized contact is required
+
+### `public.communication_events`
+
+Purpose:
+
+- Append log for attempted sends, sent messages, skipped sends, failures, unsubscribe events, and inbound SMS events.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `client_id`
+- `stylist_id`
+- `channel`
+- `message_type`
+- `to_address`
+- `to_normalized`
+- `provider`
+- `provider_message_id`
+- `status`
+- `error_code`
+- `error_message`
+- `metadata`
+- `created_at`
+
+### `public.communication_consent_events`
+
+Purpose:
+
+- Immutable audit log for opt-ins, opt-outs, preference updates, inbound SMS, unsubscribe-link clicks, admin updates, imports, and system consent events.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `client_id`
+- `stylist_id`
+- `channel`
+- `contact_value`
+- `contact_normalized`
+- `event_type`
+- `source`
+- `message_type`
+- `consent_text`
+- `ip_address`
+- `user_agent`
+- `metadata`
+- `created_at`
+
+### `public.communication_preference_tokens`
+
+Purpose:
+
+- Stores hashed public tokens for unsubscribe/manage-preferences and future SMS opt-in/out links.
+
+Fields actively used:
+
+- `id`
+- `token_hash`
+- `user_id`
+- `client_id`
+- `stylist_id`
+- `channel`
+- `contact_value`
+- `contact_normalized`
+- `message_type`
+- `action`
+- `expires_at`
+- `used_at`
+- `created_at`
+
+Important constraints:
+
+- `token_hash` is unique.
+- Only the SHA-256 hash of the raw token is stored.
+- Raw tokens are generated for URLs and never persisted.
+
 ---
 
 ## 7. Route-by-Route API Reference
@@ -1226,6 +1335,7 @@ Important waitlist distinction:
 - Validator: `createAppointmentSchema`
 - Request body:
   - `client_id`
+  - optional nullable `service_id`
   - `appointment_date`
   - `service_name`
   - `duration_minutes`
@@ -1235,6 +1345,7 @@ Important waitlist distinction:
   - optional `booking_source`, default `internal`
 - Main logic:
   - verifies client ownership
+  - verifies service ownership when `service_id` is supplied
   - checks overlap conflicts unless `status === "cancelled"`
   - inserts appointment
   - records `booking_created` activity event for every created appointment, including internal ones
@@ -1250,6 +1361,7 @@ Important waitlist distinction:
 - Purpose: generic appointment mutation
 - Fields allowed by schema:
   - `client_id`
+  - `service_id`
   - `appointment_date`
   - `service_name`
   - `duration_minutes`
@@ -1260,6 +1372,7 @@ Important waitlist distinction:
 - Main logic:
   - verifies appointment ownership
   - verifies new client ownership if `client_id` changes
+  - verifies service ownership if `service_id` changes to a non-null value
   - re-checks conflicts if date/duration/status changes and resulting status is not `cancelled`
   - creates activity rows for:
     - transition into `cancelled`
@@ -1497,7 +1610,7 @@ Important waitlist distinction:
 - Purpose: hard-delete a service row
 - Response: `204 No Content`
 - Important note:
-  - appointments do not reference `service_id`, so deleting a service does not affect historical appointment snapshots
+  - appointments reference `service_id` with `on delete set null`, so deleting a service clears the catalog link but keeps historical appointment snapshots
 
 ### 7.31A `GET /api/off-days`
 
@@ -1853,6 +1966,7 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - uses a valid booking context token for existing/new-client rule validation when provided
   - otherwise rematches the client directly from submitted contact info
   - can create `status = scheduled` or `status = pending`
+  - stores `service_id` plus snapshot fields `service_name`, `duration_minutes`, and `price`
   - writes `booking_source = public`
   - on exact duplicate repeat submission for the same client/service/start/duration, returns the existing appointment confirmation instead of creating a second row
 
@@ -1929,11 +2043,12 @@ Final booking validates the service in `publicBookingsService.create()`:
 
 Services used in booking are snapshots only. The created appointment stores:
 
+- `service_id`
 - `service_name`
 - `duration_minutes`
 - `price`
 
-It does not store `service_id`.
+`service_id` is a nullable structured catalog link. Snapshot fields are still used for historical accuracy.
 
 ### 8.5 Public service visibility
 
@@ -2299,6 +2414,8 @@ Any change to:
 
 while resulting status is not `cancelled` is treated as reschedule/timing update for activity purposes.
 
+The appointment service also rebuilds `appointment_time_range` from the resulting `appointment_date` and `duration_minutes` whenever either timing field changes. If a partial update changes only one timing field, the other value is loaded from the existing appointment. Updates that change neither timing field leave the stored range untouched.
+
 ### Cancellation behavior
 
 Current code only writes `"cancelled_by": "stylist"` in created cancellation activity events.
@@ -2490,12 +2607,12 @@ Create requires:
 ### Service delete behavior
 
 - hard delete
-- no guard against deleting services referenced by historical appointments because appointments only store snapshots
+- appointment `service_id` links are cleared through `on delete set null`; snapshot fields remain on appointments
 
 ### Relevant mismatches and notes
 
 - Private and public service contracts do not match.
-- Historical appointments are not relationally tied to services.
+- Historical appointments keep service snapshots and may also retain a structured `service_id` while the catalog service exists.
 
 ---
 
@@ -2597,6 +2714,10 @@ Stored in the database or entitlement config:
 - `reminders.reminder_type`
 - `users.sms_monthly_limit`
 - `users.sms_used_this_month`
+- `client_communication_preferences`
+- `communication_events`
+- `communication_consent_events`
+- `communication_preference_tokens`
 - plan features:
   - `emailReminders`
   - `smsReminders`
@@ -2620,6 +2741,20 @@ What exists today:
 - provider state fields on appointment email events: `status`, `provider`, `provider_message_id`, `sent_at`, and `error`
 - delivery retry fields on appointment email events: `attempt_count` and `last_attempt_at`
 - retry handling for `failed` rows and stale `sending` rows
+- centralized email/SMS send eligibility checks in `communicationPreferencesService.canSendCommunication()`
+- lazy creation of email communication preference rows for new email contacts
+- SMS opt-in helper support that requires explicit consent text before enabling SMS preferences
+- durable communication preference, send/skip, consent-audit, and hashed-token tables
+- public unsubscribe links that consume hashed preference tokens without exposing internal IDs
+- inbound SMS STOP/START/HELP handling foundation for future SMS provider webhooks
+
+SMS safety behavior:
+
+- outbound SMS is not sent anywhere in this repo yet
+- future SMS senders must use `canSendCommunication({ channel: "sms", ... })`
+- SMS send checks return `missing_sms_consent` unless a preference row has explicit `sms_opted_in_at`
+- inbound STOP disables all SMS preference flags for matching `phone_normalized` rows
+- inbound START restores transactional/reminder SMS only and does not enable marketing/rebooking SMS
 
 Internal trigger:
 
@@ -2638,6 +2773,23 @@ What does not exist:
 - external scheduler configuration for calling the appointment email queue trigger
 - reminder delivery pipeline
 - automatic reminder send triggers
+- concrete outbound SMS provider delivery
+
+Public communication endpoints:
+
+- `GET /api/communications/unsubscribe/:token`
+  - no login required
+  - consumes a raw token by hashing it and looking up `communication_preference_tokens.token_hash`
+  - updates `client_communication_preferences`
+  - logs `communication_consent_events.unsubscribe_link_clicked`
+  - logs `communication_events.unsubscribed`
+  - returns safe HTML confirmation or a safe invalid/expired response
+- `POST /api/communications/sms/inbound`
+  - accepts Twilio-like `From`, `To`, `Body`, and `MessageSid`
+  - recognizes STOP keywords: `STOP`, `STOPALL`, `UNSUBSCRIBE`, `CANCEL`, `END`, `QUIT`, `REVOKE`, `OPTOUT`
+  - recognizes START keywords: `START`, `YES`, `UNSTOP`
+  - recognizes HELP keywords: `HELP`, `INFO`
+  - updates SMS preferences and writes audit/send events for matching contacts
 
 ---
 
@@ -2932,7 +3084,9 @@ These are visible in the current code and should be treated as implementation re
 ### Messaging and reminders
 
 - Appointment email queueing and provider-neutral processing exist. Resend delivery is used when `RESEND_API_KEY` and `EMAIL_FROM` are configured; processing refuses to use the noop provider unless explicitly requested.
-- No SMS delivery implementation exists.
+- Appointment email processing checks `client_communication_preferences` before provider send and writes `communication_events` for sent, skipped, and failed attempts.
+- Preference tokens and public unsubscribe links exist for non-essential email categories.
+- SMS consent and inbound STOP/START/HELP preference handling exist, but no outbound SMS provider delivery exists.
 - Reminder records and activity events exist, but sending is out of scope in this repo.
 - `entitlementsService.assertSmsAvailable()` exists but is not wired into reminder mutation routes.
 
@@ -2999,9 +3153,8 @@ These are visible in the current code and should be treated as implementation re
 
 ### Schema/code drift
 
-- The aligned schema includes `users.location_label`, `avatar_image_id`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, and `waitlist_enabled`.
-- These columns are not present in the checked-in base `supabase/schema.sql`.
-- They may exist in the live database but are not fully represented in the baseline schema file.
+- The aligned schema includes `users.location_label`, `avatar_image_id`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, `waitlist_enabled`, and the communication preference/event/consent/token tables.
+- The checked-in schema and forward migrations represent the columns/tables the code expects. Production must still be updated manually when GitHub/Supabase migration automation is not connected.
 
 ### RLS coverage
 

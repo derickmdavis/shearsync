@@ -5,6 +5,11 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import type { AppointmentEmailType } from "./appointmentEmailEventsService";
+import type { MessageType } from "../lib/communications";
+import { normalizeEmail } from "../lib/communications";
+import { communicationEventsService } from "./communicationEvents";
+import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
+import { communicationPreferencesService } from "./communicationPreferences";
 
 export interface EmailMessage {
   to: string;
@@ -60,11 +65,15 @@ interface AppointmentEmailTemplateData {
   management_url?: string | null;
   cancelled_by?: "client" | "stylist";
   status?: string;
+  unsubscribe_url?: string | null;
+  unsubscribe_label?: string | null;
+  message_type?: MessageType;
 }
 
 const defaultProcessLimit = 25;
 const defaultMaxAttempts = 3;
 const defaultStaleSendingAfterMinutes = 15;
+const nonEssentialMessageTypes: MessageType[] = ["appointment_reminder", "rebooking_prompt", "marketing", "business_recap"];
 
 const noopEmailProvider: EmailProvider = {
   async send(): Promise<EmailProviderResult> {
@@ -145,6 +154,73 @@ const getAppointmentManagementUrl = (
   return `${baseUrl.replace(/\/+$/, "")}/appointments/manage/${encodeURIComponent(managementToken)}`;
 };
 
+const getCommunicationBaseUrl = (): string | null => env.WEB_APP_URL ?? env.CLIENT_APP_URL ?? null;
+
+const getAppointmentMessageType = (emailType: AppointmentEmailType): MessageType => {
+  switch (emailType) {
+    case "appointment_cancelled":
+      return "appointment_cancelled";
+    case "appointment_rescheduled":
+      return "appointment_rescheduled";
+    case "appointment_scheduled":
+    case "appointment_pending":
+    case "appointment_confirmed":
+      return "appointment_confirmation";
+  }
+};
+
+const getEmailEventMessageType = (emailEvent: Row): MessageType => {
+  const templateMessageType = normalizeTemplateData(emailEvent.template_data).message_type;
+  if (typeof emailEvent.message_type === "string") {
+    return emailEvent.message_type as MessageType;
+  }
+
+  if (typeof templateMessageType === "string" && nonEssentialMessageTypes.includes(templateMessageType)) {
+    return templateMessageType;
+  }
+
+  return getAppointmentMessageType(emailEvent.email_type as AppointmentEmailType);
+};
+
+const getUnsubscribeLabel = (messageType: MessageType): string | null => {
+  if (messageType === "appointment_reminder") {
+    return "Unsubscribe from appointment reminders";
+  }
+
+  if (["rebooking_prompt", "marketing", "business_recap"].includes(messageType)) {
+    return "Unsubscribe from non-essential emails";
+  }
+
+  return null;
+};
+
+const getUnsubscribeUrl = async (
+  emailEvent: Row,
+  messageType: MessageType,
+  recipientEmail: string
+): Promise<string | null> => {
+  const label = getUnsubscribeLabel(messageType);
+  const baseUrl = getCommunicationBaseUrl();
+  const userId = typeof emailEvent.user_id === "string" ? emailEvent.user_id : null;
+
+  if (!label || !baseUrl || !userId) {
+    return null;
+  }
+
+  const token = await communicationPreferenceTokensService.createCommunicationPreferenceToken({
+    userId,
+    clientId: typeof emailEvent.client_id === "string" ? emailEvent.client_id : null,
+    stylistId: typeof emailEvent.stylist_id === "string" ? emailEvent.stylist_id : userId,
+    channel: "email",
+    contactValue: recipientEmail,
+    messageType,
+    action: "unsubscribe",
+    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365)
+  });
+
+  return `${baseUrl.replace(/\/+$/, "")}/api/communications/unsubscribe/${encodeURIComponent(token)}`;
+};
+
 const getSubject = (emailType: AppointmentEmailType, serviceName: string, businessName: string): string => {
   switch (emailType) {
     case "appointment_scheduled":
@@ -218,6 +294,8 @@ export const renderAppointmentEmail = (
   const managementUrl = getAppointmentManagementUrl(templateData, options.appointmentManagementBaseUrl);
   const intro = getIntro(emailType, templateData, businessName);
   const contactLine = getContactLine(templateData, businessName);
+  const unsubscribeUrl = templateData.unsubscribe_url ?? null;
+  const unsubscribeLabel = getString(templateData.unsubscribe_label, "Manage communication preferences");
   const details = [
     `Service: ${serviceName}`,
     `Time: ${appointmentTime}`,
@@ -232,6 +310,7 @@ export const renderAppointmentEmail = (
     "",
     ...details,
     ...(contactLine ? ["", contactLine] : []),
+    ...(unsubscribeUrl ? ["", `${unsubscribeLabel}: ${unsubscribeUrl}`] : []),
     "",
     `Thank you,`,
     businessName
@@ -250,8 +329,33 @@ export const renderAppointmentEmail = (
       `<p>${escapeHtml(intro)}</p>`,
       `<ul>${detailItems}</ul>`,
       ...(contactLine ? [`<p>${escapeHtml(contactLine)}</p>`] : []),
+      ...(unsubscribeUrl ? [`<p><a href="${escapeHtml(unsubscribeUrl)}">${escapeHtml(unsubscribeLabel)}</a></p>`] : []),
       `<p>Thank you,<br>${escapeHtml(businessName)}</p>`
     ].join("")
+  };
+};
+
+const prepareEmailMessage = async (
+  emailEvent: Row,
+  options: { appointmentManagementBaseUrl?: string } = {}
+): Promise<{ message: EmailMessage; messageType: MessageType; toNormalized: string | null }> => {
+  const messageType = getEmailEventMessageType(emailEvent);
+  const recipientEmail = getString(emailEvent.recipient_email, "");
+  const unsubscribeUrl = await getUnsubscribeUrl(emailEvent, messageType, recipientEmail);
+  const unsubscribeLabel = getUnsubscribeLabel(messageType);
+  const templateData = normalizeTemplateData(emailEvent.template_data);
+
+  return {
+    message: renderAppointmentEmail({
+      ...emailEvent,
+      template_data: {
+        ...templateData,
+        ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+        ...(unsubscribeLabel ? { unsubscribe_label: unsubscribeLabel } : {})
+      }
+    }, options),
+    messageType,
+    toNormalized: normalizeEmail(recipientEmail)
   };
 };
 
@@ -416,7 +520,46 @@ export const appointmentEmailDeliveryService = {
       result.processed += 1;
 
       try {
-        const message = renderAppointmentEmail(claimedEvent, {
+        const userId = typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "";
+        const clientId = typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null;
+        const stylistId = typeof claimedEvent.stylist_id === "string" ? claimedEvent.stylist_id : userId || null;
+        const messageType = getEmailEventMessageType(claimedEvent);
+        const recipientEmail = getString(claimedEvent.recipient_email, "");
+        const canSend = userId
+          ? await communicationPreferencesService.canSendCommunication({
+            userId,
+            clientId,
+            stylistId,
+            channel: "email",
+            to: recipientEmail,
+            messageType
+          })
+          : { canSend: false, reason: "missing_contact" as const, toNormalized: normalizeEmail(recipientEmail) ?? undefined };
+
+        if (!canSend.canSend) {
+          const status = canSend.reason === "missing_sms_consent" ? "skipped_missing_consent" : "skipped_opted_out";
+          await communicationEventsService.logCommunicationEvent({
+            userId: userId || "unknown",
+            clientId,
+            stylistId,
+            channel: "email",
+            messageType,
+            toAddress: recipientEmail,
+            toNormalized: canSend.toNormalized ?? normalizeEmail(recipientEmail),
+            provider: null,
+            status,
+            errorCode: canSend.reason ?? null,
+            metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+          });
+          await markEmailEvent(String(claimedEvent.id ?? ""), {
+            status: "skipped",
+            error: canSend.reason ?? "Communication preference blocked send"
+          });
+          result.skipped += 1;
+          continue;
+        }
+
+        const { message, toNormalized } = await prepareEmailMessage(claimedEvent, {
           appointmentManagementBaseUrl: options.appointmentManagementBaseUrl
         });
         const providerResult = await provider.send(message);
@@ -430,6 +573,19 @@ export const appointmentEmailDeliveryService = {
             error: null
           });
           result.sent += 1;
+          await communicationEventsService.logCommunicationEvent({
+            userId,
+            clientId,
+            stylistId,
+            channel: "email",
+            messageType,
+            toAddress: recipientEmail,
+            toNormalized,
+            provider: providerResult.provider,
+            providerMessageId: providerResult.providerMessageId ?? null,
+            status: "sent",
+            metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+          });
           continue;
         }
 
@@ -440,11 +596,39 @@ export const appointmentEmailDeliveryService = {
           error: providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
         });
         result.skipped += 1;
+        await communicationEventsService.logCommunicationEvent({
+          userId,
+          clientId,
+          stylistId,
+          channel: "email",
+          messageType,
+          toAddress: recipientEmail,
+          toNormalized,
+          provider: providerResult.provider,
+          providerMessageId: providerResult.providerMessageId ?? null,
+          status: "failed",
+          errorMessage: providerResult.error ?? null,
+          metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to send appointment email";
         await markEmailEvent(String(claimedEvent.id ?? ""), {
           status: "failed",
           error: message
+        });
+        await communicationEventsService.logCommunicationEvent({
+          userId: typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "unknown",
+          clientId: typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null,
+          stylistId: typeof claimedEvent.stylist_id === "string"
+            ? claimedEvent.stylist_id
+            : typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : null,
+          channel: "email",
+          messageType: getEmailEventMessageType(claimedEvent),
+          toAddress: getString(claimedEvent.recipient_email, ""),
+          toNormalized: normalizeEmail(getString(claimedEvent.recipient_email, "")),
+          status: "failed",
+          errorMessage: message,
+          metadata: { appointment_email_event_id: claimedEvent.id ?? null }
         });
         result.failed += 1;
       }

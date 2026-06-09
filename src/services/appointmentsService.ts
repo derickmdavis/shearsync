@@ -9,6 +9,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import { activityEventsService } from "./activityEventsService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
+import { servicesService } from "./servicesService";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
 const appointmentSlotConstraintName = "appointments_user_id_appointment_date_active_idx";
@@ -33,6 +34,9 @@ const toDurationMinutes = (value: unknown): number => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const toAppointmentTimeRange = (appointmentDate: string, durationMinutes: number): string =>
+  `[${appointmentDate},${getAppointmentEndIso(appointmentDate, durationMinutes)})`;
 
 const formatTimeText = (minutes: number): { hour: number; minute: number } => ({
   hour: Math.floor(minutes / 60),
@@ -243,14 +247,20 @@ export const appointmentsService = {
 
   async create(userId: string, payload: Row, options: AppointmentCreateOptions = {}): Promise<Row> {
     await clientsService.assertOwned(userId, payload.client_id as string);
+    if (typeof payload.service_id === "string") {
+      await servicesService.assertOwned(userId, payload.service_id);
+    }
+
     const bookingSource = (payload.booking_source as BookingSource | undefined) ?? "internal";
     const slotConflictMessage = options.slotConflictMessage ?? appointmentSlotConflictMessage;
+    const appointmentDate = payload.appointment_date as string;
+    const durationMinutes = toDurationMinutes(payload.duration_minutes);
 
     if (payload.status !== "cancelled") {
       const conflict = await this.hasSlotConflict(
         userId,
-        payload.appointment_date as string,
-        toDurationMinutes(payload.duration_minutes)
+        appointmentDate,
+        durationMinutes
       );
 
       if (conflict) {
@@ -260,7 +270,12 @@ export const appointmentsService = {
 
     const { data, error } = await supabaseAdmin
       .from("appointments")
-      .insert({ ...payload, booking_source: bookingSource, user_id: userId })
+      .insert({
+        ...payload,
+        booking_source: bookingSource,
+        user_id: userId,
+        appointment_time_range: toAppointmentTimeRange(appointmentDate, durationMinutes)
+      })
       .select("*")
       .single();
 
@@ -286,16 +301,21 @@ export const appointmentsService = {
       await clientsService.assertOwned(userId, updates.client_id as string);
     }
 
+    if (typeof updates.service_id === "string") {
+      await servicesService.assertOwned(userId, updates.service_id);
+    }
+
+    const hasTimingUpdate = updates.appointment_date !== undefined || updates.duration_minutes !== undefined;
+    const nextAppointmentDate = (updates.appointment_date as string | undefined)
+      ?? (existingAppointment.appointment_date as string);
+    const nextDurationMinutes = toDurationMinutes(
+      updates.duration_minutes ?? existingAppointment.duration_minutes
+    );
+
     if (
-      updates.appointment_date !== undefined ||
-      updates.duration_minutes !== undefined ||
+      hasTimingUpdate ||
       updates.status !== undefined
     ) {
-      const nextAppointmentDate = (updates.appointment_date as string | undefined)
-        ?? (existingAppointment.appointment_date as string);
-      const nextDurationMinutes = toDurationMinutes(
-        updates.duration_minutes ?? existingAppointment.duration_minutes
-      );
       const nextStatus = (updates.status as string | undefined) ?? (existingAppointment.status as string | undefined);
 
       if (nextStatus !== "cancelled") {
@@ -307,9 +327,16 @@ export const appointmentsService = {
       }
     }
 
+    const appointmentUpdates = {
+      ...updates,
+      ...(hasTimingUpdate ? {
+        appointment_time_range: toAppointmentTimeRange(nextAppointmentDate, nextDurationMinutes)
+      } : {})
+    };
+
     const { data, error } = await supabaseAdmin
       .from("appointments")
-      .update(updates)
+      .update(appointmentUpdates)
       .eq("id", appointmentId)
       .eq("user_id", userId)
       .select("*")

@@ -4,6 +4,12 @@ import { isoDateSchema, isoDateTimeSchema } from "./common";
 
 export const activityTypeSchema = z.enum(ACTIVITY_TYPES);
 export const activityCategorySchema = z.enum(ACTIVITY_CATEGORIES);
+export const automationControlKeySchema = z.enum([
+  "rebook_nudges",
+  "appointment_reminders",
+  "no_show_follow_up",
+  "waitlist_match"
+]);
 
 const isValidDateString = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -40,6 +46,14 @@ export const listActivityQuerySchema = z.object({
     path: ["end_date"]
   }
 );
+
+export const automationSettingParamSchema = z.object({
+  key: automationControlKeySchema
+});
+
+export const updateAutomationSettingSchema = z.object({
+  enabled: z.boolean()
+});
 
 const bookingCreatedMetadataSchema = z.object({
   client_name: z.string().min(1),

@@ -286,6 +286,7 @@ export const publicBookingsService = {
     try {
       const appointment = await appointmentsService.createForBooking(userId, {
         client_id: client.id,
+        service_id: service.id,
         appointment_date: requestedDateTime,
         service_name: service.name,
         duration_minutes: serviceDurationMinutes,

@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "202605210001_dedupe_appointment_email_events";
+const REQUIRED_SCHEMA_VERSION = "202606030001_align_user_owned_events_and_profile_schema";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [

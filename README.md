@@ -2,7 +2,7 @@
 
 ShearSync API is the initial MVP backend for a mobile-first CRM for hair stylists. It is one Node.js, TypeScript, and Express API intended for Railway, with Supabase handling Auth, Postgres, and Storage.
 
-Messaging, formulas, payments, background jobs, team roles, and a second API are intentionally not included.
+Payments, background jobs, team roles, and a second API are intentionally not included. Appointment email delivery, communication preferences, unsubscribe links, and SMS consent/STOP handling are backend-supported.
 
 ## Stack
 
@@ -63,7 +63,7 @@ Railway uses `npm run build` and `npm run start` from `railway.json`.
 
 The API validates bearer tokens through Supabase Auth using the configured `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Authenticated business data is also scoped by `user_id` in every service query.
 
-The API requires the production schema through `202605210001_dedupe_appointment_email_events`. Startup and `GET /health` fail clearly if required `users` or `clients` columns are missing.
+The API requires the production schema through `202606030001_align_user_owned_events_and_profile_schema` plus the communication preference tables represented in `supabase/schema.sql`. Startup and `GET /health` fail clearly if required `users` or `clients` columns are missing.
 
 ## Routes
 
@@ -113,6 +113,8 @@ Appointment contract notes:
 
 - Authenticated `POST /api/appointments` defaults `booking_source` to `internal`, ignores public booking rules, and only enforces ownership plus overlap protection.
 - Public booking creation stores `booking_source: "public"`.
+- Appointments can store nullable `service_id` for structured reporting/automation while keeping `service_name`, `duration_minutes`, and `price` as historical snapshots.
+- Appointment creates and timing updates maintain `appointment_time_range` from `appointment_date` and `duration_minutes`; current conflict checks still use the existing application overlap logic.
 - Public booking `notes` are stored on the appointment only; they are not copied into client/customer notes.
 - `GET /api/appointments/internal-context` returns `conflictFreeSlots` for a given date and duration. These are overlap-safe internal suggestions only; the response explicitly does not apply saved availability windows, public booking rules, or off-day checks.
 - `GET /api/appointments/:id` returns one authenticated stylist-owned appointment by appointment ID, with frontend-friendly detail aliases including `client_name`, `client_phone`, `client_email`, `client_preferred_contact_method`, `client_contact`, `start_time`, `end_time`, `services`, and `revenue` when derivable. `client_contact` uses the linked client's phone first, then email, and is `null` when no contact is available.
@@ -170,6 +172,11 @@ Public booking routes:
 - `POST /api/public/stylists/:slug/waitlist`
 - `POST /api/public/booking-intake`
 - `POST /api/public/bookings`
+
+Public communication routes:
+
+- `GET /api/communications/unsubscribe/:token`
+- `POST /api/communications/sms/inbound`
 
 ## Public Booking Flow
 
@@ -282,7 +289,8 @@ Current limitations:
 
 - No automatic cancellation matching.
 - No automatic booking from the waitlist.
-- No SMS or email notifications.
+- Appointment emails are implemented through the queued email processor; reminder delivery and outbound SMS delivery are not yet implemented.
+- SMS preference/consent checks and STOP/START/HELP inbound handling exist for future SMS provider integration.
 - No Stripe enforcement beyond the existing mocked/backend plan fields.
 - No automated expiration or cleanup.
 

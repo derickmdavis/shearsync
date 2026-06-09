@@ -141,6 +141,7 @@ POST /api/appointments
 ```json
 {
   "client_id": "client-uuid",
+  "service_id": "service-uuid",
   "appointment_date": "2026-07-06T08:30:00-06:00",
   "service_name": "Haircut",
   "duration_minutes": 60,

@@ -1457,4 +1457,294 @@ describe("Activity handlers", () => {
       mock.timers.reset();
     }
   });
+
+  it("returns backend-backed activity dashboard data and persists automation settings", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const serviceId = "55555555-5555-4555-8555-555555555555";
+    const waitlistEntryId = "66666666-6666-4666-8666-666666666666";
+    const followUpReminderId = "12121212-1212-4121-8121-121212121212";
+    const appointmentReminderId = "34343434-3434-4343-8343-343434343434";
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          service_id: serviceId,
+          appointment_date: "2026-06-07T17:00:00.000Z",
+          service_name: "Haircut",
+          duration_minutes: 60,
+          price: 75,
+          status: "cancelled",
+          booking_source: "internal",
+          created_at: "2026-06-01T12:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
+        }
+      ],
+      reminders: [
+        {
+          id: appointmentReminderId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-07T15:00:00.000Z",
+          status: "open",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-05T12:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
+        },
+        {
+          id: followUpReminderId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Review request",
+          due_date: "2026-06-08T15:00:00.000Z",
+          status: "open",
+          channel: "email",
+          reminder_type: "follow_up",
+          created_at: "2026-06-05T12:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
+        }
+      ],
+      waitlist_entries: [
+        {
+          id: waitlistEntryId,
+          user_id: userId,
+          client_id: clientId,
+          service_id: serviceId,
+          requested_date: "2026-06-07",
+          requested_time_preference: "afternoon",
+          client_name: "Sarah Miller",
+          client_email: "sarah@example.com",
+          client_phone: null,
+          note: null,
+          status: "active",
+          source: "public_booking",
+          created_at: "2026-06-04T12:00:00.000Z",
+          updated_at: "2026-06-04T12:00:00.000Z"
+        }
+      ],
+      activity_events: [
+        {
+          id: "98989898-9898-4989-8989-989898989898",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "appointment_cancelled",
+          title: "Sarah cancelled Haircut",
+          description: null,
+          occurred_at: "2026-06-05T18:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            service_name: "Haircut",
+            appointment_start_time: "2026-06-07T17:00:00.000Z",
+            cancelled_by: "client"
+          }
+        },
+        {
+          id: "78787878-7878-4787-8787-787878787878",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "reminder_sent",
+          title: "SMS reminder sent to Sarah",
+          description: null,
+          occurred_at: "2026-06-06T15:00:00.000Z",
+          metadata: {
+            client_name: "Sarah Miller",
+            channel: "sms",
+            reminder_type: "appointment_reminder",
+            appointment_start_time: "2026-06-07T17:00:00.000Z"
+          }
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "56565656-5656-4565-8565-565656565656",
+          user_id: userId,
+          status: "queued",
+          created_at: "2026-06-06T15:00:00.000Z"
+        }
+      ],
+      automation_settings: [
+        {
+          id: "90909090-9090-4909-8909-909090909090",
+          user_id: userId,
+          key: "waitlist_match",
+          enabled: false
+        }
+      ]
+    });
+
+    try {
+      const dashboardReq = createMockRequest({
+        user: { id: userId } as Request["user"]
+      });
+
+      const dashboardResponse = await runWithErrorHandler((request, res) => activityController.dashboard(request, res), dashboardReq);
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: {
+          needs_attention: {
+            cancellations_need_review_count: number;
+            waitlist_match_count: number;
+            pending_reminder_count: number;
+            queued_review_request_count: number;
+          };
+          cancellation_review_items: Array<{ appointment_id: string; review_status: string }>;
+          waitlist_matches: Array<{ waitlist_entry_id: string; matched_opening_start_time: string }>;
+          reminder_queue: Array<{ reminder_id: string; status: string }>;
+          review_request_queue: Array<{ review_request_id: string; status: string }>;
+          automation_health: { score: number; status: string };
+          automation_impact_this_week: { booked_count: number; reminders_sent_count: number };
+          automation_controls: Array<{ key: string; enabled: boolean; status_label: string }>;
+        };
+      }).data;
+
+      assert.deepEqual(payload.needs_attention, {
+        cancellations_need_review_count: 1,
+        waitlist_match_count: 1,
+        pending_reminder_count: 2,
+        queued_review_request_count: 1
+      });
+      assert.deepEqual(payload.cancellation_review_items.map((item) => [item.appointment_id, item.review_status]), [
+        [appointmentId, "pending"]
+      ]);
+      assert.deepEqual(payload.waitlist_matches.map((match) => [match.waitlist_entry_id, match.matched_opening_start_time]), [
+        [waitlistEntryId, "2026-06-07T17:00:00.000Z"]
+      ]);
+      assert.deepEqual(payload.reminder_queue.map((item) => [item.reminder_id, item.status]), [
+        [appointmentReminderId, "scheduled"],
+        [followUpReminderId, "scheduled"]
+      ]);
+      assert.deepEqual(payload.review_request_queue.map((item) => [item.review_request_id, item.status]), [
+        [followUpReminderId, "queued"]
+      ]);
+      assert.equal(payload.automation_health.score, 85);
+      assert.equal(payload.automation_health.status, "warning");
+      assert.equal(payload.automation_impact_this_week.booked_count, 0);
+      assert.equal(payload.automation_impact_this_week.reminders_sent_count, 1);
+      assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "2 scheduled");
+
+      const updateReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: { key: "waitlist_match" },
+        body: { enabled: true }
+      });
+
+      const updateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), updateReq);
+      assert.equal(updateResponse.statusCode, 200);
+      assert.equal(supabase.state.automation_settings[0]?.enabled, true);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns an empty activity dashboard without empty Supabase in filters", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const queryLog: Array<{ table: string; operation: "in"; column: string; values: unknown[] }> = [];
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [],
+      appointments: [],
+      reminders: [],
+      waitlist_entries: [],
+      activity_events: [],
+      appointment_email_events: [],
+      automation_settings: []
+    }, { queryLog });
+
+    try {
+      const dashboardReq = createMockRequest({
+        user: { id: userId } as Request["user"]
+      });
+
+      const dashboardResponse = await runWithErrorHandler((request, res) => activityController.dashboard(request, res), dashboardReq);
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: {
+          needs_attention: {
+            cancellations_need_review_count: number;
+            waitlist_match_count: number;
+            pending_reminder_count: number;
+            queued_review_request_count: number;
+          };
+          cancellation_review_count: number;
+          cancellation_review_items: unknown[];
+          waitlist_match_count: number;
+          waitlist_matches: unknown[];
+          pending_reminder_count: number;
+          scheduled_reminder_count: number;
+          reminder_queue: unknown[];
+          queued_review_request_count: number;
+          review_request_queue: unknown[];
+          automation_health: { score: number; status: string; failed_count: number; delayed_count: number; reasons: string[] };
+          automation_health_score: number;
+          automation_health_status: string;
+          failed_automation_count: number;
+          delayed_automation_count: number;
+          health_reasons: string[];
+          automation_impact_this_week: { booked_count: number; total_booking_activity_count: number; recovered_revenue_cents: number; reminders_sent_count: number; openings_filled_count: number };
+          recent_activity: unknown[];
+          automation_controls: unknown[];
+        };
+      }).data;
+
+      assert.deepEqual(payload.needs_attention, {
+        cancellations_need_review_count: 0,
+        waitlist_match_count: 0,
+        pending_reminder_count: 0,
+        queued_review_request_count: 0
+      });
+      assert.equal(payload.cancellation_review_count, 0);
+      assert.deepEqual(payload.cancellation_review_items, []);
+      assert.equal(payload.waitlist_match_count, 0);
+      assert.deepEqual(payload.waitlist_matches, []);
+      assert.equal(payload.pending_reminder_count, 0);
+      assert.equal(payload.scheduled_reminder_count, 0);
+      assert.deepEqual(payload.reminder_queue, []);
+      assert.equal(payload.queued_review_request_count, 0);
+      assert.deepEqual(payload.review_request_queue, []);
+      assert.deepEqual(payload.automation_health, {
+        score: 100,
+        status: "all_good",
+        failed_count: 0,
+        delayed_count: 0,
+        reasons: []
+      });
+      assert.equal(payload.automation_health_score, 100);
+      assert.equal(payload.automation_health_status, "all_good");
+      assert.equal(payload.failed_automation_count, 0);
+      assert.equal(payload.delayed_automation_count, 0);
+      assert.deepEqual(payload.health_reasons, []);
+      assert.deepEqual(payload.automation_impact_this_week, {
+        booked_count: 0,
+        total_booking_activity_count: 0,
+        recovered_revenue_cents: 0,
+        reminders_sent_count: 0,
+        openings_filled_count: 0
+      });
+      assert.deepEqual(payload.recent_activity, []);
+      assert.equal(payload.automation_controls.length, 4);
+      assert.equal(queryLog.some((entry) => entry.operation === "in" && entry.values.length === 0), false);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
 });

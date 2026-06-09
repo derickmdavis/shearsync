@@ -4101,6 +4101,10 @@ describe("API handlers", () => {
         }
       });
       assert.equal(supabase.state.appointments[0]?.status, "pending");
+      assert.equal(
+        supabase.state.appointments[0]?.appointment_time_range,
+        `[${requestedDateTime},${monday}T10:00:00.000Z)`
+      );
       assert.equal(supabase.state.appointments[0]?.notes, "Please keep volume low.");
       assert.equal(supabase.state.clients[0]?.notes, undefined);
       assert.equal(supabase.state.clients[0]?.phone_normalized, "+17205550102");
@@ -5103,6 +5107,7 @@ describe("API handlers", () => {
       });
       assert.equal(supabase.state.appointments.length, 1);
       assert.equal(supabase.state.appointments[0]?.client_id, "client-1");
+      assert.equal(supabase.state.appointments[0]?.service_id, ownedServiceId);
       assert.equal(supabase.state.appointments[0]?.booking_source, "public");
       assert.equal(supabase.state.appointment_email_events.length, 1);
       assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_scheduled");
@@ -5813,6 +5818,10 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 200);
       assert.equal((response.body as { data: { status: string } }).data.status, "pending");
       assert.equal(supabase.state.appointments[0]?.appointment_date, requestedDateTime);
+      assert.equal(
+        supabase.state.appointments[0]?.appointment_time_range,
+        `[${requestedDateTime},${newDate}T11:00:00.000Z)`
+      );
       assert.equal(supabase.state.appointments[0]?.status, "pending");
       assert.equal(supabase.state.activity_events[0]?.activity_type, "appointment_rescheduled");
       assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_rescheduled");

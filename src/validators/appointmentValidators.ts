@@ -6,6 +6,7 @@ export const bookingSourceSchema = z.enum(["public", "internal"]);
 
 export const createAppointmentSchema = z.object({
   client_id: z.string().uuid(),
+  service_id: z.string().uuid().nullable().optional(),
   appointment_date: isoDateTimeSchema,
   service_name: z.string().min(1).max(160),
   duration_minutes: z.number().int().positive().max(720),

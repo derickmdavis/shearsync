@@ -4,6 +4,10 @@ import { supabaseAdmin } from "../../lib/supabase";
 
 type TableRow = Record<string, unknown>;
 type TableState = Record<string, TableRow[]>;
+type QueryLogEntry = { table: string; operation: "in"; column: string; values: unknown[] };
+interface MockSupabaseOptions {
+  queryLog?: QueryLogEntry[];
+}
 type SortDirection = { column: string; ascending: boolean };
 type Filter =
   | { type: "eq"; column: string; value: unknown }
@@ -38,7 +42,8 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
 
   constructor(
     private readonly state: TableState,
-    private readonly table: string
+    private readonly table: string,
+    private readonly options: MockSupabaseOptions = {}
   ) {}
 
   select(_columns = "*", options?: SelectOptions) {
@@ -74,6 +79,7 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 
   in(column: string, values: unknown[]) {
+    this.options.queryLog?.push({ table: this.table, operation: "in", column, values: [...values] });
     this.filters.push({ type: "in", column, values });
     return this;
   }
@@ -312,9 +318,9 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 }
 
-export const installMockSupabase = (initialState: TableState) => {
+export const installMockSupabase = (initialState: TableState, options: MockSupabaseOptions = {}) => {
   const state = cloneState(initialState);
-  const restore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table));
+  const restore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
 
   return {
     state,

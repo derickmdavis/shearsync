@@ -108,7 +108,7 @@ Rebook calculation: client needs rebook when the latest non-cancelled past appoi
 | Method | Path | Input | Response | Database fields |
 |---|---|---|---|---|
 | `GET` | `/api/appointments/internal-context?date=YYYY-MM-DD&durationMinutes=90` | date, duration | `{ data: { date, mode: "conflict_free", respectsAvailability: false, respectsBookingRules: false, respectsOffDays: false, conflictFreeSlots, existingAppointments, blockedTimes: [] } }` | reads active `appointments`; does not read availability |
-| `POST` | `/api/appointments` | `client_id`, `appointment_date`, `service_name`, `duration_minutes`, optional `price`, `notes`, `status`, `booking_source` | `201 { data: Appointment }` | inserts `appointments` with `user_id`; records `activity_events.booking_created` |
+| `POST` | `/api/appointments` | `client_id`, optional `service_id`, `appointment_date`, `service_name`, `duration_minutes`, optional `price`, `notes`, `status`, `booking_source` | `201 { data: Appointment }` | inserts `appointments` with `user_id`; records `activity_events.booking_created` |
 | `PATCH` | `/api/appointments/:id` | partial appointment body | `{ data: Appointment }` | updates `appointments`; may record cancel/reschedule activity; may queue cancellation email |
 | `PATCH` | `/api/appointments/:id/decision` | `{ decision: "accept"|"reject" }` | `{ data: Appointment }` | pending accept updates `appointments.status="scheduled"` and queues confirmed email; reject updates `status="cancelled"` with cancellation side effects |
 | `GET` | `/api/appointments/:id/activity` | UUID | `{ data: { events } }` | reads `appointments` and `activity_events` |
@@ -334,7 +334,7 @@ Fields: `id`, `user_id`, `first_name`, `last_name`, `preferred_name`, `phone`, `
 
 ### `appointments`
 
-Fields: `id`, `user_id`, `client_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, nullable `appointment_time_range`, timestamps. DB/API default for `status` is `scheduled`; `booking_source` is non-null and defaults to `internal`. Active exact-start unique index exists in the checked-in schema on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps.
+Fields: `id`, `user_id`, `client_id`, nullable `service_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, nullable `appointment_time_range`, timestamps. DB/API default for `status` is `scheduled`; `booking_source` is non-null and defaults to `internal`. `service_id` references `services(id)` with `on delete set null` while `service_name`, `duration_minutes`, and `price` remain historical snapshots. `appointment_time_range` is maintained as `[appointment_date, appointment_date + duration_minutes)` on appointment create and timing updates, and has a GiST index in the checked-in schema. Active exact-start unique index exists in the checked-in schema on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps without using range queries yet.
 
 ### `photos`
 
@@ -351,6 +351,22 @@ Fields: `id`, `user_id`, `client_id`, nullable `appointment_id`, `activity_type`
 ### `appointment_email_events`
 
 Fields: `id`, `user_id`, `client_id`, `appointment_id`, `email_type`, `recipient_email`, `status`, `idempotency_key`, `provider`, `provider_message_id`, `template_data`, `error`, `attempt_count`, `last_attempt_at`, `sent_at`, timestamps. Unique index on `idempotency_key`.
+
+### `client_communication_preferences`
+
+Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `email`, `email_normalized`, `phone`, `phone_normalized`, email preference booleans, email opt-out timestamp/source, SMS preference booleans, SMS opt-in timestamp/source/text, SMS opt-out timestamp/source, timestamps. Unique indexes enforce one row per `(user_id, email_normalized)` and one row per `(user_id, phone_normalized)` when those normalized contacts are present.
+
+### `communication_events`
+
+Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, nullable `message_type`, `to_address`, `to_normalized`, `provider`, `provider_message_id`, `status`, `error_code`, `error_message`, `metadata`, `created_at`. Used for sent, skipped, failed, unsubscribed, and inbound SMS event logging.
+
+### `communication_consent_events`
+
+Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, `contact_value`, `contact_normalized`, `event_type`, `source`, nullable `message_type`, `consent_text`, `ip_address`, `user_agent`, `metadata`, `created_at`. This is append-only audit history for opt-in/opt-out and preference changes.
+
+### `communication_preference_tokens`
+
+Fields: `id`, `token_hash`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, `contact_value`, `contact_normalized`, nullable `message_type`, `action`, `expires_at`, `used_at`, `created_at`. Only token hashes are stored; raw tokens appear only in public URLs.
 
 ### `stylists`
 
@@ -385,6 +401,10 @@ Fields: `id`, `user_id`, nullable `client_id`, nullable `service_id`, `requested
 ### Appointment End
 
 Every appointment end is `new Date(start).getTime() + duration_minutes * 60_000`.
+
+### Appointment Time Range
+
+Appointment create/update logic stores `appointment_time_range` from the canonical start and duration. Partial timing updates reuse the existing date or duration so the range stays consistent.
 
 ### Appointment Overlap
 
@@ -511,7 +531,7 @@ Tests cover API routing/auth, activity, appointment email delivery, appointment 
 
 23. **Public booking uses wall-clock components from offset datetime.** This is deliberate but can surprise clients: an input with a different offset is interpreted as business-local date/time rather than the instant represented by the offset.
 
-24. **SMS entitlements are implemented but SMS sending is not.** `assertSmsAvailable()` and usage stubs exist, but no SMS delivery service is present.
+24. **SMS entitlements and consent checks exist, but outbound SMS sending is not implemented.** `assertSmsAvailable()` and usage stubs exist, `client_communication_preferences` records SMS consent, and inbound STOP/START handling updates preferences, but no SMS provider send service is present.
 
 25. **Photos are metadata only.** The API response says Supabase storage is expected, but no storage upload/signing integration exists in backend code.
 

@@ -15,6 +15,12 @@ const {
   renderAppointmentEmail
 } =
   require("../services/appointmentEmailDeliveryService") as typeof import("../services/appointmentEmailDeliveryService");
+const { communicationPreferencesService } =
+  require("../services/communicationPreferences") as typeof import("../services/communicationPreferences");
+const { communicationPreferenceTokensService } =
+  require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
+const { communicationsService } =
+  require("../services/communicationsService") as typeof import("../services/communicationsService");
 const { env } = require("../config/env") as typeof import("../config/env");
 const { internalController } =
   require("../controllers/internalController") as typeof import("../controllers/internalController");
@@ -22,6 +28,9 @@ const { requireInternalApiSecret } =
   require("../middleware/internalAuth") as typeof import("../middleware/internalAuth");
 const { errorHandler } = require("../middleware/errorHandler") as typeof import("../middleware/errorHandler");
 import type { EmailMessage, EmailProvider } from "../services/appointmentEmailDeliveryService";
+
+const TEST_USER_ID = "11111111-1111-1111-1111-111111111111";
+const TEST_CLIENT_ID = "22222222-2222-2222-2222-222222222222";
 
 interface MockResponse {
   statusCode: number;
@@ -139,6 +148,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_pending",
           recipient_email: "jane@example.com",
           status: "queued",
@@ -184,6 +195,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_confirmed",
           recipient_email: "jane@example.com",
           status: "queued",
@@ -213,6 +226,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_confirmed",
           recipient_email: "jane@example.com",
           status: "queued",
@@ -256,6 +271,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_cancelled",
           recipient_email: "jane@example.com",
           status: "queued",
@@ -301,6 +318,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_scheduled",
           recipient_email: "first@example.com",
           status: "queued",
@@ -312,6 +331,8 @@ describe("appointment email delivery", () => {
         },
         {
           id: "email-event-2",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_rescheduled",
           recipient_email: "second@example.com",
           status: "queued",
@@ -356,6 +377,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "failed-event",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_scheduled",
           recipient_email: "failed@example.com",
           status: "failed",
@@ -369,6 +392,8 @@ describe("appointment email delivery", () => {
         },
         {
           id: "stale-sending-event",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_rescheduled",
           recipient_email: "stale@example.com",
           status: "sending",
@@ -383,6 +408,8 @@ describe("appointment email delivery", () => {
         },
         {
           id: "fresh-sending-event",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_pending",
           recipient_email: "fresh@example.com",
           status: "sending",
@@ -396,6 +423,8 @@ describe("appointment email delivery", () => {
         },
         {
           id: "max-attempts-event",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_confirmed",
           recipient_email: "max@example.com",
           status: "failed",
@@ -475,6 +504,8 @@ describe("appointment email delivery", () => {
       appointment_email_events: [
         {
           id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
           email_type: "appointment_pending",
           recipient_email: "jane@example.com",
           status: "queued",
@@ -522,6 +553,203 @@ describe("appointment email delivery", () => {
         assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
         assert.equal(supabase.state.appointment_email_events[0]?.provider, "noop");
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips non-essential email when marketing preferences are disabled", async () => {
+    const supabase = installMockSupabase({
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email: "jane@example.com",
+          email_normalized: "jane@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: true,
+          email_marketing_enabled: false,
+          email_rebooking_enabled: true,
+          opted_out_all_email: false
+        }
+      ]
+    });
+
+    try {
+      const result = await communicationPreferencesService.canSendCommunication({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "Jane@Example.com",
+        messageType: "rebooking_prompt"
+      });
+
+      assert.equal(result.canSend, false);
+      assert.equal(result.reason, "opted_out");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("requires explicit SMS opt-in before allowing reminder texts", async () => {
+    const supabase = installMockSupabase({
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          phone: "(720) 555-0100",
+          phone_normalized: "+17205550100",
+          sms_transactional_enabled: true,
+          sms_reminders_enabled: true,
+          sms_marketing_enabled: false,
+          sms_rebooking_enabled: false,
+          opted_out_all_sms: false,
+          sms_opted_in_at: null
+        }
+      ]
+    });
+
+    try {
+      const missingConsent = await communicationPreferencesService.canSendCommunication({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        channel: "sms",
+        to: "(720) 555-0100",
+        messageType: "appointment_reminder"
+      });
+
+      assert.equal(missingConsent.canSend, false);
+      assert.equal(missingConsent.reason, "missing_sms_consent");
+
+      await communicationPreferencesService.optInSms({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        phone: "(720) 555-0100",
+        source: "booking_page",
+        consentText: "I agree to receive appointment text updates."
+      });
+
+      const optedIn = await communicationPreferencesService.canSendCommunication({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        channel: "sms",
+        to: "(720) 555-0100",
+        messageType: "appointment_reminder"
+      });
+
+      assert.equal(optedIn.canSend, true);
+      assert.equal(supabase.state.communication_consent_events.length, 1);
+      assert.equal(supabase.state.communication_consent_events[0]?.event_type, "opted_in");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("disables all SMS preferences on inbound STOP without enabling marketing on START", async () => {
+    const supabase = installMockSupabase({
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          phone: "(720) 555-0100",
+          phone_normalized: "+17205550100",
+          sms_transactional_enabled: true,
+          sms_reminders_enabled: true,
+          sms_marketing_enabled: true,
+          sms_rebooking_enabled: true,
+          opted_out_all_sms: false,
+          sms_opted_in_at: "2026-05-10T10:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const stopReply = await communicationsService.handleInboundSms({
+        from: "(720) 555-0100",
+        body: "STOP",
+        messageSid: "sms-message-1"
+      });
+
+      assert.match(stopReply, /unsubscribed/);
+      assert.equal(supabase.state.client_communication_preferences[0]?.opted_out_all_sms, true);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_transactional_enabled, false);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_marketing_enabled, false);
+      assert.equal(supabase.state.communication_consent_events[0]?.event_type, "inbound_stop");
+      assert.equal(supabase.state.communication_events[0]?.status, "inbound_stop");
+
+      await communicationsService.handleInboundSms({
+        from: "(720) 555-0100",
+        body: "START",
+        messageSid: "sms-message-2"
+      });
+
+      assert.equal(supabase.state.client_communication_preferences[0]?.opted_out_all_sms, false);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_transactional_enabled, true);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_reminders_enabled, true);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_marketing_enabled, false);
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_rebooking_enabled, false);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("stores only hashed unsubscribe tokens and applies safe unsubscribe responses", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          business_name: "Maya Johnson Hair"
+        }
+      ],
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email: "jane@example.com",
+          email_normalized: "jane@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: true,
+          email_marketing_enabled: true,
+          email_rebooking_enabled: true,
+          opted_out_all_email: false
+        }
+      ]
+    });
+
+    try {
+      const rawToken = await communicationPreferenceTokensService.createCommunicationPreferenceToken({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        contactValue: "jane@example.com",
+        messageType: "marketing",
+        action: "unsubscribe",
+        expiresAt: new Date("2099-01-01T00:00:00.000Z")
+      });
+
+      assert.ok(rawToken.length > 20);
+      assert.notEqual(supabase.state.communication_preference_tokens[0]?.token_hash, rawToken);
+      assert.equal(supabase.state.communication_preference_tokens[0]?.raw_token, undefined);
+
+      const confirmation = await communicationsService.unsubscribe(rawToken, {
+        ipAddress: "127.0.0.1",
+        userAgent: "test-agent"
+      });
+
+      assert.match(confirmation, /unsubscribed/);
+      assert.equal(supabase.state.client_communication_preferences[0]?.email_marketing_enabled, false);
+      assert.equal(supabase.state.client_communication_preferences[0]?.email_rebooking_enabled, false);
+      assert.equal(supabase.state.communication_consent_events[0]?.event_type, "unsubscribe_link_clicked");
+      assert.equal(supabase.state.communication_events[0]?.status, "unsubscribed");
+
+      await assert.rejects(
+        () => communicationsService.unsubscribe("invalid-token"),
+        (error) => error instanceof Error && error.message === "This unsubscribe link is invalid or expired."
+      );
     } finally {
       supabase.restore();
     }

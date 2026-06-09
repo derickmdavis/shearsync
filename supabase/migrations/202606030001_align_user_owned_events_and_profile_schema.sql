@@ -12,7 +12,24 @@ alter table public.clients
   add column if not exists deleted_reason text;
 
 alter table public.appointments
+  add column if not exists service_id uuid references public.services(id) on delete set null,
   add column if not exists appointment_time_range tstzrange;
+
+create index if not exists appointments_service_id_idx
+  on public.appointments(service_id);
+
+update public.appointments
+set appointment_time_range = tstzrange(
+  appointment_date,
+  appointment_date + (duration_minutes * interval '1 minute'),
+  '[)'
+)
+where appointment_time_range is null
+  and appointment_date is not null
+  and duration_minutes is not null;
+
+create index if not exists appointments_time_range_gist_idx
+  on public.appointments using gist (appointment_time_range);
 
 alter table public.services
   add column if not exists visible boolean not null default true;

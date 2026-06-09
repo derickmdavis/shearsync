@@ -126,6 +126,197 @@ create table if not exists public.appointment_email_events (
   check (status in ('queued', 'sending', 'sent', 'failed', 'skipped'))
 );
 
+create table if not exists public.client_communication_preferences (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  stylist_id uuid references public.users(id) on delete set null,
+  email text,
+  email_normalized text,
+  phone text,
+  phone_normalized text,
+  email_transactional_enabled boolean not null default true,
+  email_reminders_enabled boolean not null default true,
+  email_marketing_enabled boolean not null default true,
+  email_rebooking_enabled boolean not null default true,
+  opted_out_all_email boolean not null default false,
+  email_opted_out_at timestamptz,
+  email_opt_out_source text,
+  sms_transactional_enabled boolean not null default false,
+  sms_reminders_enabled boolean not null default false,
+  sms_marketing_enabled boolean not null default false,
+  sms_rebooking_enabled boolean not null default false,
+  opted_out_all_sms boolean not null default false,
+  sms_opted_in_at timestamptz,
+  sms_opt_in_source text,
+  sms_opt_in_text text,
+  sms_opted_out_at timestamptz,
+  sms_opt_out_source text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint client_communication_preferences_contact_check
+    check (email_normalized is not null or phone_normalized is not null)
+);
+
+create table if not exists public.communication_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  stylist_id uuid references public.users(id) on delete set null,
+  channel text not null,
+  message_type text,
+  to_address text,
+  to_normalized text,
+  provider text,
+  provider_message_id text,
+  status text not null,
+  error_code text,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint communication_events_channel_check
+    check (channel in ('email', 'sms')),
+  constraint communication_events_message_type_check
+    check (
+      message_type is null
+      or message_type in (
+        'appointment_confirmation',
+        'appointment_reminder',
+        'appointment_cancelled',
+        'appointment_rescheduled',
+        'waitlist_update',
+        'rebooking_prompt',
+        'marketing',
+        'business_recap'
+      )
+    ),
+  constraint communication_events_status_check
+    check (
+      status in (
+        'queued',
+        'sent',
+        'delivered',
+        'failed',
+        'skipped_opted_out',
+        'skipped_missing_consent',
+        'bounced',
+        'complained',
+        'unsubscribed',
+        'inbound_stop',
+        'inbound_start',
+        'inbound_help'
+      )
+    )
+);
+
+create table if not exists public.communication_consent_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  stylist_id uuid references public.users(id) on delete set null,
+  channel text not null,
+  contact_value text,
+  contact_normalized text,
+  event_type text not null,
+  source text not null,
+  message_type text,
+  consent_text text,
+  ip_address text,
+  user_agent text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint communication_consent_events_channel_check
+    check (channel in ('email', 'sms')),
+  constraint communication_consent_events_event_type_check
+    check (
+      event_type in (
+        'opted_in',
+        'opted_out',
+        'opted_back_in',
+        'preference_updated',
+        'inbound_stop',
+        'inbound_start',
+        'inbound_help',
+        'unsubscribe_link_clicked',
+        'admin_updated',
+        'imported'
+      )
+    ),
+  constraint communication_consent_events_source_check
+    check (
+      source in (
+        'booking_page',
+        'admin',
+        'unsubscribe_link',
+        'inbound_sms',
+        'manual',
+        'import',
+        'client_portal',
+        'system'
+      )
+    ),
+  constraint communication_consent_events_message_type_check
+    check (
+      message_type is null
+      or message_type in (
+        'appointment_confirmation',
+        'appointment_reminder',
+        'appointment_cancelled',
+        'appointment_rescheduled',
+        'waitlist_update',
+        'rebooking_prompt',
+        'marketing',
+        'business_recap'
+      )
+    )
+);
+
+create table if not exists public.communication_preference_tokens (
+  id uuid primary key default gen_random_uuid(),
+  token_hash text not null,
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  stylist_id uuid references public.users(id) on delete set null,
+  channel text not null,
+  contact_value text not null,
+  contact_normalized text not null,
+  message_type text,
+  action text not null,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint communication_preference_tokens_channel_check
+    check (channel in ('email', 'sms')),
+  constraint communication_preference_tokens_message_type_check
+    check (
+      message_type is null
+      or message_type in (
+        'appointment_confirmation',
+        'appointment_reminder',
+        'appointment_cancelled',
+        'appointment_rescheduled',
+        'waitlist_update',
+        'rebooking_prompt',
+        'marketing',
+        'business_recap'
+      )
+    ),
+  constraint communication_preference_tokens_action_check
+    check (action in ('unsubscribe', 'manage_preferences', 'sms_opt_in', 'sms_opt_out'))
+);
+
+create table if not exists public.automation_settings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  key text not null,
+  enabled boolean not null default true,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  constraint automation_settings_key_check
+    check (key in ('rebook_nudges', 'appointment_reminders', 'no_show_follow_up', 'waitlist_match')),
+  constraint automation_settings_user_key_unique unique (user_id, key)
+);
+
 create table if not exists public.stylists (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.users(id) on delete cascade,
@@ -257,12 +448,18 @@ create index if not exists appointments_user_id_date_idx on public.appointments(
 create unique index if not exists appointments_user_id_appointment_date_active_idx
   on public.appointments(user_id, appointment_date)
   where status <> 'cancelled';
+create index if not exists appointments_time_range_gist_idx
+  on public.appointments using gist (appointment_time_range);
 create index if not exists photos_user_id_client_id_idx on public.photos(user_id, client_id);
 create index if not exists reminders_user_id_due_date_idx on public.reminders(user_id, due_date);
 create index if not exists reminders_user_id_sent_at_idx on public.reminders(user_id, sent_at);
 create index if not exists booking_rules_user_id_idx on public.booking_rules(user_id);
 create index if not exists services_user_id_active_idx on public.services(user_id, is_active);
 create index if not exists services_user_id_sort_order_idx on public.services(user_id, sort_order);
+alter table public.appointments
+  add column if not exists service_id uuid references public.services(id) on delete set null;
+
+create index if not exists appointments_service_id_idx on public.appointments(service_id);
 create index if not exists availability_user_id_day_idx on public.availability(user_id, day_of_week);
 create index if not exists availability_user_id_day_audience_idx on public.availability(user_id, day_of_week, client_audience);
 create index if not exists stylist_off_days_user_id_idx on public.stylist_off_days(user_id);
@@ -282,6 +479,31 @@ create index if not exists appointment_email_events_user_status_idx
   on public.appointment_email_events(user_id, status, created_at);
 create index if not exists appointment_email_events_appointment_id_idx
   on public.appointment_email_events(appointment_id);
+create unique index if not exists client_communication_preferences_user_email_idx
+  on public.client_communication_preferences(user_id, email_normalized)
+  where email_normalized is not null;
+create unique index if not exists client_communication_preferences_user_phone_idx
+  on public.client_communication_preferences(user_id, phone_normalized)
+  where phone_normalized is not null;
+create index if not exists client_communication_preferences_client_id_idx
+  on public.client_communication_preferences(client_id);
+create index if not exists communication_events_user_created_at_idx
+  on public.communication_events(user_id, created_at desc);
+create index if not exists communication_events_client_created_at_idx
+  on public.communication_events(client_id, created_at desc);
+create index if not exists communication_events_contact_idx
+  on public.communication_events(channel, to_normalized, created_at desc);
+create index if not exists communication_consent_events_user_created_at_idx
+  on public.communication_consent_events(user_id, created_at desc);
+create index if not exists communication_consent_events_contact_idx
+  on public.communication_consent_events(channel, contact_normalized, created_at desc);
+create unique index if not exists communication_preference_tokens_token_hash_idx
+  on public.communication_preference_tokens(token_hash);
+create index if not exists communication_preference_tokens_contact_idx
+  on public.communication_preference_tokens(channel, contact_normalized, created_at desc);
+create index if not exists communication_preference_tokens_expires_at_idx
+  on public.communication_preference_tokens(expires_at);
+create index if not exists automation_settings_user_id_idx on public.automation_settings(user_id);
 
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
@@ -290,6 +512,11 @@ alter table public.photos enable row level security;
 alter table public.reminders enable row level security;
 alter table public.activity_events enable row level security;
 alter table public.appointment_email_events enable row level security;
+alter table public.client_communication_preferences enable row level security;
+alter table public.communication_events enable row level security;
+alter table public.communication_consent_events enable row level security;
+alter table public.communication_preference_tokens enable row level security;
+alter table public.automation_settings enable row level security;
 alter table public.stylists enable row level security;
 alter table public.booking_rules enable row level security;
 alter table public.services enable row level security;
