@@ -1818,6 +1818,58 @@ Important waitlist distinction:
   - only writes provided keys
 - Response: `{ data: BookingSettings }`
 
+### 7.39a `GET /api/settings/email-confirmations`
+
+- Auth: required
+- Controller: `settingsController.getAppointmentEmailTemplates`
+- Purpose: list configurable confirmation email templates for the current stylist
+- Supported `emailType` values:
+  - `appointment_scheduled`
+  - `appointment_pending`
+  - `appointment_confirmed`
+- Response: `{ data: AppointmentEmailTemplate[] }`
+- Each item includes:
+  - `emailType`
+  - `subjectTemplate`
+  - `customMessageBlock`
+  - `configured`
+  - `availableTokens`
+
+### 7.39b `PATCH /api/settings/email-confirmations/:emailType`
+
+- Auth: required
+- Validator: `appointmentEmailTemplateParamSchema`, `updateAppointmentEmailTemplateSchema`
+- Purpose: set the custom subject line and/or one custom plain-text block for a confirmation email type
+- Request body:
+  - `subjectTemplate?: string | null`, max 160 characters
+  - `customMessageBlock?: string | null`, max 4000 characters
+- Supported tokens:
+  - `{{client_name}}`
+  - `{{service_name}}`
+  - `{{appointment_time}}`
+  - `{{business_name}}`
+  - `{{business_phone}}`
+  - `{{business_email}}`
+  - `{{manage_appointment_url}}`
+- Unknown tokens are rejected.
+- The custom block is inserted after the standard intro and before appointment details. Greeting, appointment details, manage links, contact line, unsubscribe/preferences links, and sign-off remain system-controlled.
+- Response: `{ data: AppointmentEmailTemplate }`
+
+### 7.39c `DELETE /api/settings/email-confirmations/:emailType`
+
+- Auth: required
+- Validator: `appointmentEmailTemplateParamSchema`
+- Purpose: reset one confirmation email type to system defaults
+- Response: `{ data: AppointmentEmailTemplate }`
+
+### 7.39d `POST /api/settings/email-confirmations/:emailType/preview`
+
+- Auth: required
+- Validator: `appointmentEmailTemplateParamSchema`, `previewAppointmentEmailTemplateSchema`
+- Purpose: render a sample preview through the same appointment email renderer used for delivery
+- Request body matches the PATCH body.
+- Response: `{ data: { subject: string, text: string, html: string } }`
+
 ### 7.40 `GET /api/public/stylists/:slug`
 
 - Auth: public
@@ -2735,6 +2787,8 @@ What exists today:
 - appointment email outbox rows in `appointment_email_events`
 - appointment email event queueing for scheduled, pending, confirmed, cancelled, and rescheduled appointments
 - email-ready appointment template data including business identity, formatted appointment time range, appointment end time, timezone, contact info, management token, and management URL when app URL env is configured
+- stylist-owned confirmation email customizations in `appointment_email_templates` for subject lines and one fixed-position custom plain-text block
+- queue-time snapshots of confirmation customizations in `appointment_email_events.template_data.email_template`
 - provider-neutral appointment email rendering and queue processing in `appointmentEmailDeliveryService`
 - Resend provider delivery for appointment emails
 - an explicit opt-in noop email provider that marks appointment email events as `skipped`

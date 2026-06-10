@@ -5,6 +5,7 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
+import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
 
 export type AppointmentEmailType =
   | "appointment_scheduled"
@@ -37,6 +38,10 @@ interface AppointmentEmailTemplateData {
   management_url: string | null;
   cancelled_by?: "client" | "stylist";
   status?: string;
+  email_template?: {
+    subject_template?: string | null;
+    custom_message_block?: string | null;
+  };
 }
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
@@ -163,10 +168,11 @@ const buildTemplateData = async ({
   emailType: AppointmentEmailType;
   options: QueueAppointmentEmailOptions;
 }): Promise<AppointmentEmailTemplateData> => {
-  const [user, stylist, timeZone] = await Promise.all([
+  const [user, stylist, timeZone, emailTemplate] = await Promise.all([
     usersService.getById(stylistId),
     loadStylist(stylistId),
-    businessTimeZoneService.getForUser(stylistId)
+    businessTimeZoneService.getForUser(stylistId),
+    appointmentEmailTemplatesService.getSnapshotForUser(stylistId, emailType)
   ]);
   const appointmentStartTime = String(appointment.appointment_date ?? "");
   const durationMinutes = Number(appointment.duration_minutes ?? 0);
@@ -205,7 +211,8 @@ const buildTemplateData = async ({
       : {}),
     ...(emailType === "appointment_rescheduled"
       ? { status: String(appointment.status ?? "") }
-      : {})
+      : {}),
+    ...(emailTemplate ? { email_template: emailTemplate } : {})
   };
 };
 

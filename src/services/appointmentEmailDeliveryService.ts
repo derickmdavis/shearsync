@@ -10,6 +10,7 @@ import { normalizeEmail } from "../lib/communications";
 import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
 import { communicationPreferencesService } from "./communicationPreferences";
+import { appointmentEmailTemplatesService, renderEmailTemplateString } from "./appointmentEmailTemplatesService";
 
 export interface EmailMessage {
   to: string;
@@ -68,6 +69,10 @@ interface AppointmentEmailTemplateData {
   unsubscribe_url?: string | null;
   unsubscribe_label?: string | null;
   message_type?: MessageType;
+  email_template?: {
+    subject_template?: string | null;
+    custom_message_block?: string | null;
+  };
 }
 
 const defaultProcessLimit = 25;
@@ -253,6 +258,79 @@ const getSubject = (emailType: AppointmentEmailType, serviceName: string, busine
   }
 };
 
+const getTemplateVariables = (
+  templateData: AppointmentEmailTemplateData,
+  {
+    recipientName,
+    serviceName,
+    businessName,
+    appointmentTime,
+    managementUrl
+  }: {
+    recipientName: string;
+    serviceName: string;
+    businessName: string;
+    appointmentTime: string;
+    managementUrl: string | null;
+  }
+) => ({
+  client_name: recipientName,
+  service_name: serviceName,
+  appointment_time: appointmentTime,
+  business_name: businessName,
+  business_phone: getString(templateData.business_phone, ""),
+  business_email: getString(templateData.business_email, ""),
+  manage_appointment_url: managementUrl ?? ""
+});
+
+const renderConfiguredText = (
+  value: string | null | undefined,
+  variables: ReturnType<typeof getTemplateVariables>
+): string | null => {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    appointmentEmailTemplatesService.validateTemplatePayload({ customMessageBlock: trimmed });
+    return renderEmailTemplateString(trimmed, variables);
+  } catch {
+    return null;
+  }
+};
+
+const renderConfiguredSubject = (
+  emailType: AppointmentEmailType,
+  defaultSubject: string,
+  value: string | null | undefined,
+  variables: ReturnType<typeof getTemplateVariables>
+): string => {
+  if (!appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType)) {
+    return defaultSubject;
+  }
+
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed) {
+    return defaultSubject;
+  }
+
+  try {
+    appointmentEmailTemplatesService.validateTemplatePayload({ subjectTemplate: trimmed });
+    return renderEmailTemplateString(trimmed, variables) || defaultSubject;
+  } catch {
+    return defaultSubject;
+  }
+};
+
+const renderTextBlockLines = (value: string | null): string[] =>
+  value ? value.split(/\n{2,}/).map((line) => line.trim()).filter(Boolean) : [];
+
+const renderHtmlBlock = (value: string | null): string[] =>
+  renderTextBlockLines(value).map((paragraph) =>
+    `<p>${paragraph.split(/\n/).map((line) => escapeHtml(line)).join("<br>")}</p>`
+  );
+
 const getIntro = (emailType: AppointmentEmailType, templateData: AppointmentEmailTemplateData, businessName: string): string => {
   switch (emailType) {
     case "appointment_scheduled":
@@ -311,6 +389,23 @@ export const renderAppointmentEmail = (
   const managementUrl = getAppointmentManagementUrl(templateData, options.appointmentManagementBaseUrl);
   const intro = getIntro(emailType, templateData, businessName);
   const contactLine = getContactLine(templateData, businessName);
+  const templateVariables = getTemplateVariables(templateData, {
+    recipientName,
+    serviceName,
+    businessName,
+    appointmentTime,
+    managementUrl
+  });
+  const defaultSubject = getSubject(emailType, serviceName, businessName);
+  const subject = renderConfiguredSubject(
+    emailType,
+    defaultSubject,
+    templateData.email_template?.subject_template,
+    templateVariables
+  );
+  const customMessageBlock = appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType)
+    ? renderConfiguredText(templateData.email_template?.custom_message_block, templateVariables)
+    : null;
   const unsubscribeUrl = templateData.unsubscribe_url ?? null;
   const unsubscribeLabel = getString(templateData.unsubscribe_label, "Manage communication preferences");
   const details = [
@@ -324,6 +419,7 @@ export const renderAppointmentEmail = (
     `Hi ${recipientName},`,
     "",
     intro,
+    ...(customMessageBlock ? ["", customMessageBlock] : []),
     "",
     ...details,
     ...(contactLine ? ["", contactLine] : []),
@@ -338,12 +434,13 @@ export const renderAppointmentEmail = (
 
   return {
     to: recipientEmail,
-    subject: getSubject(emailType, serviceName, businessName),
+    subject,
     text,
     html: [
-      `<h1>${escapeHtml(getSubject(emailType, serviceName, businessName))}</h1>`,
+      `<h1>${escapeHtml(subject)}</h1>`,
       `<p>Hi ${escapeHtml(recipientName)},</p>`,
       `<p>${escapeHtml(intro)}</p>`,
+      ...renderHtmlBlock(customMessageBlock),
       `<ul>${detailItems}</ul>`,
       ...(contactLine ? [`<p>${escapeHtml(contactLine)}</p>`] : []),
       ...(unsubscribeUrl ? [`<p><a href="${escapeHtml(unsubscribeUrl)}">${escapeHtml(unsubscribeLabel)}</a></p>`] : []),

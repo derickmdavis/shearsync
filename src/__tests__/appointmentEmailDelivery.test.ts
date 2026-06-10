@@ -134,6 +134,59 @@ describe("appointment email delivery", () => {
     assert.match(message.html, /Maya Johnson Hair/);
   });
 
+  it("renders a custom confirmation subject and fixed-position message block", () => {
+    const message = renderAppointmentEmail(
+      {
+        id: "email-event-1",
+        email_type: "appointment_scheduled",
+        recipient_email: "jane@example.com",
+        template_data: {
+          recipient_name: "Jane Doe",
+          service_name: "Silk Press",
+          appointment_start_time: "2099-05-12T16:00:00.000Z",
+          appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 11:00 AM MDT",
+          duration_minutes: 60,
+          business_display_name: "Maya Johnson Hair",
+          business_phone: "(720) 555-0100",
+          business_email: "maya@example.com",
+          management_token: "manage-token",
+          email_template: {
+            subject_template: "{{business_name}} saved your {{service_name}} spot",
+            custom_message_block: "Please arrive 10 minutes early, {{client_name}}.\nBring inspiration photos if you have them."
+          }
+        }
+      },
+      { appointmentManagementBaseUrl: "https://book.example.com/" }
+    );
+
+    assert.equal(message.subject, "Maya Johnson Hair saved your Silk Press spot");
+    assert.match(message.text, /Your appointment with Maya Johnson Hair is confirmed\.\n\nPlease arrive 10 minutes early, Jane Doe\./);
+    assert.match(message.text, /Bring inspiration photos if you have them\.\n\nService: Silk Press/);
+    assert.match(message.html, /<p>Please arrive 10 minutes early, Jane Doe\.<br>Bring inspiration photos if you have them\.<\/p><ul>/);
+  });
+
+  it("escapes custom confirmation blocks in html output", () => {
+    const message = renderAppointmentEmail({
+      id: "email-event-1",
+      email_type: "appointment_confirmed",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        service_name: "Color",
+        appointment_start_time: "2099-05-12T16:00:00.000Z",
+        appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 11:00 AM MDT",
+        duration_minutes: 60,
+        business_display_name: "Maya Johnson Hair",
+        email_template: {
+          custom_message_block: "<script>alert('x')</script>"
+        }
+      }
+    });
+
+    assert.doesNotMatch(message.html, /<script>/);
+    assert.match(message.html, /&lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;/);
+  });
+
   it("processes queued events with an injected provider and marks them sent", async () => {
     const sentMessages: EmailMessage[] = [];
     const provider: EmailProvider = {
@@ -187,6 +240,70 @@ describe("appointment email delivery", () => {
       assert.equal(supabase.state.appointment_email_events[0]?.provider_message_id, "provider-message-1");
       assert.equal(supabase.state.appointment_email_events[0]?.sent_at, "2026-05-10T12:00:00.000Z");
       assert.equal(supabase.state.appointment_email_events[0]?.error, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("snapshots configured confirmation templates when queueing appointment emails", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: TEST_USER_ID,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "template-1",
+          user_id: TEST_USER_ID,
+          email_type: "appointment_scheduled",
+          subject_template: "{{business_name}} saved your {{service_name}} spot",
+          custom_message_block: "Please arrive 10 minutes early."
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const queued = await appointmentEmailEventsService.queueAppointmentEmail(
+        TEST_USER_ID,
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          service_name: "Silk Press",
+          appointment_date: "2099-05-12T16:00:00.000Z",
+          duration_minutes: 60,
+          status: "scheduled"
+        },
+        "appointment_scheduled"
+      );
+
+      assert.ok(queued);
+      assert.deepEqual(supabase.state.appointment_email_events[0]?.template_data && (supabase.state.appointment_email_events[0].template_data as Record<string, unknown>).email_template, {
+        subject_template: "{{business_name}} saved your {{service_name}} spot",
+        custom_message_block: "Please arrive 10 minutes early."
+      });
     } finally {
       supabase.restore();
     }

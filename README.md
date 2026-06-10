@@ -101,10 +101,15 @@ Authenticated routes:
 - `PUT /api/settings/availability`
 - `GET /api/settings/booking-rules`
 - `PATCH /api/settings/booking-rules`
+- `GET /api/settings/email-confirmations`
+- `PATCH /api/settings/email-confirmations/:emailType`
+- `DELETE /api/settings/email-confirmations/:emailType`
+- `POST /api/settings/email-confirmations/:emailType/preview`
 
 Client contract notes:
 
 - `GET /api/settings/booking` and `PATCH /api/settings/booking` include the stylist's business booking settings. The booking settings payload accepts optional `instagram`; the backend stores the handle without leading `@`.
+- Email confirmation settings support custom subject lines and one custom plain-text message block for `appointment_scheduled`, `appointment_pending`, and `appointment_confirmed`. The custom block is inserted after the standard intro and before appointment details; the rest of the email remains system-controlled.
 - `GET /api/clients` supports backend search, pagination, sorting, and supported filters. It returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`. See `docs/frontend-clients-list-contract.md`.
 - `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as the `rebook` category in `GET /api/activity`.
 - `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
@@ -290,6 +295,7 @@ Current limitations:
 - No automatic cancellation matching.
 - No automatic booking from the waitlist.
 - Appointment emails are implemented through the queued email processor; reminder delivery and outbound SMS delivery are not yet implemented.
+- Appointment confirmation email customizations are snapshotted when an email event is queued, so edits apply to future queued emails.
 - SMS preference/consent checks and STOP/START/HELP inbound handling exist for future SMS provider integration.
 - No Stripe enforcement beyond the existing mocked/backend plan fields.
 - No automated expiration or cleanup.

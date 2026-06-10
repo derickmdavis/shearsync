@@ -11,6 +11,21 @@ export const updateProfileSchema = z.object({
   waitlist_enabled: z.boolean().optional()
 });
 
+export const appointmentEmailTemplateParamSchema = z.object({
+  emailType: z.enum([
+    "appointment_scheduled",
+    "appointment_pending",
+    "appointment_confirmed"
+  ])
+});
+
+export const updateAppointmentEmailTemplateSchema = z.object({
+  subjectTemplate: z.string().max(160).nullable().optional(),
+  customMessageBlock: z.string().max(4000).nullable().optional()
+});
+
+export const previewAppointmentEmailTemplateSchema = updateAppointmentEmailTemplateSchema;
+
 export const updateBookingSettingsSchema = z.object({
   slug: z.string().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   display_name: z.string().min(1).max(160).nullable().optional(),
