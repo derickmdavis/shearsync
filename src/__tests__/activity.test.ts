@@ -1643,6 +1643,20 @@ describe("Activity handlers", () => {
           booking_source: "internal",
           created_at: "2026-06-01T12:00:00.000Z",
           updated_at: "2026-06-05T12:00:00.000Z"
+        },
+        {
+          id: secondAppointmentId,
+          user_id: userId,
+          client_id: secondClientId,
+          service_id: serviceId,
+          appointment_date: "2026-06-08T17:00:00.000Z",
+          service_name: "Gloss",
+          duration_minutes: 45,
+          price: 60,
+          status: "pending",
+          booking_source: "public",
+          created_at: "2026-06-06T14:00:00.000Z",
+          updated_at: "2026-06-06T14:00:00.000Z"
         }
       ],
       reminders: [
@@ -1756,6 +1770,7 @@ describe("Activity handlers", () => {
           needs_attention: {
             cancellations_need_review_count: number;
             waitlist_match_count: number;
+            pending_approval_count: number;
             pending_reminder_count: number;
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
@@ -1773,6 +1788,7 @@ describe("Activity handlers", () => {
       assert.deepEqual(payload.needs_attention, {
         cancellations_need_review_count: 1,
         waitlist_match_count: 1,
+        pending_approval_count: 1,
         pending_reminder_count: 2,
         queued_review_request_count: 1,
         pending_rebook_nudge_count: 0
@@ -1853,6 +1869,7 @@ describe("Activity handlers", () => {
           needs_attention: {
             cancellations_need_review_count: number;
             waitlist_match_count: number;
+            pending_approval_count: number;
             pending_reminder_count: number;
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
@@ -1881,6 +1898,7 @@ describe("Activity handlers", () => {
       assert.deepEqual(payload.needs_attention, {
         cancellations_need_review_count: 0,
         waitlist_match_count: 0,
+        pending_approval_count: 0,
         pending_reminder_count: 0,
         queued_review_request_count: 0,
         pending_rebook_nudge_count: 0

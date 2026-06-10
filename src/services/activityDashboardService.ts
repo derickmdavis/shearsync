@@ -515,10 +515,12 @@ export const activityDashboardService = {
       needs_attention: {
         cancellations_need_review_count: cancellationReviewItems.length,
         waitlist_match_count: waitlistMatches.length,
+        pending_approval_count: feedCounts.approvals,
         pending_reminder_count: reminderQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
         pending_rebook_nudge_count: rebookNudgeCounts.pending_approval
       },
+      pending_approval_count: feedCounts.approvals,
       pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
       queued_rebook_nudge_count: rebookNudgeCounts.queued,
       outstanding_rebook_nudges: outstandingRebookNudges,
