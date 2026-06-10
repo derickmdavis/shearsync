@@ -12,7 +12,8 @@ export type AppointmentEmailType =
   | "appointment_pending"
   | "appointment_confirmed"
   | "appointment_cancelled"
-  | "appointment_rescheduled";
+  | "appointment_rescheduled"
+  | "rebooking_prompt";
 
 interface QueueAppointmentEmailOptions {
   cancelledBy?: "client" | "stylist";

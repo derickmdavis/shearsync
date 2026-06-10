@@ -5,7 +5,9 @@ import { validate } from "../middleware/validate";
 import {
   appointmentEmailTemplateParamSchema,
   previewAppointmentEmailTemplateSchema,
+  previewRebookNudgeSettingsSchema,
   replaceAvailabilitySchema,
+  updateRebookNudgeSettingsSchema,
   updateAppointmentEmailTemplateSchema,
   updateBookingRulesSchema,
   updateBookingSettingsSchema,
@@ -35,6 +37,17 @@ settingsRouter.post(
   "/email-confirmations/:emailType/preview",
   validate({ params: appointmentEmailTemplateParamSchema, body: previewAppointmentEmailTemplateSchema }),
   asyncHandler(settingsController.previewAppointmentEmailTemplate)
+);
+settingsRouter.get("/rebook-nudges", asyncHandler(settingsController.getRebookNudgeSettings));
+settingsRouter.patch(
+  "/rebook-nudges",
+  validate({ body: updateRebookNudgeSettingsSchema }),
+  asyncHandler(settingsController.updateRebookNudgeSettings)
+);
+settingsRouter.post(
+  "/rebook-nudges/preview",
+  validate({ body: previewRebookNudgeSettingsSchema }),
+  asyncHandler(settingsController.previewRebookNudgeSettings)
 );
 settingsRouter.get("/booking", asyncHandler(settingsController.getBooking));
 settingsRouter.get("/availability", asyncHandler(settingsController.getAvailability));

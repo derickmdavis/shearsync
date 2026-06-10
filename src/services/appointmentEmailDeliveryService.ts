@@ -11,6 +11,8 @@ import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
 import { communicationPreferencesService } from "./communicationPreferences";
 import { appointmentEmailTemplatesService, renderEmailTemplateString } from "./appointmentEmailTemplatesService";
+import { rebookNudgeSettingsService, renderRebookNudgeTemplateString } from "./rebookNudgeSettingsService";
+import { rebookNudgesService } from "./rebookNudgesService";
 
 export interface EmailMessage {
   to: string;
@@ -69,6 +71,11 @@ interface AppointmentEmailTemplateData {
   unsubscribe_url?: string | null;
   unsubscribe_label?: string | null;
   message_type?: MessageType;
+  last_service_name?: string | null;
+  last_appointment_time?: string;
+  last_appointment_display?: string;
+  rebook_url?: string | null;
+  rebook_interval_days?: number;
   email_template?: {
     subject_template?: string | null;
     custom_message_block?: string | null;
@@ -176,6 +183,8 @@ const getAppointmentMessageType = (emailType: AppointmentEmailType): MessageType
     case "appointment_pending":
     case "appointment_confirmed":
       return "appointment_confirmation";
+    case "rebooking_prompt":
+      return "rebooking_prompt";
   }
 };
 
@@ -255,6 +264,8 @@ const getSubject = (emailType: AppointmentEmailType, serviceName: string, busine
       return `Your ${serviceName} appointment with ${businessName} was cancelled`;
     case "appointment_rescheduled":
       return `Your ${serviceName} appointment with ${businessName} was rescheduled`;
+    case "rebooking_prompt":
+      return `Time to book your next visit with ${businessName}`;
   }
 };
 
@@ -273,17 +284,21 @@ const getTemplateVariables = (
     appointmentTime: string;
     managementUrl: string | null;
   }
-) => ({
+): Record<string, string> => ({
   client_name: recipientName,
   service_name: serviceName,
   appointment_time: appointmentTime,
   business_name: businessName,
   business_phone: getString(templateData.business_phone, ""),
   business_email: getString(templateData.business_email, ""),
-  manage_appointment_url: managementUrl ?? ""
+  manage_appointment_url: managementUrl ?? "",
+  last_service_name: getString(templateData.last_service_name, serviceName),
+  last_appointment_date: getString(templateData.last_appointment_display, getString(templateData.last_appointment_time, "")),
+  rebook_url: getString(templateData.rebook_url, "")
 });
 
 const renderConfiguredText = (
+  emailType: AppointmentEmailType,
   value: string | null | undefined,
   variables: ReturnType<typeof getTemplateVariables>
 ): string | null => {
@@ -293,8 +308,13 @@ const renderConfiguredText = (
   }
 
   try {
+    if (emailType === "rebooking_prompt") {
+      rebookNudgeSettingsService.validateSettingsPayload({ customMessageBlock: trimmed });
+      return renderRebookNudgeTemplateString(trimmed, variables as Parameters<typeof renderRebookNudgeTemplateString>[1]);
+    }
+
     appointmentEmailTemplatesService.validateTemplatePayload({ customMessageBlock: trimmed });
-    return renderEmailTemplateString(trimmed, variables);
+    return renderEmailTemplateString(trimmed, variables as Parameters<typeof renderEmailTemplateString>[1]);
   } catch {
     return null;
   }
@@ -306,7 +326,7 @@ const renderConfiguredSubject = (
   value: string | null | undefined,
   variables: ReturnType<typeof getTemplateVariables>
 ): string => {
-  if (!appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType)) {
+  if (!appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType) && emailType !== "rebooking_prompt") {
     return defaultSubject;
   }
 
@@ -316,8 +336,13 @@ const renderConfiguredSubject = (
   }
 
   try {
+    if (emailType === "rebooking_prompt") {
+      rebookNudgeSettingsService.validateSettingsPayload({ subjectTemplate: trimmed });
+      return renderRebookNudgeTemplateString(trimmed, variables as Parameters<typeof renderRebookNudgeTemplateString>[1]) || defaultSubject;
+    }
+
     appointmentEmailTemplatesService.validateTemplatePayload({ subjectTemplate: trimmed });
-    return renderEmailTemplateString(trimmed, variables) || defaultSubject;
+    return renderEmailTemplateString(trimmed, variables as Parameters<typeof renderEmailTemplateString>[1]) || defaultSubject;
   } catch {
     return defaultSubject;
   }
@@ -347,6 +372,8 @@ const getIntro = (emailType: AppointmentEmailType, templateData: AppointmentEmai
       return templateData.status === "pending"
         ? `Your appointment with ${businessName} was rescheduled and is waiting for approval.`
         : `Your appointment with ${businessName} was rescheduled.`;
+    case "rebooking_prompt":
+      return `It has been a little while since your last visit with ${businessName}.`;
   }
 };
 
@@ -404,17 +431,24 @@ export const renderAppointmentEmail = (
     templateVariables
   );
   const customMessageBlock = appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType)
-    ? renderConfiguredText(templateData.email_template?.custom_message_block, templateVariables)
+    || emailType === "rebooking_prompt"
+    ? renderConfiguredText(emailType, templateData.email_template?.custom_message_block, templateVariables)
     : null;
   const unsubscribeUrl = templateData.unsubscribe_url ?? null;
   const unsubscribeLabel = getString(templateData.unsubscribe_label, "Manage communication preferences");
-  const details = [
-    `Service: ${serviceName}`,
-    `Time: ${appointmentTime}`,
-    templateData.business_timezone ? `Timezone: ${templateData.business_timezone}` : null,
-    durationMinutes > 0 ? `Duration: ${durationMinutes} minutes` : null,
-    managementUrl ? `Manage appointment: ${managementUrl}` : null
-  ].filter(Boolean) as string[];
+  const details = emailType === "rebooking_prompt"
+    ? [
+      `Last service: ${getString(templateData.last_service_name, serviceName)}`,
+      templateData.last_appointment_display ? `Last visit: ${templateData.last_appointment_display}` : null,
+      templateData.rebook_url ? `Book your next visit: ${templateData.rebook_url}` : null
+    ].filter(Boolean) as string[]
+    : [
+      `Service: ${serviceName}`,
+      `Time: ${appointmentTime}`,
+      templateData.business_timezone ? `Timezone: ${templateData.business_timezone}` : null,
+      durationMinutes > 0 ? `Duration: ${durationMinutes} minutes` : null,
+      managementUrl ? `Manage appointment: ${managementUrl}` : null
+    ].filter(Boolean) as string[];
   const text = [
     `Hi ${recipientName},`,
     "",
@@ -662,6 +696,7 @@ export const appointmentEmailDeliveryService = {
             status: "skipped",
             error: "Email confirmations automation disabled"
           });
+          await rebookNudgesService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           result.skipped += 1;
           continue;
         }
@@ -696,6 +731,11 @@ export const appointmentEmailDeliveryService = {
             status: "skipped",
             error: canSend.reason ?? "Communication preference blocked send"
           });
+          await rebookNudgesService.markForEmailEvent(
+            claimedEvent,
+            "skipped",
+            canSend.reason ?? "Communication preference blocked send"
+          );
           result.skipped += 1;
           continue;
         }
@@ -713,6 +753,7 @@ export const appointmentEmailDeliveryService = {
             sent_at: now.toISOString(),
             error: null
           });
+          await rebookNudgesService.markForEmailEvent(claimedEvent, "sent", null);
           result.sent += 1;
           await communicationEventsService.logCommunicationEvent({
             userId,
@@ -736,6 +777,11 @@ export const appointmentEmailDeliveryService = {
           provider_message_id: providerResult.providerMessageId ?? null,
           error: providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
         });
+        await rebookNudgesService.markForEmailEvent(
+          claimedEvent,
+          "skipped",
+          providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
+        );
         result.skipped += 1;
         await communicationEventsService.logCommunicationEvent({
           userId,
@@ -757,6 +803,7 @@ export const appointmentEmailDeliveryService = {
           status: "failed",
           error: message
         });
+        await rebookNudgesService.markForEmailEvent(claimedEvent, "failed", message);
         await communicationEventsService.logCommunicationEvent({
           userId: typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "unknown",
           clientId: typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null,

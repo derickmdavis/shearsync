@@ -6,6 +6,7 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { rebookNudgesService } from "./rebookNudgesService";
 
 const AUTOMATION_KEYS = [
   "rebook_nudges",
@@ -448,7 +449,9 @@ export const activityDashboardService = {
       reminderQueue,
       reviewRequestQueue,
       waitlistMatches,
-      feedCounts
+      feedCounts,
+      rebookNudgeCounts,
+      outstandingRebookNudges
     ] = await Promise.all([
       loadAutomationSettings(userId),
       loadRecentActivity(userId),
@@ -456,7 +459,9 @@ export const activityDashboardService = {
       loadReminderQueue(userId),
       loadReviewRequestQueue(userId),
       loadWaitlistMatches(userId, timeZone),
-      activityEventsService.getCategoryCounts(userId, {}, timeZone)
+      activityEventsService.getCategoryCounts(userId, {}, timeZone),
+      rebookNudgesService.getCountsForUser(userId),
+      rebookNudgesService.getOutstandingForUser(userId, 50)
     ]);
 
     const [automationHealth, automationImpactThisWeek] = await Promise.all([
@@ -470,8 +475,12 @@ export const activityDashboardService = {
         key: "rebook_nudges",
         label: AUTOMATION_LABELS.rebook_nudges,
         enabled: getEnabled(settings, "rebook_nudges"),
-        status_label: `${feedCounts.rebook} due`,
-        due_count: feedCounts.rebook
+        status_label: rebookNudgeCounts.pending_approval > 0
+          ? `${rebookNudgeCounts.pending_approval} need approval`
+          : `${rebookNudgeCounts.queued} queued`,
+        due_count: feedCounts.rebook,
+        pending_approval_count: rebookNudgeCounts.pending_approval,
+        queued_count: rebookNudgeCounts.queued
       },
       {
         key: "appointment_reminders",
@@ -507,8 +516,12 @@ export const activityDashboardService = {
         cancellations_need_review_count: cancellationReviewItems.length,
         waitlist_match_count: waitlistMatches.length,
         pending_reminder_count: reminderQueue.length,
-        queued_review_request_count: reviewRequestQueue.length
+        queued_review_request_count: reviewRequestQueue.length,
+        pending_rebook_nudge_count: rebookNudgeCounts.pending_approval
       },
+      pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
+      queued_rebook_nudge_count: rebookNudgeCounts.queued,
+      outstanding_rebook_nudges: outstandingRebookNudges,
       cancellation_review_count: cancellationReviewItems.length,
       cancellation_review_items: cancellationReviewItems,
       waitlist_match_count: waitlistMatches.length,

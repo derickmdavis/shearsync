@@ -26,6 +26,18 @@ export const updateAppointmentEmailTemplateSchema = z.object({
 
 export const previewAppointmentEmailTemplateSchema = updateAppointmentEmailTemplateSchema;
 
+export const updateRebookNudgeSettingsSchema = z.object({
+  approvalRequired: z.boolean().optional(),
+  defaultRebookIntervalDays: z.number().int().min(1).max(730).optional(),
+  subjectTemplate: z.string().max(160).nullable().optional(),
+  customMessageBlock: z.string().max(4000).nullable().optional()
+});
+
+export const previewRebookNudgeSettingsSchema = updateRebookNudgeSettingsSchema.pick({
+  subjectTemplate: true,
+  customMessageBlock: true
+});
+
 export const updateBookingSettingsSchema = z.object({
   slug: z.string().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   display_name: z.string().min(1).max(160).nullable().optional(),

@@ -9,6 +9,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import { activityEventsService } from "./activityEventsService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
+import { rebookNudgesService } from "./rebookNudgesService";
 import { servicesService } from "./servicesService";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
@@ -286,6 +287,14 @@ export const appointmentsService = {
     handleSupabaseError(error, "Unable to create appointment");
     const appointment = requireFound(data, "Appointment was not created");
     await activityEventsService.recordBookingCreated(userId, appointment);
+    if (
+      appointment.status !== "cancelled"
+      && typeof appointment.client_id === "string"
+      && typeof appointment.appointment_date === "string"
+      && appointment.appointment_date > new Date().toISOString()
+    ) {
+      await rebookNudgesService.supersedeActiveForClient(userId, appointment.client_id);
+    }
     return appointment;
   },
 
@@ -376,6 +385,15 @@ export const appointmentsService = {
       )
     ) {
       await activityEventsService.recordAppointmentRescheduled(userId, existingAppointment, updatedAppointment);
+    }
+
+    if (
+      updatedAppointment.status !== "cancelled"
+      && typeof updatedAppointment.client_id === "string"
+      && typeof updatedAppointment.appointment_date === "string"
+      && updatedAppointment.appointment_date > new Date().toISOString()
+    ) {
+      await rebookNudgesService.supersedeActiveForClient(userId, updatedAppointment.client_id);
     }
 
     return updatedAppointment;

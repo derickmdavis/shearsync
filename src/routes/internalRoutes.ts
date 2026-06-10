@@ -3,7 +3,11 @@ import { internalController } from "../controllers/internalController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireInternalApiSecret } from "../middleware/internalAuth";
 import { validate } from "../middleware/validate";
-import { processAppointmentEmailsQuerySchema } from "../validators/internalValidators";
+import {
+  processAppointmentEmailsQuerySchema,
+  processRebookNudgesQuerySchema,
+  queueRebookNudgesQuerySchema
+} from "../validators/internalValidators";
 
 export const internalRouter = Router();
 
@@ -12,4 +16,16 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processAppointmentEmailsQuerySchema }),
   asyncHandler(internalController.processAppointmentEmails)
+);
+internalRouter.post(
+  "/rebook-nudges/queue",
+  requireInternalApiSecret,
+  validate({ query: queueRebookNudgesQuerySchema }),
+  asyncHandler(internalController.queueRebookNudges)
+);
+internalRouter.post(
+  "/rebook-nudges/process",
+  requireInternalApiSecret,
+  validate({ query: processRebookNudgesQuerySchema }),
+  asyncHandler(internalController.processRebookNudges)
 );

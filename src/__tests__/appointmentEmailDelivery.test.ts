@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { NextFunction, Request, Response } from "express";
 
 process.env.NODE_ENV = "test";
@@ -19,6 +19,8 @@ const { communicationPreferencesService } =
   require("../services/communicationPreferences") as typeof import("../services/communicationPreferences");
 const { appointmentEmailEventsService } =
   require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
+const { rebookNudgesService } =
+  require("../services/rebookNudgesService") as typeof import("../services/rebookNudgesService");
 const { communicationPreferenceTokensService } =
   require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
 const { communicationsService } =
@@ -187,6 +189,35 @@ describe("appointment email delivery", () => {
     assert.match(message.html, /&lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;/);
   });
 
+  it("renders a custom rebooking prompt subject and message block", () => {
+    const message = renderAppointmentEmail({
+      id: "email-event-1",
+      email_type: "rebooking_prompt",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        service_name: "Silk Press",
+        last_service_name: "Silk Press",
+        last_appointment_display: "February 12, 2099",
+        business_display_name: "Maya Johnson Hair",
+        business_phone: "(720) 555-0100",
+        business_email: "maya@example.com",
+        rebook_url: "https://example.com/book/maya",
+        message_type: "rebooking_prompt",
+        email_template: {
+          subject_template: "{{client_name}}, ready for your next {{last_service_name}}?",
+          custom_message_block: "Book here when you're ready: {{rebook_url}}"
+        }
+      }
+    });
+
+    assert.equal(message.subject, "Jane Doe, ready for your next Silk Press?");
+    assert.match(message.text, /It has been a little while since your last visit with Maya Johnson Hair\./);
+    assert.match(message.text, /Book here when you're ready: https:\/\/example\.com\/book\/maya/);
+    assert.match(message.text, /Last service: Silk Press/);
+    assert.match(message.text, /Last visit: February 12, 2099/);
+  });
+
   it("processes queued events with an injected provider and marks them sent", async () => {
     const sentMessages: EmailMessage[] = [];
     const provider: EmailProvider = {
@@ -304,6 +335,276 @@ describe("appointment email delivery", () => {
         subject_template: "{{business_name}} saved your {{service_name}} spot",
         custom_message_block: "Please arrive 10 minutes early."
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues approval-required rebook nudges and creates a rebooking email after approval", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          user_id: TEST_USER_ID,
+          slug: "maya"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "Jane@Example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-01-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      rebook_nudge_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: true,
+          default_rebook_interval_days: 90,
+          subject_template: "{{client_name}}, ready for your next visit?",
+          custom_message_block: "Book here: {{rebook_url}}"
+        }
+      ],
+      automation_settings: [],
+      rebook_nudges: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const queueResult = await rebookNudgesService.queueDueNudgesForUser(
+        TEST_USER_ID,
+        new Date("2026-06-10T12:00:00.000Z")
+      );
+
+      assert.deepEqual(queueResult, { queued: 1, skipped: 0 });
+      assert.equal(supabase.state.rebook_nudges.length, 1);
+      assert.equal(supabase.state.rebook_nudges[0]?.status, "pending_approval");
+      assert.equal(supabase.state.rebook_nudges[0]?.recipient_email, "jane@example.com");
+      assert.equal(supabase.state.rebook_nudges[0]?.send_after, "2026-04-01T12:00:00.000Z");
+
+      const nudgeId = String(supabase.state.rebook_nudges[0]?.id);
+      await rebookNudgesService.approveForUser(TEST_USER_ID, nudgeId);
+      const processResult = await rebookNudgesService.processQueuedNudgeEmails(
+        new Date("2026-06-10T12:00:00.000Z")
+      );
+
+      assert.deepEqual(processResult, { processed: 1, queued_emails: 1 });
+      assert.equal(supabase.state.rebook_nudges[0]?.status, "sending");
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "rebooking_prompt");
+      assert.equal(supabase.state.appointment_email_events[0]?.rebook_nudge_id, nudgeId);
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).message_type,
+        "rebooking_prompt"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows manual rebook nudges to be scheduled before they are due", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-10T12:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-05-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      rebook_nudge_settings: [],
+      rebook_nudges: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const nudge = await rebookNudgesService.queueManualForUser(TEST_USER_ID, {
+        clientId: TEST_CLIENT_ID,
+        rebookIntervalDays: 120,
+        approvalRequired: false
+      });
+
+      assert.equal(nudge.status, "queued");
+      assert.equal(nudge.send_after, "2026-08-29T12:00:00.000Z");
+      assert.equal(supabase.state.appointment_email_events.length, 0);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("skips linked queued rebook email events when a nudge is cancelled", async () => {
+    const supabase = installMockSupabase({
+      rebook_nudges: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_event_id: "email-event-1",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          send_after: "2026-06-10T10:00:00.000Z",
+          rebook_interval_days: 90
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "rebooking_prompt",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          idempotency_key: "rebooking_prompt:33333333-3333-4333-8333-333333333333",
+          template_data: {}
+        }
+      ]
+    });
+
+    try {
+      const nudge = await rebookNudgesService.cancelForUser(
+        TEST_USER_ID,
+        "33333333-3333-4333-8333-333333333333",
+        "Not this time"
+      );
+
+      assert.equal(nudge.status, "cancelled");
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "Rebook nudge cancelled");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips linked queued rebook email events when a future appointment supersedes a nudge", async () => {
+    const supabase = installMockSupabase({
+      rebook_nudges: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_event_id: "email-event-1",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          send_after: "2026-06-10T10:00:00.000Z",
+          rebook_interval_days: 90
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "rebooking_prompt",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          idempotency_key: "rebooking_prompt:33333333-3333-4333-8333-333333333333",
+          template_data: {}
+        }
+      ]
+    });
+
+    try {
+      await rebookNudgesService.supersedeActiveForClient(TEST_USER_ID, TEST_CLIENT_ID);
+
+      assert.equal(supabase.state.rebook_nudges[0]?.status, "superseded");
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(
+        supabase.state.appointment_email_events[0]?.error,
+        "Rebook nudge superseded by future appointment"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("paginates rebook nudges with a cursor beyond the first page", async () => {
+    const supabase = installMockSupabase({
+      rebook_nudges: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "a@example.com",
+          status: "queued",
+          send_after: "2026-06-13T10:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "b@example.com",
+          status: "queued",
+          send_after: "2026-06-12T10:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "c@example.com",
+          status: "queued",
+          send_after: "2026-06-11T10:00:00.000Z",
+          rebook_interval_days: 90
+        }
+      ]
+    });
+
+    try {
+      const firstPage = await rebookNudgesService.listForUser(TEST_USER_ID, { limit: 1 });
+      const secondPage = await rebookNudgesService.listForUser(TEST_USER_ID, {
+        limit: 1,
+        cursor: firstPage.next_cursor ?? undefined
+      });
+      const thirdPage = await rebookNudgesService.listForUser(TEST_USER_ID, {
+        limit: 1,
+        cursor: secondPage.next_cursor ?? undefined
+      });
+
+      assert.equal(firstPage.data[0]?.id, "33333333-3333-4333-8333-333333333333");
+      assert.equal(secondPage.data[0]?.id, "44444444-4444-4444-8444-444444444444");
+      assert.equal(thirdPage.data[0]?.id, "55555555-5555-4555-8555-555555555555");
     } finally {
       supabase.restore();
     }
