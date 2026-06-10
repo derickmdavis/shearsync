@@ -26,6 +26,8 @@ import type {
   ReminderChannel,
   ReminderSentActivityMetadata,
   ReminderType,
+  RecentCancellationItem,
+  RecentCancellationsResponse,
   WaitlistJoinedActivityMetadata
 } from "../types/api";
 import { businessTimeZoneService } from "./businessTimeZoneService";
@@ -40,6 +42,10 @@ interface ActivityFeedFilters {
   activity_type?: ActivityType;
   start_date?: string;
   end_date?: string;
+}
+
+interface RecentCancellationsFilters {
+  windowHours: number;
 }
 
 type PersistedActivityType = Exclude<ActivityType, "client_rebook_needed">;
@@ -67,10 +73,16 @@ const REBOOK_CLIENT_SELECT =
 const REBOOK_APPOINTMENT_SELECT =
   "id, client_id, appointment_date, service_name, status";
 
+const CANCELLATION_APPOINTMENT_SELECT =
+  "id, client_id, appointment_date, service_name";
+
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const getString = (value: unknown): string | null =>
+  typeof value === "string" && value.length > 0 ? value : null;
 
 const isAppointmentStatus = (value: unknown): value is AppointmentStatus =>
   value === "pending"
@@ -571,6 +583,59 @@ const getClientsById = async (stylistId: string, clientIds: string[]): Promise<M
     .map((row) => [row.id as string, row]));
 };
 
+const getAppointmentsById = async (stylistId: string, appointmentIds: string[]): Promise<Map<string, Row>> => {
+  const uniqueAppointmentIds = [...new Set(appointmentIds)];
+  if (uniqueAppointmentIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("appointments")
+    .select(CANCELLATION_APPOINTMENT_SELECT)
+    .eq("user_id", stylistId)
+    .in("id", uniqueAppointmentIds);
+
+  handleSupabaseError(error, "Unable to load cancellation appointments");
+
+  return new Map(((data ?? []) as Row[])
+    .filter((row) => typeof row.id === "string")
+    .map((row) => [row.id as string, row]));
+};
+
+const toRecentCancellationItem = (
+  event: ActivityEventItem,
+  appointment: Row | undefined,
+  client: Row | undefined
+): RecentCancellationItem | null => {
+  if (event.activity_type !== "appointment_cancelled" || !event.appointment_id) {
+    return null;
+  }
+
+  const metadata = event.metadata && "cancelled_by" in event.metadata ? event.metadata : null;
+  const clientNames = createClientNameParts(client ?? null);
+  const clientId = event.client_id ?? getString(appointment?.client_id);
+  const appointmentStartTime = metadata?.appointment_start_time
+    ?? getString(appointment?.appointment_date);
+  const serviceName = metadata?.service_name
+    ?? getString(appointment?.service_name);
+
+  return {
+    appointment_id: event.appointment_id,
+    client_id: clientId,
+    client_name: metadata?.client_name ?? clientNames.fullName,
+    appointment_start_time: appointmentStartTime,
+    service_names: serviceName ? [serviceName] : [],
+    cancelled_at: event.occurred_at,
+    cancelled_by: metadata?.cancelled_by ?? "stylist"
+  };
+};
+
+const getCancellationClientId = (
+  event: ActivityEventItem,
+  appointmentsById: Map<string, Row>
+): string | null =>
+  event.client_id ?? getString(event.appointment_id ? appointmentsById.get(event.appointment_id)?.client_id : null);
+
 const getClientRebookEvents = async (
   stylistId: string,
   timeZone: string,
@@ -654,6 +719,48 @@ const withCategoryFields = (
 });
 
 export const activityEventsService = {
+  async getRecentCancellations(
+    stylistId: string,
+    filters: RecentCancellationsFilters
+  ): Promise<RecentCancellationsResponse> {
+    const since = new Date(Date.now() - filters.windowHours * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabaseAdmin
+      .from("activity_events")
+      .select(ACTIVITY_EVENT_SELECT)
+      .eq("user_id", stylistId)
+      .eq("activity_type", "appointment_cancelled")
+      .gte("occurred_at", since)
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    handleSupabaseError(error, "Unable to load recent cancellations");
+
+    const cancellationEvents = ((data ?? []) as Row[])
+      .filter((row) => normalizeActivityType(row.activity_type) === "appointment_cancelled")
+      .sort(compareRowsDescending)
+      .map((row) => toRowActivityItem(row))
+      .filter((event): event is ActivityEventItem => event?.activity_type === "appointment_cancelled");
+
+    const appointmentIds = cancellationEvents
+      .map((event) => event.appointment_id)
+      .filter((appointmentId): appointmentId is string => Boolean(appointmentId));
+    const appointmentsById = await getAppointmentsById(stylistId, appointmentIds);
+    const clientIds = cancellationEvents
+      .map((event) => getCancellationClientId(event, appointmentsById))
+      .filter((clientId): clientId is string => Boolean(clientId));
+    const clientsById = await getClientsById(stylistId, clientIds);
+
+    return {
+      items: cancellationEvents
+        .map((event) => toRecentCancellationItem(
+          event,
+          event.appointment_id ? appointmentsById.get(event.appointment_id) : undefined,
+          clientsById.get(getCancellationClientId(event, appointmentsById) ?? "")
+        ))
+        .filter((item): item is RecentCancellationItem => item !== null)
+    };
+  },
+
   async getCategoryCounts(
     stylistId: string,
     filters: Pick<ActivityFeedFilters, "start_date" | "end_date">,

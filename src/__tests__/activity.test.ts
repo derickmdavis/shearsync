@@ -20,7 +20,13 @@ const { createAppointmentSchema, updateAppointmentSchema } =
   require("../validators/appointmentValidators") as typeof import("../validators/appointmentValidators");
 const { updateReminderSchema } =
   require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
-const { listActivityQuerySchema, activityFeedResponseSchema, appointmentActivityResponseSchema } =
+const {
+  listActivityQuerySchema,
+  activityFeedResponseSchema,
+  appointmentActivityResponseSchema,
+  recentCancellationsQuerySchema,
+  recentCancellationsResponseSchema
+} =
   require("../validators/activityValidators") as typeof import("../validators/activityValidators");
 
 const userId = "11111111-1111-1111-1111-111111111111";
@@ -112,6 +118,18 @@ describe("Activity handlers", () => {
   it("accepts client_rebook_needed as a valid activity_type filter", () => {
     const query = listActivityQuerySchema.parse({ activity_type: "client_rebook_needed" });
     assert.equal(query.activity_type, "client_rebook_needed");
+  });
+
+  it("defaults recent cancellation queries to a 24-hour window", () => {
+    const query = recentCancellationsQuerySchema.parse({});
+    assert.equal(query.window_hours, 24);
+  });
+
+  it("rejects unbounded recent cancellation windows", () => {
+    assert.throws(
+      () => recentCancellationsQuerySchema.parse({ window_hours: 720 }),
+      /Number must be less than or equal to 168/
+    );
   });
 
   it("rejects unsupported activity categories", () => {
@@ -228,6 +246,146 @@ describe("Activity handlers", () => {
         service_name: "Haircut",
         appointment_start_time: "2026-05-12T18:00:00.000Z",
         cancelled_by: "stylist"
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns recently cancelled appointments for the cancellation screen", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-10T18:00:00.000Z") });
+    const oldAppointmentId = "12121212-1212-4212-8212-121212121212";
+    const metadataFallbackAppointmentId = "34343434-3434-4343-8343-343434343434";
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Jessica", last_name: "Lane" },
+        { id: secondClientId, user_id: userId, first_name: "Mina", last_name: "Patel" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-06-11T15:00:00.000Z",
+          service_name: "Haircut",
+          status: "cancelled"
+        },
+        {
+          id: metadataFallbackAppointmentId,
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_date: "2026-06-11T16:30:00.000Z",
+          service_name: "Gloss",
+          status: "cancelled"
+        },
+        {
+          id: oldAppointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: "2026-06-09T15:00:00.000Z",
+          service_name: "Trim",
+          status: "cancelled"
+        }
+      ],
+      activity_events: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          activity_type: "appointment_cancelled",
+          title: "Jessica cancelled Haircut",
+          description: null,
+          occurred_at: "2026-06-10T17:00:00.000Z",
+          metadata: {
+            client_name: "Jessica Lane",
+            service_name: "Haircut",
+            appointment_start_time: "2026-06-11T15:00:00.000Z",
+            cancelled_by: "client"
+          }
+        },
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: metadataFallbackAppointmentId,
+          activity_type: "appointment_cancelled",
+          title: "Mina cancelled Gloss",
+          description: null,
+          occurred_at: "2026-06-10T16:00:00.000Z",
+          metadata: {}
+        },
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: oldAppointmentId,
+          activity_type: "appointment_cancelled",
+          title: "Old cancellation",
+          description: null,
+          occurred_at: "2026-06-09T17:59:59.999Z",
+          metadata: {
+            client_name: "Jessica Lane",
+            service_name: "Trim",
+            appointment_start_time: "2026-06-09T15:00:00.000Z",
+            cancelled_by: "stylist"
+          }
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: otherUserId,
+          client_id: foreignClientId,
+          appointment_id: foreignAppointmentId,
+          activity_type: "appointment_cancelled",
+          title: "Foreign cancellation",
+          description: null,
+          occurred_at: "2026-06-10T17:30:00.000Z",
+          metadata: {
+            client_name: "Other Client",
+            service_name: "Color",
+            appointment_start_time: "2026-06-11T17:00:00.000Z",
+            cancelled_by: "client"
+          }
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: recentCancellationsQuerySchema.parse({}) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => activityController.recentCancellations(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      const payload = (response.body as { data: unknown }).data;
+      recentCancellationsResponseSchema.parse(payload);
+      assert.deepEqual(payload, {
+        items: [
+          {
+            appointment_id: appointmentId,
+            client_id: clientId,
+            client_name: "Jessica Lane",
+            appointment_start_time: "2026-06-11T15:00:00.000Z",
+            service_names: ["Haircut"],
+            cancelled_at: "2026-06-10T17:00:00.000Z",
+            cancelled_by: "client"
+          },
+          {
+            appointment_id: metadataFallbackAppointmentId,
+            client_id: secondClientId,
+            client_name: "Mina Patel",
+            appointment_start_time: "2026-06-11T16:30:00.000Z",
+            service_names: ["Gloss"],
+            cancelled_at: "2026-06-10T16:00:00.000Z",
+            cancelled_by: "stylist"
+          }
+        ]
       });
     } finally {
       supabase.restore();

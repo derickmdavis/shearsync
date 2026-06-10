@@ -48,6 +48,10 @@ export const listActivityQuerySchema = z.object({
   }
 );
 
+export const recentCancellationsQuerySchema = z.object({
+  window_hours: z.coerce.number().int().positive().max(168).default(24)
+});
+
 export const automationSettingParamSchema = z.object({
   key: automationControlKeySchema
 });
@@ -162,6 +166,18 @@ export const activityFeedResponseSchema = z.object({
   }).optional(),
   groups: z.array(activityDayGroupSchema),
   next_cursor: z.string().nullable()
+});
+
+export const recentCancellationsResponseSchema = z.object({
+  items: z.array(z.object({
+    appointment_id: z.string().uuid(),
+    client_id: z.string().uuid().nullable(),
+    client_name: z.string(),
+    appointment_start_time: isoDateTimeSchema.nullable(),
+    service_names: z.array(z.string()),
+    cancelled_at: isoDateTimeSchema,
+    cancelled_by: z.enum(["client", "stylist"])
+  }))
 });
 
 export const appointmentActivityResponseSchema = z.object({

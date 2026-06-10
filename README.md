@@ -88,6 +88,7 @@ Authenticated routes:
 - `GET /api/clients/:id/photos`
 - `POST /api/photos`
 - `GET /api/activity`
+- `GET /api/activity/cancellations`
 - `GET /api/reminders`
 - `POST /api/reminders`
 - `PATCH /api/reminders/:id`
@@ -148,6 +149,7 @@ The mobile Activity screen is a business timeline, not a chat inbox.
 - The response is ordered most recent first and includes per-day summary counts for `new_bookings`, `cancellations`, `reschedules`, `reminders_sent`, `waitlist_joins`, and `rebook_needed`.
 - Supported MVP event types are `booking_created`, `appointment_cancelled`, `appointment_rescheduled`, `reminder_sent`, `waitlist_joined`, and the derived `client_rebook_needed`.
 - Query params: `limit`, `cursor`, `category`, `activity_type`, `start_date`, `end_date`.
+- `GET /api/activity/cancellations?window_hours=24` returns a flat recent-cancellations list for the cancellation screen. Each item includes `appointment_id`, `client_id`, `client_name`, `appointment_start_time`, `service_names`, `cancelled_at`, and `cancelled_by`.
 - Category feeds support `updates`, `approvals`, `waitlist`, and `rebook`, echo the selected `category`, and include total `counts` for all categories before pagination.
 - Pagination is cursor-based and paginates by event, not by day-group count.
 

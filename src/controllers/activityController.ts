@@ -25,6 +25,15 @@ export const activityController = {
     res.json({ data: response });
   },
 
+  async recentCancellations(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const response = await activityEventsService.getRecentCancellations(userId, {
+      windowHours: Number(req.query.window_hours)
+    });
+
+    res.json({ data: response });
+  },
+
   async updateAutomationSetting(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const setting = await activityDashboardService.updateAutomationSetting(

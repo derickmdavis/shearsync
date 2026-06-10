@@ -5,12 +5,18 @@ import { validate } from "../middleware/validate";
 import {
   automationSettingParamSchema,
   listActivityQuerySchema,
+  recentCancellationsQuerySchema,
   updateAutomationSettingSchema
 } from "../validators/activityValidators";
 
 export const activityRouter = Router();
 
 activityRouter.get("/dashboard", asyncHandler(activityController.dashboard));
+activityRouter.get(
+  "/cancellations",
+  validate({ query: recentCancellationsQuerySchema }),
+  asyncHandler(activityController.recentCancellations)
+);
 activityRouter.patch(
   "/automation/settings/:key",
   validate({ params: automationSettingParamSchema, body: updateAutomationSettingSchema }),

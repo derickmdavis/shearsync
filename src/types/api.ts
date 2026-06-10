@@ -405,6 +405,20 @@ export interface ActivityFeedResponse {
   next_cursor: string | null;
 }
 
+export interface RecentCancellationItem {
+  appointment_id: string;
+  client_id: string | null;
+  client_name: string;
+  appointment_start_time: string | null;
+  service_names: string[];
+  cancelled_at: string;
+  cancelled_by: "client" | "stylist";
+}
+
+export interface RecentCancellationsResponse {
+  items: RecentCancellationItem[];
+}
+
 export interface AppointmentActivityResponse {
   events: ActivityEventItem[];
 }
