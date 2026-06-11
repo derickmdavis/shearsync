@@ -27,6 +27,8 @@ const { communicationPreferenceTokensService } =
   require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
 const { communicationsService } =
   require("../services/communicationsService") as typeof import("../services/communicationsService");
+const { globalEmailUnsubscribesService } =
+  require("../services/globalEmailUnsubscribesService") as typeof import("../services/globalEmailUnsubscribesService");
 const { env } = require("../config/env") as typeof import("../config/env");
 const { internalController } =
   require("../controllers/internalController") as typeof import("../controllers/internalController");
@@ -1365,7 +1367,8 @@ describe("appointment email delivery", () => {
           email_rebooking_enabled: true,
           opted_out_all_email: false
         }
-      ]
+      ],
+      global_email_unsubscribes: []
     });
 
     try {
@@ -1380,6 +1383,234 @@ describe("appointment email delivery", () => {
       assert.equal(result.canSend, false);
       assert.equal(result.reason, "opted_out");
     } finally {
+      supabase.restore();
+    }
+  });
+
+  it("applies global email unsubscribes across stylists while allowing appointment updates", async () => {
+    const otherUserId = "33333333-3333-4333-8333-333333333333";
+    const supabase = installMockSupabase({
+      global_email_unsubscribes: [
+        {
+          id: "global-unsubscribe-1",
+          email_normalized: "jane@example.com",
+          opted_out_at: "2026-05-10T10:00:00.000Z",
+          opt_out_source: "unsubscribe_link"
+        }
+      ],
+      client_communication_preferences: [
+        {
+          id: "other-preference-1",
+          user_id: otherUserId,
+          client_id: TEST_CLIENT_ID,
+          email: "jane@example.com",
+          email_normalized: "jane@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: true,
+          email_marketing_enabled: true,
+          email_rebooking_enabled: true,
+          opted_out_all_email: false
+        }
+      ]
+    });
+
+    try {
+      const rebookForOriginalStylist = await communicationPreferencesService.canSendCommunication({
+        userId: TEST_USER_ID,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "Jane@Example.com",
+        messageType: "rebooking_prompt"
+      });
+      const birthdayForOtherStylist = await communicationPreferencesService.canSendCommunication({
+        userId: otherUserId,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "jane@example.com",
+        messageType: "birthday_reminder"
+      });
+      const confirmationForOtherStylist = await communicationPreferencesService.canSendCommunication({
+        userId: otherUserId,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "jane@example.com",
+        messageType: "appointment_confirmation"
+      });
+      const cancellationForOtherStylist = await communicationPreferencesService.canSendCommunication({
+        userId: otherUserId,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "jane@example.com",
+        messageType: "appointment_cancelled"
+      });
+      const rescheduleForOtherStylist = await communicationPreferencesService.canSendCommunication({
+        userId: otherUserId,
+        clientId: TEST_CLIENT_ID,
+        channel: "email",
+        to: "jane@example.com",
+        messageType: "appointment_rescheduled"
+      });
+
+      assert.equal(rebookForOriginalStylist.canSend, false);
+      assert.equal(rebookForOriginalStylist.reason, "global_unsubscribe");
+      assert.equal(birthdayForOtherStylist.canSend, false);
+      assert.equal(birthdayForOtherStylist.reason, "global_unsubscribe");
+      assert.equal(confirmationForOtherStylist.canSend, true);
+      assert.equal(cancellationForOtherStylist.canSend, true);
+      assert.equal(rescheduleForOtherStylist.canSend, true);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("logs globally unsubscribed non-essential email as skipped", async () => {
+    const sentMessages: EmailMessage[] = [];
+    const provider: EmailProvider = {
+      async send(message) {
+        sentMessages.push(message);
+        return {
+          status: "sent",
+          provider: "test-provider"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      global_email_unsubscribes: [
+        {
+          id: "global-unsubscribe-1",
+          email_normalized: "jane@example.com",
+          opted_out_at: "2026-05-10T10:00:00.000Z",
+          opt_out_source: "unsubscribe_link"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "rebooking_prompt",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            last_appointment_time: "2026-02-10T16:00:00.000Z",
+            message_type: "rebooking_prompt"
+          }
+        }
+      ],
+      client_communication_preferences: [],
+      communication_events: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T11:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 0,
+        skipped: 1,
+        failed: 0
+      });
+      assert.equal(sentMessages.length, 0);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "global_unsubscribe");
+      assert.equal(supabase.state.communication_events[0]?.status, "skipped_opted_out");
+      assert.equal(supabase.state.communication_events[0]?.error_code, "global_unsubscribe");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("caches global unsubscribe checks during one queued email processing run", async () => {
+    const sentMessages: EmailMessage[] = [];
+    const provider: EmailProvider = {
+      async send(message) {
+        sentMessages.push(message);
+        return {
+          status: "sent",
+          provider: "test-provider"
+        };
+      }
+    };
+    const globalLookup = mock.method(
+      globalEmailUnsubscribesService,
+      "isGloballyUnsubscribed",
+      async () => false
+    );
+    const supabase = installMockSupabase({
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "rebooking_prompt",
+          recipient_email: "Jane@Example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            last_service_name: "Trim",
+            last_appointment_display: "February 10, 2026",
+            message_type: "rebooking_prompt"
+          }
+        },
+        {
+          id: "email-event-2",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "rebooking_prompt",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:01:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            last_service_name: "Trim",
+            last_appointment_display: "February 10, 2026",
+            message_type: "rebooking_prompt"
+          }
+        }
+      ],
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email: "jane@example.com",
+          email_normalized: "jane@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: true,
+          email_marketing_enabled: true,
+          email_rebooking_enabled: true,
+          opted_out_all_email: false
+        }
+      ],
+      communication_preference_tokens: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T11:00:00.000Z"),
+        limit: 2
+      });
+
+      assert.deepEqual(result, {
+        processed: 2,
+        sent: 2,
+        skipped: 0,
+        failed: 0
+      });
+      assert.equal(sentMessages.length, 2);
+      assert.equal(globalLookup.mock.callCount(), 1);
+    } finally {
+      globalLookup.mock.restore();
       supabase.restore();
     }
   });
@@ -1533,10 +1764,21 @@ describe("appointment email delivery", () => {
       });
 
       assert.match(confirmation, /unsubscribed/);
+      assert.equal(supabase.state.client_communication_preferences[0]?.email_reminders_enabled, false);
       assert.equal(supabase.state.client_communication_preferences[0]?.email_marketing_enabled, false);
       assert.equal(supabase.state.client_communication_preferences[0]?.email_rebooking_enabled, false);
+      assert.equal(supabase.state.global_email_unsubscribes.length, 1);
+      assert.equal(supabase.state.global_email_unsubscribes[0]?.email_normalized, "jane@example.com");
+      assert.equal(supabase.state.global_email_unsubscribes[0]?.triggering_user_id, TEST_USER_ID);
+      assert.equal(supabase.state.global_email_unsubscribes[0]?.triggering_client_id, TEST_CLIENT_ID);
+      assert.equal(supabase.state.global_email_unsubscribes[0]?.triggering_message_type, "marketing");
+      assert.equal(supabase.state.global_email_unsubscribes[0]?.preference_token_id, supabase.state.communication_preference_tokens[0]?.id);
       assert.equal(supabase.state.communication_consent_events[0]?.event_type, "unsubscribe_link_clicked");
       assert.equal(supabase.state.communication_events[0]?.status, "unsubscribed");
+
+      await communicationsService.unsubscribe(rawToken);
+
+      assert.equal(supabase.state.global_email_unsubscribes.length, 1);
 
       await assert.rejects(
         () => communicationsService.unsubscribe("invalid-token"),

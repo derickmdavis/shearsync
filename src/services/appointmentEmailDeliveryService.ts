@@ -661,6 +661,7 @@ export const appointmentEmailDeliveryService = {
     const now = options.now ?? new Date();
     const maxAttempts = Math.max(1, options.maxAttempts ?? defaultMaxAttempts);
     const staleSendingAfterMinutes = Math.max(1, options.staleSendingAfterMinutes ?? defaultStaleSendingAfterMinutes);
+    const globalEmailUnsubscribeCache = new Map<string, boolean>();
     const emailEvents = await getRetryableEmailEvents({
       limit,
       now,
@@ -726,7 +727,8 @@ export const appointmentEmailDeliveryService = {
             stylistId,
             channel: "email",
             to: recipientEmail,
-            messageType
+            messageType,
+            globalEmailUnsubscribeCache
           })
           : { canSend: false, reason: "missing_contact" as const, toNormalized: normalizeEmail(recipientEmail) ?? undefined };
 

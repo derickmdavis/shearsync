@@ -241,6 +241,7 @@ create table if not exists public.communication_events (
         'appointment_rescheduled',
         'waitlist_update',
         'rebooking_prompt',
+        'birthday_reminder',
         'marketing',
         'business_recap'
       )
@@ -320,6 +321,7 @@ create table if not exists public.communication_consent_events (
         'appointment_rescheduled',
         'waitlist_update',
         'rebooking_prompt',
+        'birthday_reminder',
         'marketing',
         'business_recap'
       )
@@ -352,6 +354,7 @@ create table if not exists public.communication_preference_tokens (
         'appointment_rescheduled',
         'waitlist_update',
         'rebooking_prompt',
+        'birthday_reminder',
         'marketing',
         'business_recap'
       )

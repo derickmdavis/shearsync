@@ -3,6 +3,7 @@ import {
   type CommunicationChannel,
   type ConsentSource,
   type MessageType,
+  isAppointmentUpdateMessage,
   normalizeContact,
   normalizeEmail,
   normalizePhone
@@ -11,6 +12,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { communicationEventsService } from "./communicationEvents";
+import { globalEmailUnsubscribesService, isGlobalEmailUnsubscribeExempt } from "./globalEmailUnsubscribesService";
 
 interface PreferenceContactOptions {
   userId: string;
@@ -27,11 +29,12 @@ interface CanSendCommunicationOptions {
   channel: CommunicationChannel;
   to?: string | null;
   messageType: MessageType;
+  globalEmailUnsubscribeCache?: Map<string, boolean>;
 }
 
 interface CanSendCommunicationResult {
   canSend: boolean;
-  reason?: "missing_contact" | "missing_sms_consent" | "opted_out" | "disabled";
+  reason?: "missing_contact" | "missing_sms_consent" | "opted_out" | "disabled" | "global_unsubscribe";
   preference?: Row;
   toNormalized?: string;
 }
@@ -128,14 +131,14 @@ const updateMissingPreferenceFields = async (
 };
 
 const getEmailAllowed = (preference: Row, messageType: MessageType): CanSendCommunicationResult => {
-  const critical = ["appointment_confirmation", "appointment_cancelled", "appointment_rescheduled"].includes(messageType);
+  const appointmentUpdate = isAppointmentUpdateMessage(messageType);
   const optedOutAll = isTruthy(preference.opted_out_all_email);
 
-  if (optedOutAll && !critical) {
+  if (optedOutAll && !appointmentUpdate) {
     return { canSend: false, reason: "opted_out", preference };
   }
 
-  if (critical || messageType === "waitlist_update") {
+  if (appointmentUpdate || messageType === "waitlist_update") {
     return isTruthy(preference.email_transactional_enabled)
       ? { canSend: true, preference }
       : { canSend: false, reason: "disabled", preference };
@@ -226,6 +229,18 @@ export const communicationPreferencesService = {
     const normalized = normalizeContact(options.channel, options.to);
     if (!normalized) {
       return { canSend: false, reason: "missing_contact" };
+    }
+
+    if (options.channel === "email" && !isGlobalEmailUnsubscribeExempt(options.messageType)) {
+      let isGloballyUnsubscribed = options.globalEmailUnsubscribeCache?.get(normalized);
+      if (isGloballyUnsubscribed === undefined) {
+        isGloballyUnsubscribed = await globalEmailUnsubscribesService.isGloballyUnsubscribed(normalized);
+        options.globalEmailUnsubscribeCache?.set(normalized, isGloballyUnsubscribed);
+      }
+
+      if (isGloballyUnsubscribed) {
+        return { canSend: false, reason: "global_unsubscribe", toNormalized: normalized };
+      }
     }
 
     const preference = await findPreferenceByContact(

@@ -17,6 +17,11 @@ export const messageTypes = [
 ] as const;
 export type MessageType = typeof messageTypes[number];
 
+export const isAppointmentUpdateMessage = (messageType: MessageType): boolean =>
+  messageType === "appointment_confirmation"
+  || messageType === "appointment_cancelled"
+  || messageType === "appointment_rescheduled";
+
 export const communicationEventStatuses = [
   "queued",
   "sent",

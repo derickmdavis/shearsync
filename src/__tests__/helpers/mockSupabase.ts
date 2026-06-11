@@ -24,6 +24,10 @@ interface SelectOptions {
   head?: boolean;
 }
 
+interface UpsertOptions {
+  onConflict?: string;
+}
+
 const cloneRow = <T extends TableRow>(row: T): T => ({ ...row });
 
 const cloneState = (state: TableState): TableState =>
@@ -80,7 +84,7 @@ const isAndOrFilter = (filter: OrFilter): filter is { type: "and"; conditions: S
   "type" in filter && filter.type === "and";
 
 class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; count?: number | null }> {
-  private action: "select" | "insert" | "update" | "delete" = "select";
+  private action: "select" | "insert" | "upsert" | "update" | "delete" = "select";
   private filters: Filter[] = [];
   private sorts: SortDirection[] = [];
   private limitCount?: number;
@@ -88,6 +92,7 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   private rangeEnd?: number;
   private singleMode: "many" | "single" | "maybeSingle" = "many";
   private pendingInsert: TableRow[] = [];
+  private upsertOptions: UpsertOptions = {};
   private pendingUpdate: TableRow | null = null;
   private selectOptions: SelectOptions = {};
 
@@ -105,6 +110,13 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   insert(payload: TableRow | TableRow[]) {
     this.action = "insert";
     this.pendingInsert = (Array.isArray(payload) ? payload : [payload]).map((row) => cloneRow(row));
+    return this;
+  }
+
+  upsert(payload: TableRow | TableRow[], options?: UpsertOptions) {
+    this.action = "upsert";
+    this.pendingInsert = (Array.isArray(payload) ? payload : [payload]).map((row) => cloneRow(row));
+    this.upsertOptions = options ?? {};
     return this;
   }
 
@@ -191,6 +203,8 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
     switch (this.action) {
       case "insert":
         return this.executeInsert();
+      case "upsert":
+        return this.executeUpsert();
       case "update":
         return this.executeUpdate();
       case "delete":
@@ -360,6 +374,36 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
     });
 
     return this.finalizeRows(insertedRows);
+  }
+
+  private executeUpsert() {
+    const tableRows = this.getTableRows();
+    const conflictColumns = (this.upsertOptions.onConflict ?? "id")
+      .split(",")
+      .map((column) => column.trim())
+      .filter(Boolean);
+    const upsertedRows = this.pendingInsert.map((row) => {
+      const existingRow = tableRows.find((candidate) =>
+        conflictColumns.length > 0
+        && conflictColumns.every((column) => candidate[column] === row[column])
+      );
+
+      if (existingRow) {
+        Object.assign(existingRow, row, { updated_at: new Date().toISOString() });
+        return existingRow;
+      }
+
+      const nextRow = {
+        id: row.id ?? randomUUID(),
+        created_at: row.created_at ?? new Date().toISOString(),
+        updated_at: row.updated_at ?? new Date().toISOString(),
+        ...row
+      };
+      tableRows.push(nextRow);
+      return nextRow;
+    });
+
+    return this.finalizeRows(upsertedRows);
   }
 
   private executeUpdate() {

@@ -6,7 +6,7 @@ import { handleSupabaseError } from "./db";
 import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
 import { communicationPreferencesService } from "./communicationPreferences";
-import { usersService } from "./usersService";
+import { globalEmailUnsubscribesService } from "./globalEmailUnsubscribesService";
 
 interface RequestContext {
   ipAddress?: string | null;
@@ -29,18 +29,7 @@ const html = (message: string): string =>
 
 const safeTokenError = (): ApiError => new ApiError(404, "This unsubscribe link is invalid or expired.");
 
-const loadBusinessName = async (userId: string): Promise<string> => {
-  try {
-    const user = await usersService.getById(userId);
-    const businessName = typeof user?.business_name === "string" ? user.business_name.trim() : "";
-    const fullName = typeof user?.full_name === "string" ? user.full_name.trim() : "";
-    return businessName || fullName || "this business";
-  } catch {
-    return "this business";
-  }
-};
-
-const unsubscribeUpdates = (channel: CommunicationChannel, messageType: MessageType | null, action: string | null): Row => {
+const unsubscribeUpdates = (channel: CommunicationChannel): Row => {
   const now = new Date().toISOString();
 
   if (channel === "sms") {
@@ -56,25 +45,13 @@ const unsubscribeUpdates = (channel: CommunicationChannel, messageType: MessageT
   }
 
   const updates: Row = {
+    email_reminders_enabled: false,
+    email_marketing_enabled: false,
+    email_rebooking_enabled: false,
     email_opted_out_at: now,
-    email_opt_out_source: "unsubscribe_link"
+    email_opt_out_source: "unsubscribe_link",
+    opted_out_all_email: false
   };
-
-  if (messageType === "appointment_reminder") {
-    updates.email_reminders_enabled = false;
-    return updates;
-  }
-
-  if (
-    action === "unsubscribe"
-    || messageType === "rebooking_prompt"
-    || messageType === "marketing"
-    || messageType === "business_recap"
-    || !messageType
-  ) {
-    updates.email_marketing_enabled = false;
-    updates.email_rebooking_enabled = false;
-  }
 
   return updates;
 };
@@ -132,10 +109,24 @@ export const communicationsService = {
 
     const { error } = await supabaseAdmin
       .from("client_communication_preferences")
-      .update(unsubscribeUpdates(channel, messageType, typeof token.action === "string" ? token.action : null))
+      .update(unsubscribeUpdates(channel))
       .eq("id", preference.id);
 
     handleSupabaseError(error, "Unable to update communication preferences");
+
+    if (channel === "email") {
+      await globalEmailUnsubscribesService.upsertGlobalEmailUnsubscribe({
+        email: contactValue,
+        source: "unsubscribe_link",
+        userId,
+        clientId: typeof token.client_id === "string" ? token.client_id : null,
+        stylistId: typeof token.stylist_id === "string" ? token.stylist_id : null,
+        messageType,
+        preferenceTokenId: typeof token.id === "string" ? token.id : null,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent
+      });
+    }
 
     await communicationEventsService.logConsentEvent({
       userId,
@@ -162,8 +153,11 @@ export const communicationsService = {
       status: "unsubscribed"
     });
 
-    const businessName = await loadBusinessName(userId);
-    return html(`You have been unsubscribed from non-essential messages from ${businessName}.`);
+    if (channel === "sms") {
+      return html("You have been unsubscribed from non-essential text messages.");
+    }
+
+    return html("You have been unsubscribed from non-essential emails. You may still receive appointment confirmations, cancellations, and reschedule updates.");
   },
 
   async handleInboundSms(options: InboundSmsOptions): Promise<string> {
