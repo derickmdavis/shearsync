@@ -174,15 +174,6 @@ const decodeCursor = (cursor: string): CursorPayload => {
   }
 };
 
-const isBeforeCursor = (row: Row, cursor: CursorPayload): boolean => {
-  const sendAfter = String(row.send_after ?? "");
-  if (sendAfter !== cursor.send_after) {
-    return sendAfter < cursor.send_after;
-  }
-
-  return String(row.id ?? "") < cursor.id;
-};
-
 const loadActiveNudge = async (userId: string, clientId: string, lastAppointmentId: string): Promise<Row | null> => {
   const { data, error } = await supabaseAdmin
     .from("rebook_nudges")
@@ -380,6 +371,7 @@ const queueEmailForNudge = async (nudge: Row): Promise<Row | null> => {
 
 export const rebookNudgesService = {
   async listForUser(userId: string, filters: ListRebookNudgesFilters) {
+    const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
     let query = supabaseAdmin
       .from("rebook_nudges")
       .select("*")
@@ -389,17 +381,19 @@ export const rebookNudgesService = {
       query = query.eq("status", filters.status);
     }
 
+    if (cursor) {
+      query = query.or(`send_after.lt.${cursor.send_after},and(send_after.eq.${cursor.send_after},id.lt.${cursor.id})`);
+    }
+
     const { data, error } = await query
       .order("send_after", { ascending: false })
-      .order("id", { ascending: false });
+      .order("id", { ascending: false })
+      .limit(filters.limit + 1);
 
     handleSupabaseError(error, "Unable to load rebook nudges");
-    const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
-    const filteredRows = cursor
-      ? ((data ?? []) as Row[]).filter((row) => isBeforeCursor(row, cursor))
-      : (data ?? []) as Row[];
-    const rows = filteredRows.slice(0, filters.limit);
-    const nextCursor = filteredRows.length > filters.limit && rows.length > 0
+    const fetchedRows = (data ?? []) as Row[];
+    const rows = fetchedRows.slice(0, filters.limit);
+    const nextCursor = fetchedRows.length > filters.limit && rows.length > 0
       ? encodeCursor(rows[rows.length - 1] as Row)
       : null;
 

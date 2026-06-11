@@ -121,15 +121,6 @@ const decodeCursor = (cursor: string): CursorPayload => {
   }
 };
 
-const isAfterCursor = (row: Row, cursor: CursorPayload): boolean => {
-  const scheduledSendAt = String(row.scheduled_send_at ?? "");
-  if (scheduledSendAt !== cursor.scheduled_send_at) {
-    return scheduledSendAt > cursor.scheduled_send_at;
-  }
-
-  return String(row.id ?? "") > cursor.id;
-};
-
 const createTemplateData = async ({
   userId,
   client,
@@ -359,23 +350,26 @@ export const birthdayRemindersService = {
   },
 
   async listForUser(userId: string, filters: ListBirthdayReminderFilters) {
-    await this.queueUpcomingForUser(userId);
-
-    const { data, error } = await supabaseAdmin
+    const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
+    let query = supabaseAdmin
       .from("birthday_reminders")
       .select("*")
       .eq("user_id", userId)
-      .in("status", activeStatuses)
+      .in("status", activeStatuses);
+
+    if (cursor) {
+      query = query.or(`scheduled_send_at.gt.${cursor.scheduled_send_at},and(scheduled_send_at.eq.${cursor.scheduled_send_at},id.gt.${cursor.id})`);
+    }
+
+    const { data, error } = await query
       .order("scheduled_send_at", { ascending: true })
-      .order("id", { ascending: true });
+      .order("id", { ascending: true })
+      .limit(filters.limit + 1);
 
     handleSupabaseError(error, "Unable to load birthday reminders");
-    const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
-    const filteredRows = cursor
-      ? ((data ?? []) as Row[]).filter((row) => isAfterCursor(row, cursor))
-      : (data ?? []) as Row[];
-    const rows = filteredRows.slice(0, filters.limit);
-    const nextCursor = filteredRows.length > filters.limit && rows.length > 0
+    const fetchedRows = (data ?? []) as Row[];
+    const rows = fetchedRows.slice(0, filters.limit);
+    const nextCursor = fetchedRows.length > filters.limit && rows.length > 0
       ? encodeCursor(rows[rows.length - 1] as Row)
       : null;
 

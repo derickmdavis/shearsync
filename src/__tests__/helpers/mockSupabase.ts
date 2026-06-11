@@ -16,7 +16,8 @@ type Filter =
   | { type: "gte"; column: string; value: unknown }
   | { type: "lt"; column: string; value: unknown }
   | { type: "or"; conditions: OrFilter[] };
-type OrFilter = { column: string; operator: "ilike" | "cs"; value: string };
+type SimpleOrFilter = { column: string; operator: "eq" | "neq" | "gte" | "gt" | "lte" | "lt" | "ilike" | "cs"; value: string };
+type OrFilter = SimpleOrFilter | { type: "and"; conditions: SimpleOrFilter[] };
 
 interface SelectOptions {
   count?: "exact";
@@ -27,6 +28,56 @@ const cloneRow = <T extends TableRow>(row: T): T => ({ ...row });
 
 const cloneState = (state: TableState): TableState =>
   Object.fromEntries(Object.entries(state).map(([table, rows]) => [table, rows.map((row) => cloneRow(row))]));
+
+const splitTopLevel = (value: string): string[] => {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (char === "," && depth === 0) {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+
+  parts.push(value.slice(start));
+  return parts;
+};
+
+const parseSimpleOrFilter = (filter: string): SimpleOrFilter | null => {
+  const match = /^([^.]*)\.(eq|neq|gte|gt|lte|lt|ilike|cs)\.(.*)$/.exec(filter);
+  if (!match) {
+    return null;
+  }
+
+  const [, column, operator, rawValue] = match;
+  const value = operator === "cs"
+    ? rawValue.replace(/^\{"/, "").replace(/"\}$/, "").replace(/^\{/, "").replace(/\}$/, "")
+    : rawValue;
+
+  return { column, operator: operator as SimpleOrFilter["operator"], value };
+};
+
+const parseOrFilter = (filter: string): OrFilter | null => {
+  if (filter.startsWith("and(") && filter.endsWith(")")) {
+    const conditions = splitTopLevel(filter.slice(4, -1))
+      .map((condition) => parseSimpleOrFilter(condition.trim()))
+      .filter((condition): condition is SimpleOrFilter => condition !== null);
+
+    return conditions.length > 0 ? { type: "and", conditions } : null;
+  }
+
+  return parseSimpleOrFilter(filter);
+};
+
+const isAndOrFilter = (filter: OrFilter): filter is { type: "and"; conditions: SimpleOrFilter[] } =>
+  "type" in filter && filter.type === "and";
 
 class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; count?: number | null }> {
   private action: "select" | "insert" | "update" | "delete" = "select";
@@ -95,22 +146,8 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 
   or(filters: string) {
-    const conditions = filters
-      .split(",")
-      .map((filter) => filter.trim())
-      .map((filter): OrFilter | null => {
-        const match = /^([^.]*)\.(ilike|cs)\.(.*)$/.exec(filter);
-
-        if (!match) {
-          return null;
-        }
-
-        const [, column, operator, rawValue] = match;
-        const value =
-          operator === "cs" ? rawValue.replace(/^\{"/, "").replace(/"\}$/, "").replace(/^\{/, "").replace(/\}$/, "") : rawValue;
-
-        return { column, operator: operator as OrFilter["operator"], value };
-      })
+    const conditions = splitTopLevel(filters)
+      .map((filter) => parseOrFilter(filter.trim()))
       .filter((filter): filter is OrFilter => filter !== null);
 
     this.filters.push({ type: "or", conditions });
@@ -193,6 +230,14 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 
   private matchesOrFilter(row: TableRow, filter: OrFilter): boolean {
+    if (isAndOrFilter(filter)) {
+      return filter.conditions.every((condition) => this.matchesSimpleOrFilter(row, condition));
+    }
+
+    return this.matchesSimpleOrFilter(row, filter);
+  }
+
+  private matchesSimpleOrFilter(row: TableRow, filter: SimpleOrFilter): boolean {
     const value = row[filter.column];
 
     if (filter.operator === "ilike") {
@@ -200,11 +245,29 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
       return String(value ?? "").toLowerCase().includes(pattern);
     }
 
-    if (!Array.isArray(value)) {
-      return false;
+    if (filter.operator === "cs") {
+      if (!Array.isArray(value)) {
+        return false;
+      }
+
+      return value.some((item) => String(item) === filter.value);
     }
 
-    return value.some((item) => String(item) === filter.value);
+    const rowValue = String(value ?? "");
+    switch (filter.operator) {
+      case "eq":
+        return rowValue === filter.value;
+      case "neq":
+        return rowValue !== filter.value;
+      case "gte":
+        return rowValue >= filter.value;
+      case "gt":
+        return rowValue > filter.value;
+      case "lte":
+        return rowValue <= filter.value;
+      case "lt":
+        return rowValue < filter.value;
+    }
   }
 
   private applySorts(rows: TableRow[]): TableRow[] {

@@ -445,7 +445,6 @@ export const activityDashboardService = {
 
   async getDashboard(userId: string): Promise<Row> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
-    await birthdayRemindersService.queueUpcomingForUser(userId);
     const [
       settings,
       recentActivity,

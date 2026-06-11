@@ -650,6 +650,98 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("does not queue birthday reminders while listing birthday reminder records", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: TEST_USER_ID, timezone: "UTC", business_name: "Maya Johnson Hair" }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com",
+          birthday: "1990-06-10"
+        }
+      ],
+      birthday_reminders: []
+    });
+
+    try {
+      const response = await birthdayRemindersService.listForUser(TEST_USER_ID, { limit: 10 });
+
+      assert.deepEqual(response, {
+        data: [],
+        next_cursor: null
+      });
+      assert.deepEqual(supabase.state.birthday_reminders, []);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("paginates birthday reminders with a database-backed cursor", async () => {
+    const supabase = installMockSupabase({
+      birthday_reminders: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "a@example.com",
+          birthday: "1990-06-10",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "A Client", days_until: 4 }
+        },
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "b@example.com",
+          birthday: "1990-06-10",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "B Client", days_until: 4 }
+        },
+        {
+          id: "66666666-6666-4666-8666-666666666666",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "c@example.com",
+          birthday: "1990-06-11",
+          birthday_occurrence_date: "2026-06-11",
+          scheduled_send_at: "2026-06-11T09:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "C Client", days_until: 5 }
+        }
+      ]
+    });
+
+    try {
+      const firstPage = await birthdayRemindersService.listForUser(TEST_USER_ID, { limit: 1 });
+      const secondPage = await birthdayRemindersService.listForUser(TEST_USER_ID, {
+        limit: 1,
+        cursor: firstPage.next_cursor ?? undefined
+      });
+      const thirdPage = await birthdayRemindersService.listForUser(TEST_USER_ID, {
+        limit: 1,
+        cursor: secondPage.next_cursor ?? undefined
+      });
+
+      assert.deepEqual(firstPage.data.map((reminder) => reminder.reminder_id), ["44444444-4444-4444-8444-444444444444"]);
+      assert.deepEqual(secondPage.data.map((reminder) => reminder.reminder_id), ["55555555-5555-4555-8555-555555555555"]);
+      assert.deepEqual(thirdPage.data.map((reminder) => reminder.reminder_id), ["66666666-6666-4666-8666-666666666666"]);
+      assert.equal(thirdPage.next_cursor, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("paginates rebook nudges with a cursor beyond the first page", async () => {
     const supabase = installMockSupabase({
       rebook_nudges: [

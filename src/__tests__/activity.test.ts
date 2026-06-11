@@ -1949,6 +1949,45 @@ describe("Activity handlers", () => {
     }
   });
 
+  it("does not queue birthday reminders while loading the activity dashboard", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", business_name: "Maya Johnson Hair" }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com",
+          birthday: "1990-06-10"
+        }
+      ],
+      appointments: [],
+      reminders: [],
+      waitlist_entries: [],
+      activity_events: [],
+      appointment_email_events: [],
+      automation_settings: [],
+      birthday_reminders: []
+    });
+
+    try {
+      const dashboardReq = createMockRequest({
+        user: { id: userId } as Request["user"]
+      });
+
+      const dashboardResponse = await runWithErrorHandler((request, res) => activityController.dashboard(request, res), dashboardReq);
+      assert.equal(dashboardResponse.statusCode, 200);
+      assert.deepEqual(supabase.state.birthday_reminders, []);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
   it("keeps the activity dashboard valid with legacy activity rows and deleted cancellation appointments", async () => {
     mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
     const supabase = installMockSupabase({
