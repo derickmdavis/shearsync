@@ -1774,6 +1774,7 @@ describe("Activity handlers", () => {
             pending_reminder_count: number;
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
+            birthday_reminder_count: number;
           };
           cancellation_review_items: Array<{ appointment_id: string; review_status: string }>;
           waitlist_matches: Array<{ waitlist_entry_id: string; matched_opening_start_time: string }>;
@@ -1791,7 +1792,8 @@ describe("Activity handlers", () => {
         pending_approval_count: 1,
         pending_reminder_count: 2,
         queued_review_request_count: 1,
-        pending_rebook_nudge_count: 0
+        pending_rebook_nudge_count: 0,
+        birthday_reminder_count: 0
       });
       assert.deepEqual(payload.cancellation_review_items.map((item) => [item.appointment_id, item.review_status]), [
         [appointmentId, "pending"]
@@ -1873,6 +1875,7 @@ describe("Activity handlers", () => {
             pending_reminder_count: number;
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
+            birthday_reminder_count: number;
           };
           cancellation_review_count: number;
           cancellation_review_items: unknown[];
@@ -1901,7 +1904,8 @@ describe("Activity handlers", () => {
         pending_approval_count: 0,
         pending_reminder_count: 0,
         queued_review_request_count: 0,
-        pending_rebook_nudge_count: 0
+        pending_rebook_nudge_count: 0,
+        birthday_reminder_count: 0
       });
       assert.equal(payload.cancellation_review_count, 0);
       assert.deepEqual(payload.cancellation_review_items, []);
@@ -1932,7 +1936,7 @@ describe("Activity handlers", () => {
         openings_filled_count: 0
       });
       assert.deepEqual(payload.recent_activity, []);
-      assert.equal(payload.automation_controls.length, 5);
+      assert.equal(payload.automation_controls.length, 6);
       assert.equal(
         (payload.automation_controls as Array<{ key?: string; enabled?: boolean }>)
           .find((control) => control.key === "email_confirmations")?.enabled,

@@ -28,6 +28,7 @@ const { authController } = require("../controllers/authController") as typeof im
 const { settingsController } = require("../controllers/settingsController") as typeof import("../controllers/settingsController");
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
 const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
+const { remindersController } = require("../controllers/remindersController") as typeof import("../controllers/remindersController");
 const { entitlementsService } = require("../services/entitlementsService") as typeof import("../services/entitlementsService");
 const { clientsService } = require("../services/clientsService") as typeof import("../services/clientsService");
 const { schemaReadinessService } =
@@ -58,6 +59,8 @@ const { createAppointmentSchema, pendingAppointmentDecisionSchema } =
   require("../validators/appointmentValidators") as typeof import("../validators/appointmentValidators");
 const { createClientSchema, updateClientSchema } =
   require("../validators/clientValidators") as typeof import("../validators/clientValidators");
+const { birthdayRemindersQuerySchema } =
+  require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
 const { replaceAvailabilitySchema, updateBookingRulesSchema, updateProfileSchema, updateBookingSettingsSchema } =
   require("../validators/settingsValidators") as typeof import("../validators/settingsValidators");
 const { updateAccountPlanSchema } =
@@ -1049,6 +1052,120 @@ describe("API handlers", () => {
       assert.equal(supabase.state.clients[0]?.birthday, null);
     } finally {
       supabase.restore();
+    }
+  });
+
+  it("validates birthday reminder query bounds", () => {
+    assert.deepEqual(birthdayRemindersQuerySchema.parse({}), {
+      window_days: 30,
+      limit: 50
+    });
+
+    assert.throws(
+      () => birthdayRemindersQuerySchema.parse({ window_days: 400 }),
+      /Number must be less than or equal to 366/
+    );
+  });
+
+  it("returns upcoming birthday reminders from client birthdays", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-12-20T12:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        },
+        {
+          id: otherUserId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-birthday-today",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          preferred_name: "Avi",
+          birthday: "1990-12-20",
+          phone: "(555) 111-2222",
+          email: "ava@example.com",
+          preferred_contact_method: "text",
+          reminder_consent: true
+        },
+        {
+          id: "client-birthday-upcoming",
+          user_id: userId,
+          first_name: "Noah",
+          last_name: "Kim",
+          birthday: "1994-01-04",
+          email: "noah@example.com",
+          reminder_consent: null
+        },
+        {
+          id: "client-birthday-outside-window",
+          user_id: userId,
+          first_name: "Mia",
+          last_name: "Parks",
+          birthday: "1992-02-15"
+        },
+        {
+          id: "client-no-birthday",
+          user_id: userId,
+          first_name: "Taylor",
+          last_name: "Stone",
+          birthday: null
+        },
+        {
+          id: "foreign-client-birthday",
+          user_id: otherUserId,
+          first_name: "Foreign",
+          last_name: "Client",
+          birthday: "1991-12-21"
+        }
+      ]
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        query: birthdayRemindersQuerySchema.parse({ window_days: 20 }) as unknown as Request["query"]
+      });
+
+      const response = await runWithErrorHandler((request, res) => remindersController.listBirthdays(request, res), req);
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        data: [
+          {
+            client_id: "client-birthday-today",
+            client_name: "Avi",
+            birthday: "1990-12-20",
+            next_birthday: "2026-12-20",
+            days_until: 0,
+            turning_age: 36,
+            reminder_consent: true,
+            preferred_contact_method: "text",
+            phone: "(555) 111-2222",
+            email: "ava@example.com"
+          },
+          {
+            client_id: "client-birthday-upcoming",
+            client_name: "Noah Kim",
+            birthday: "1994-01-04",
+            next_birthday: "2027-01-04",
+            days_until: 15,
+            turning_age: 33,
+            reminder_consent: null,
+            preferred_contact_method: null,
+            phone: null,
+            email: "noah@example.com"
+          }
+        ]
+      });
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
     }
   });
 

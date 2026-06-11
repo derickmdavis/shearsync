@@ -17,3 +17,11 @@ export const queueRebookNudgesQuerySchema = z.object({
 export const processRebookNudgesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
+
+export const queueBirthdayRemindersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional()
+});
+
+export const processBirthdayRemindersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional()
+});

@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { appointmentEmailDeliveryService } from "../services/appointmentEmailDeliveryService";
+import { birthdayRemindersService } from "../services/birthdayRemindersService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
 
 export const internalController = {
@@ -25,6 +26,18 @@ export const internalController = {
   async processRebookNudges(req: Request, res: Response) {
     const query = req.query as { limit?: number };
     const result = await rebookNudgesService.processQueuedNudgeEmails(new Date(), query.limit);
+    res.json({ data: result });
+  },
+
+  async queueBirthdayReminders(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await birthdayRemindersService.queueUpcoming(new Date(), query.limit);
+    res.json({ data: result });
+  },
+
+  async processBirthdayReminders(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await birthdayRemindersService.processQueuedBirthdayEmails(new Date(), query.limit);
     res.json({ data: result });
   }
 };

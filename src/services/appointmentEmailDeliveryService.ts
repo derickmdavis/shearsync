@@ -11,6 +11,7 @@ import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
 import { communicationPreferencesService } from "./communicationPreferences";
 import { appointmentEmailTemplatesService, renderEmailTemplateString } from "./appointmentEmailTemplatesService";
+import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgeSettingsService, renderRebookNudgeTemplateString } from "./rebookNudgeSettingsService";
 import { rebookNudgesService } from "./rebookNudgesService";
 
@@ -76,6 +77,10 @@ interface AppointmentEmailTemplateData {
   last_appointment_display?: string;
   rebook_url?: string | null;
   rebook_interval_days?: number;
+  birthday?: string;
+  birthday_label?: string;
+  birthday_display?: string;
+  birthday_occurrence_date?: string;
   email_template?: {
     subject_template?: string | null;
     custom_message_block?: string | null;
@@ -85,7 +90,7 @@ interface AppointmentEmailTemplateData {
 const defaultProcessLimit = 25;
 const defaultMaxAttempts = 3;
 const defaultStaleSendingAfterMinutes = 15;
-const nonEssentialMessageTypes: MessageType[] = ["appointment_reminder", "rebooking_prompt", "marketing", "business_recap"];
+const nonEssentialMessageTypes: MessageType[] = ["appointment_reminder", "rebooking_prompt", "birthday_reminder", "marketing", "business_recap"];
 const confirmationEmailTypes: AppointmentEmailType[] = [
   "appointment_scheduled",
   "appointment_pending",
@@ -185,6 +190,8 @@ const getAppointmentMessageType = (emailType: AppointmentEmailType): MessageType
       return "appointment_confirmation";
     case "rebooking_prompt":
       return "rebooking_prompt";
+    case "birthday_reminder":
+      return "birthday_reminder";
   }
 };
 
@@ -218,7 +225,7 @@ const getUnsubscribeLabel = (messageType: MessageType): string | null => {
     return "Unsubscribe from appointment reminders";
   }
 
-  if (["rebooking_prompt", "marketing", "business_recap"].includes(messageType)) {
+  if (["rebooking_prompt", "birthday_reminder", "marketing", "business_recap"].includes(messageType)) {
     return "Unsubscribe from non-essential emails";
   }
 
@@ -266,6 +273,8 @@ const getSubject = (emailType: AppointmentEmailType, serviceName: string, busine
       return `Your ${serviceName} appointment with ${businessName} was rescheduled`;
     case "rebooking_prompt":
       return `Time to book your next visit with ${businessName}`;
+    case "birthday_reminder":
+      return `Happy birthday from ${businessName}`;
   }
 };
 
@@ -294,7 +303,8 @@ const getTemplateVariables = (
   manage_appointment_url: managementUrl ?? "",
   last_service_name: getString(templateData.last_service_name, serviceName),
   last_appointment_date: getString(templateData.last_appointment_display, getString(templateData.last_appointment_time, "")),
-  rebook_url: getString(templateData.rebook_url, "")
+  rebook_url: getString(templateData.rebook_url, ""),
+  birthday: getString(templateData.birthday_display, getString(templateData.birthday_label, getString(templateData.birthday, "")))
 });
 
 const renderConfiguredText = (
@@ -374,6 +384,8 @@ const getIntro = (emailType: AppointmentEmailType, templateData: AppointmentEmai
         : `Your appointment with ${businessName} was rescheduled.`;
     case "rebooking_prompt":
       return `It has been a little while since your last visit with ${businessName}.`;
+    case "birthday_reminder":
+      return `Wishing you a very happy birthday from ${businessName}.`;
   }
 };
 
@@ -442,6 +454,11 @@ export const renderAppointmentEmail = (
       templateData.last_appointment_display ? `Last visit: ${templateData.last_appointment_display}` : null,
       templateData.rebook_url ? `Book your next visit: ${templateData.rebook_url}` : null
     ].filter(Boolean) as string[]
+    : emailType === "birthday_reminder"
+      ? [
+        `Birthday: ${getString(templateData.birthday_display, getString(templateData.birthday_label, getString(templateData.birthday, "today")))}`
+      ]
+    .filter(Boolean) as string[]
     : [
       `Service: ${serviceName}`,
       `Time: ${appointmentTime}`,
@@ -697,6 +714,7 @@ export const appointmentEmailDeliveryService = {
             error: "Email confirmations automation disabled"
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
+          await birthdayRemindersService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           result.skipped += 1;
           continue;
         }
@@ -736,6 +754,11 @@ export const appointmentEmailDeliveryService = {
             "skipped",
             canSend.reason ?? "Communication preference blocked send"
           );
+          await birthdayRemindersService.markForEmailEvent(
+            claimedEvent,
+            "skipped",
+            canSend.reason ?? "Communication preference blocked send"
+          );
           result.skipped += 1;
           continue;
         }
@@ -754,6 +777,7 @@ export const appointmentEmailDeliveryService = {
             error: null
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "sent", null);
+          await birthdayRemindersService.markForEmailEvent(claimedEvent, "sent", null);
           result.sent += 1;
           await communicationEventsService.logCommunicationEvent({
             userId,
@@ -782,6 +806,11 @@ export const appointmentEmailDeliveryService = {
           "skipped",
           providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
         );
+        await birthdayRemindersService.markForEmailEvent(
+          claimedEvent,
+          "skipped",
+          providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
+        );
         result.skipped += 1;
         await communicationEventsService.logCommunicationEvent({
           userId,
@@ -804,6 +833,7 @@ export const appointmentEmailDeliveryService = {
           error: message
         });
         await rebookNudgesService.markForEmailEvent(claimedEvent, "failed", message);
+        await birthdayRemindersService.markForEmailEvent(claimedEvent, "failed", message);
         await communicationEventsService.logCommunicationEvent({
           userId: typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "unknown",
           clientId: typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null,

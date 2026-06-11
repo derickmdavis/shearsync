@@ -9,6 +9,16 @@ export const remindersController = {
     res.json({ data: reminders });
   },
 
+  async listBirthdays(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const reminders = await remindersService.listBirthdayReminders(userId, {
+      windowDays: Number(req.query.window_days),
+      limit: Number(req.query.limit)
+    });
+
+    res.json({ data: reminders });
+  },
+
   async create(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const reminder = await remindersService.create(userId, req.body);

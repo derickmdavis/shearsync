@@ -4,6 +4,8 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import {
   automationSettingParamSchema,
+  birthdayReminderParamSchema,
+  listBirthdayRemindersQuerySchema,
   listActivityQuerySchema,
   recentCancellationsQuerySchema,
   updateAutomationSettingSchema
@@ -16,6 +18,16 @@ activityRouter.get(
   "/cancellations",
   validate({ query: recentCancellationsQuerySchema }),
   asyncHandler(activityController.recentCancellations)
+);
+activityRouter.get(
+  "/birthday-reminders",
+  validate({ query: listBirthdayRemindersQuerySchema }),
+  asyncHandler(activityController.listBirthdayReminders)
+);
+activityRouter.delete(
+  "/birthday-reminders/:reminder_id",
+  validate({ params: birthdayReminderParamSchema }),
+  asyncHandler(activityController.cancelBirthdayReminder)
 );
 activityRouter.patch(
   "/automation/settings/:key",

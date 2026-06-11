@@ -11,6 +11,7 @@ export const messageTypes = [
   "appointment_rescheduled",
   "waitlist_update",
   "rebooking_prompt",
+  "birthday_reminder",
   "marketing",
   "business_recap"
 ] as const;

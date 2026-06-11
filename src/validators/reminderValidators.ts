@@ -24,3 +24,8 @@ export const updateReminderSchema = createReminderSchema
   .extend({
     status: reminderStatusSchema.optional()
   });
+
+export const birthdayRemindersQuerySchema = z.object({
+  window_days: z.coerce.number().int().min(0).max(366).default(30),
+  limit: z.coerce.number().int().positive().max(100).default(50)
+});

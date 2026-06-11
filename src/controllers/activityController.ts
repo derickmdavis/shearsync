@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
 import type { ActivityCategory, ActivityType } from "../lib/activityTypes";
-import { getAuthUserId } from "../lib/request";
+import { getAuthUserId, getRequiredParam } from "../lib/request";
 import { activityDashboardService } from "../services/activityDashboardService";
 import { activityEventsService } from "../services/activityEventsService";
+import { birthdayRemindersService } from "../services/birthdayRemindersService";
 
 export const activityController = {
   async dashboard(req: Request, res: Response) {
@@ -32,6 +33,31 @@ export const activityController = {
     });
 
     res.json({ data: response });
+  },
+
+  async listBirthdayReminders(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const query = req.query as unknown as { limit: number; cursor?: string };
+    const response = await birthdayRemindersService.listForUser(userId, {
+      limit: query.limit,
+      cursor: query.cursor
+    });
+
+    res.json({
+      data: response.data,
+      next_cursor: response.next_cursor
+    });
+  },
+
+  async cancelBirthdayReminder(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const reminder = await birthdayRemindersService.cancelForUser(
+      userId,
+      getRequiredParam(req, "reminder_id"),
+      "User chose not to send this year's birthday email"
+    );
+
+    res.json({ data: reminder });
   },
 
   async updateAutomationSetting(req: Request, res: Response) {

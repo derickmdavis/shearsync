@@ -9,7 +9,8 @@ export const automationControlKeySchema = z.enum([
   "appointment_reminders",
   "email_confirmations",
   "no_show_follow_up",
-  "waitlist_match"
+  "waitlist_match",
+  "birthday_reminders"
 ]);
 
 const isValidDateString = (value: string): boolean => {
@@ -50,6 +51,15 @@ export const listActivityQuerySchema = z.object({
 
 export const recentCancellationsQuerySchema = z.object({
   window_hours: z.coerce.number().int().positive().max(168).default(24)
+});
+
+export const listBirthdayRemindersQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(50),
+  cursor: z.string().min(1).optional()
+});
+
+export const birthdayReminderParamSchema = z.object({
+  reminder_id: z.string().uuid()
 });
 
 export const automationSettingParamSchema = z.object({

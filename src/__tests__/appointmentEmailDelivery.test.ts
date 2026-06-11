@@ -21,6 +21,8 @@ const { appointmentEmailEventsService } =
   require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { rebookNudgesService } =
   require("../services/rebookNudgesService") as typeof import("../services/rebookNudgesService");
+const { birthdayRemindersService } =
+  require("../services/birthdayRemindersService") as typeof import("../services/birthdayRemindersService");
 const { communicationPreferenceTokensService } =
   require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
 const { communicationsService } =
@@ -216,6 +218,27 @@ describe("appointment email delivery", () => {
     assert.match(message.text, /Book here when you're ready: https:\/\/example\.com\/book\/maya/);
     assert.match(message.text, /Last service: Silk Press/);
     assert.match(message.text, /Last visit: February 12, 2099/);
+  });
+
+  it("renders a birthday reminder email", () => {
+    const message = renderAppointmentEmail({
+      id: "birthday-email-event",
+      email_type: "birthday_reminder",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        birthday_display: "June 15",
+        business_display_name: "Maya Johnson Hair",
+        business_phone: "(720) 555-0100",
+        business_email: "maya@example.com",
+        message_type: "birthday_reminder"
+      }
+    });
+
+    assert.equal(message.subject, "Happy birthday from Maya Johnson Hair");
+    assert.match(message.text, /Hi Jane Doe/);
+    assert.match(message.text, /Wishing you a very happy birthday from Maya Johnson Hair\./);
+    assert.match(message.text, /Birthday: June 15/);
   });
 
   it("processes queued events with an injected provider and marks them sent", async () => {
@@ -553,6 +576,75 @@ describe("appointment email delivery", () => {
         supabase.state.appointment_email_events[0]?.error,
         "Rebook nudge superseded by future appointment"
       );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues and sends due birthday reminder emails", async () => {
+    const sentMessages: EmailMessage[] = [];
+    const provider: EmailProvider = {
+      async send(message) {
+        sentMessages.push(message);
+        return {
+          status: "sent",
+          provider: "test-provider",
+          providerMessageId: "birthday-provider-message"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      birthday_reminders: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          birthday: "1990-06-10",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "queued",
+          template_data: {
+            recipient_name: "Jane Doe",
+            birthday_display: "June 10",
+            business_display_name: "Maya Johnson Hair",
+            message_type: "birthday_reminder"
+          }
+        }
+      ],
+      appointment_email_events: [],
+      client_communication_preferences: [],
+      communication_events: []
+    });
+
+    try {
+      const queueResult = await birthdayRemindersService.processQueuedBirthdayEmails(
+        new Date("2026-06-10T09:01:00.000Z")
+      );
+
+      assert.deepEqual(queueResult, {
+        processed: 1,
+        queued_emails: 1
+      });
+      assert.equal(supabase.state.birthday_reminders[0]?.status, "sending");
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "birthday_reminder");
+      assert.equal(supabase.state.appointment_email_events[0]?.birthday_reminder_id, "44444444-4444-4444-8444-444444444444");
+
+      const sendResult = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-06-10T09:02:00.000Z")
+      });
+
+      assert.deepEqual(sendResult, {
+        processed: 1,
+        sent: 1,
+        skipped: 0,
+        failed: 0
+      });
+      assert.equal(sentMessages.length, 1);
+      assert.match(sentMessages[0]?.subject ?? "", /Happy birthday from Maya Johnson Hair/);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "sent");
+      assert.equal(supabase.state.birthday_reminders[0]?.status, "sent");
     } finally {
       supabase.restore();
     }

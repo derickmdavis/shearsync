@@ -6,6 +6,7 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
 
 const AUTOMATION_KEYS = [
@@ -13,7 +14,8 @@ const AUTOMATION_KEYS = [
   "appointment_reminders",
   "email_confirmations",
   "no_show_follow_up",
-  "waitlist_match"
+  "waitlist_match",
+  "birthday_reminders"
 ] as const;
 
 export type AutomationControlKey = (typeof AUTOMATION_KEYS)[number];
@@ -23,7 +25,8 @@ const AUTOMATION_LABELS: Record<AutomationControlKey, string> = {
   appointment_reminders: "Appointment Reminders",
   email_confirmations: "Email Confirmations",
   no_show_follow_up: "No Show Follow-up",
-  waitlist_match: "Waitlist Match"
+  waitlist_match: "Waitlist Match",
+  birthday_reminders: "Birthday Reminders"
 };
 
 const APPOINTMENT_SELECT = `
@@ -442,6 +445,7 @@ export const activityDashboardService = {
 
   async getDashboard(userId: string): Promise<Row> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
+    await birthdayRemindersService.queueUpcomingForUser(userId);
     const [
       settings,
       recentActivity,
@@ -451,7 +455,9 @@ export const activityDashboardService = {
       waitlistMatches,
       feedCounts,
       rebookNudgeCounts,
-      outstandingRebookNudges
+      outstandingRebookNudges,
+      birthdayReminderCounts,
+      birthdayReminderQueue
     ] = await Promise.all([
       loadAutomationSettings(userId),
       loadRecentActivity(userId),
@@ -461,7 +467,9 @@ export const activityDashboardService = {
       loadWaitlistMatches(userId, timeZone),
       activityEventsService.getCategoryCounts(userId, {}, timeZone),
       rebookNudgesService.getCountsForUser(userId),
-      rebookNudgesService.getOutstandingForUser(userId, 50)
+      rebookNudgesService.getOutstandingForUser(userId, 50),
+      birthdayRemindersService.getCountsForUser(userId),
+      birthdayRemindersService.getQueuedForUser(userId, 50)
     ]);
 
     const [automationHealth, automationImpactThisWeek] = await Promise.all([
@@ -508,6 +516,13 @@ export const activityDashboardService = {
         enabled: getEnabled(settings, "waitlist_match"),
         status_label: `${waitlistMatches.length} ${waitlistMatches.length === 1 ? "match" : "matches"} found`,
         match_count: waitlistMatches.length
+      },
+      {
+        key: "birthday_reminders",
+        label: AUTOMATION_LABELS.birthday_reminders,
+        enabled: getEnabled(settings, "birthday_reminders"),
+        status_label: `${birthdayReminderCounts.queued} queued`,
+        queued_count: birthdayReminderCounts.queued
       }
     ];
 
@@ -518,12 +533,16 @@ export const activityDashboardService = {
         pending_approval_count: feedCounts.approvals,
         pending_reminder_count: reminderQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
-        pending_rebook_nudge_count: rebookNudgeCounts.pending_approval
+        pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
+        birthday_reminder_count: birthdayReminderCounts.queued
       },
       pending_approval_count: feedCounts.approvals,
       pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
       queued_rebook_nudge_count: rebookNudgeCounts.queued,
       outstanding_rebook_nudges: outstandingRebookNudges,
+      birthday_reminder_count: birthdayReminderCounts.queued,
+      queued_birthday_reminder_count: birthdayReminderCounts.queued,
+      birthday_reminder_queue: birthdayReminderQueue,
       cancellation_review_count: cancellationReviewItems.length,
       cancellation_review_items: cancellationReviewItems,
       waitlist_match_count: waitlistMatches.length,

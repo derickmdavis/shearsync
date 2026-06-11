@@ -5,7 +5,9 @@ import { requireInternalApiSecret } from "../middleware/internalAuth";
 import { validate } from "../middleware/validate";
 import {
   processAppointmentEmailsQuerySchema,
+  processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
+  queueBirthdayRemindersQuerySchema,
   queueRebookNudgesQuerySchema
 } from "../validators/internalValidators";
 
@@ -28,4 +30,16 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processRebookNudgesQuerySchema }),
   asyncHandler(internalController.processRebookNudges)
+);
+internalRouter.post(
+  "/birthday-reminders/queue",
+  requireInternalApiSecret,
+  validate({ query: queueBirthdayRemindersQuerySchema }),
+  asyncHandler(internalController.queueBirthdayReminders)
+);
+internalRouter.post(
+  "/birthday-reminders/process",
+  requireInternalApiSecret,
+  validate({ query: processBirthdayRemindersQuerySchema }),
+  asyncHandler(internalController.processBirthdayReminders)
 );
