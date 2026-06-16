@@ -17,6 +17,11 @@ clientRouter.patch(
   validate({ params: uuidParamSchema, body: updateClientSchema }),
   asyncHandler(clientsController.update)
 );
+clientRouter.post(
+  "/:id/reactivate",
+  validate({ params: uuidParamSchema }),
+  asyncHandler(clientsController.reactivate)
+);
 clientRouter.delete("/:id", validate({ params: uuidParamSchema }), asyncHandler(clientsController.remove));
 clientRouter.get(
   "/:id/appointments",

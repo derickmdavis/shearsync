@@ -1093,6 +1093,52 @@ export const activityEventsService = {
     });
   },
 
+  async recordAppointmentReminderEmailSent(stylistId: string, emailEvent: Row): Promise<void> {
+    if (emailEvent.email_type !== "appointment_reminder") {
+      return;
+    }
+
+    const clientId = typeof emailEvent.client_id === "string" ? emailEvent.client_id : null;
+    if (!clientId) {
+      return;
+    }
+
+    const appointmentId = typeof emailEvent.appointment_id === "string" ? emailEvent.appointment_id : null;
+    const client = await this.getClient(stylistId, clientId);
+    const appointment = appointmentId ? await this.getAppointment(stylistId, appointmentId) : null;
+    const timeZone = await businessTimeZoneService.getForUser(stylistId);
+    const clientNames = createClientNameParts(client);
+    const templateData = (emailEvent.template_data ?? {}) as Row;
+    const occurredAt = String(emailEvent.sent_at ?? emailEvent.updated_at ?? new Date().toISOString());
+    const appointmentStartTime = typeof appointment?.appointment_date === "string"
+      ? appointment.appointment_date
+      : typeof templateData.appointment_start_time === "string"
+        ? templateData.appointment_start_time
+        : null;
+    const appointmentDateText = appointmentStartTime ? getLocalDateForInstant(appointmentStartTime, timeZone) : null;
+    const currentLocalDate = getCurrentLocalDate(timeZone, new Date(occurredAt));
+    const description = appointmentStartTime
+      ? appointmentDateText === currentLocalDate
+        ? `Reminder for today's ${formatLocalTime(appointmentStartTime, timeZone)} appointment`
+        : `Reminder for ${formatLocalDayAndTime(appointmentStartTime, timeZone)} appointment`
+      : "Reminder sent by EMAIL";
+
+    await this.createIfMissing({
+      stylistId,
+      clientId,
+      appointmentId,
+      activityType: "reminder_sent",
+      title: `EMAIL reminder sent to ${clientNames.shortName}`,
+      description,
+      occurredAt,
+      metadata: createReminderSentMetadata(clientNames, "email", "appointment_reminder", appointmentStartTime),
+      dedupeKey: getActivityEventDedupeKey("reminder_sent", [
+        String(emailEvent.id ?? ""),
+        "email"
+      ])
+    });
+  },
+
   async recordWaitlistJoined(stylistId: string, waitlistEntry: Row): Promise<void> {
     const clientId = typeof waitlistEntry.client_id === "string" ? waitlistEntry.client_id : null;
     if (!clientId) {

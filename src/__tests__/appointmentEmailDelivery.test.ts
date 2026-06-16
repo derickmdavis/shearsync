@@ -23,12 +23,16 @@ const { rebookNudgesService } =
   require("../services/rebookNudgesService") as typeof import("../services/rebookNudgesService");
 const { birthdayRemindersService } =
   require("../services/birthdayRemindersService") as typeof import("../services/birthdayRemindersService");
+const { appointmentRemindersService } =
+  require("../services/appointmentRemindersService") as typeof import("../services/appointmentRemindersService");
 const { communicationPreferenceTokensService } =
   require("../services/communicationPreferenceTokens") as typeof import("../services/communicationPreferenceTokens");
 const { communicationsService } =
   require("../services/communicationsService") as typeof import("../services/communicationsService");
 const { globalEmailUnsubscribesService } =
   require("../services/globalEmailUnsubscribesService") as typeof import("../services/globalEmailUnsubscribesService");
+const { communicationEventsService } =
+  require("../services/communicationEvents") as typeof import("../services/communicationEvents");
 const { env } = require("../config/env") as typeof import("../config/env");
 const { internalController } =
   require("../controllers/internalController") as typeof import("../controllers/internalController");
@@ -256,6 +260,13 @@ describe("appointment email delivery", () => {
       }
     };
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -301,6 +312,312 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("records activity when an appointment reminder email is sent", async () => {
+    const provider: EmailProvider = {
+      async send() {
+        return {
+          status: "sent",
+          provider: "test-provider",
+          providerMessageId: "provider-message-1"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          timezone: "UTC",
+          business_name: "Maya Johnson Hair"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-05-11T12:00:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          email_type: "appointment_reminder",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            appointment_start_time: "2026-05-11T12:00:00.000Z",
+            appointment_time_display: "Monday, May 11, 2026 at 12:00 PM UTC - 12:45 PM UTC",
+            business_display_name: "Maya Johnson Hair",
+            duration_minutes: 45
+          }
+        }
+      ],
+      activity_events: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 1,
+        skipped: 0,
+        failed: 0
+      });
+      assert.equal(supabase.state.activity_events.length, 1);
+      assert.equal(supabase.state.activity_events[0]?.activity_type, "reminder_sent");
+      assert.equal(supabase.state.activity_events[0]?.title, "EMAIL reminder sent to Jane");
+      assert.equal(supabase.state.activity_events[0]?.appointment_id, "appointment-1");
+      assert.deepEqual(supabase.state.activity_events[0]?.metadata, {
+        client_name: "Jane Doe",
+        channel: "email",
+        reminder_type: "appointment_reminder",
+        appointment_start_time: "2026-05-11T12:00:00.000Z"
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips appointment reminder emails when the appointment is no longer active", async () => {
+    let sendCount = 0;
+    const provider: EmailProvider = {
+      async send() {
+        sendCount += 1;
+        return {
+          status: "sent",
+          provider: "test-provider"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-05-11T12:00:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "cancelled"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          email_type: "appointment_reminder",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          idempotency_key: "appointment_reminder:appointment-1:2026-05-11T12:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            appointment_start_time: "2026-05-11T12:00:00.000Z",
+            business_display_name: "Maya Johnson Hair"
+          }
+        }
+      ],
+      communication_events: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 0,
+        skipped: 1,
+        failed: 0
+      });
+      assert.equal(sendCount, 0);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "appointment_reminder_appointment_not_active");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips stale appointment reminder emails when the appointment time changed", async () => {
+    let sendCount = 0;
+    const provider: EmailProvider = {
+      async send() {
+        sendCount += 1;
+        return {
+          status: "sent",
+          provider: "test-provider"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-05-11T14:00:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          email_type: "appointment_reminder",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          idempotency_key: "appointment_reminder:appointment-1:2026-05-11T12:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            appointment_start_time: "2026-05-11T12:00:00.000Z",
+            business_display_name: "Maya Johnson Hair"
+          }
+        }
+      ],
+      communication_events: []
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 0,
+        skipped: 1,
+        failed: 0
+      });
+      assert.equal(sendCount, 0);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "appointment_reminder_appointment_changed");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not mark a sent email failed when communication event logging fails", async () => {
+    const provider: EmailProvider = {
+      async send() {
+        return {
+          status: "sent",
+          provider: "test-provider",
+          providerMessageId: "provider-message-1"
+        };
+      }
+    };
+    const logCommunicationEvent = mock.method(
+      communicationEventsService,
+      "logCommunicationEvent",
+      async () => {
+        throw new Error("telemetry unavailable");
+      }
+    );
+    const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email_type: "appointment_pending",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Trim",
+            appointment_start_time: "2099-05-12T16:00:00.000Z",
+            appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 10:45 AM MDT",
+            business_display_name: "Maya Johnson Hair",
+            duration_minutes: 45
+          }
+        }
+      ]
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 1,
+        skipped: 0,
+        failed: 0
+      });
+      assert.equal(logCommunicationEvent.mock.callCount(), 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "sent");
+      assert.equal(supabase.state.appointment_email_events[0]?.provider, "test-provider");
+      assert.equal(supabase.state.appointment_email_events[0]?.provider_message_id, "provider-message-1");
+      assert.equal(supabase.state.appointment_email_events[0]?.sent_at, "2026-05-10T12:00:00.000Z");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, null);
+    } finally {
+      logCommunicationEvent.mock.restore();
+      supabase.restore();
+    }
+  });
+
   it("snapshots configured confirmation templates when queueing appointment emails", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -335,6 +652,13 @@ describe("appointment email delivery", () => {
           email_type: "appointment_scheduled",
           subject_template: "{{business_name}} saved your {{service_name}} spot",
           custom_message_block: "Please arrive 10 minutes early."
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
         }
       ],
       appointment_email_events: []
@@ -409,7 +733,13 @@ describe("appointment email delivery", () => {
           custom_message_block: "Book here: {{rebook_url}}"
         }
       ],
-      automation_settings: [],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "rebook_nudges",
+          enabled: true
+        }
+      ],
       rebook_nudges: [],
       appointment_email_events: []
     });
@@ -512,6 +842,13 @@ describe("appointment email delivery", () => {
           rebook_interval_days: 90
         }
       ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -553,6 +890,13 @@ describe("appointment email delivery", () => {
           status: "sending",
           send_after: "2026-06-10T10:00:00.000Z",
           rebook_interval_days: 90
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
         }
       ],
       appointment_email_events: [
@@ -652,6 +996,337 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("does not queue appointment reminders when automation setting is missing", async () => {
+    const supabase = installMockSupabase({
+      automation_settings: [],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T12:00:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const result = await appointmentRemindersService.queueDueForUser(
+        TEST_USER_ID,
+        new Date("2026-06-10T12:00:00.000Z")
+      );
+
+      assert.deepEqual(result, { queued: 0, skipped: 0 });
+      assert.equal(supabase.state.appointment_email_events.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues due appointment reminder emails once when automation is enabled", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          user_id: TEST_USER_ID,
+          display_name: "Maya Johnson",
+          slug: "maya"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        },
+        {
+          id: "client-2",
+          user_id: TEST_USER_ID,
+          first_name: "Sam",
+          last_name: "Lee",
+          email: "sam@example.com"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "appointment_reminders",
+          enabled: true
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-due",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T12:00:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        },
+        {
+          id: "appointment-duplicate",
+          user_id: TEST_USER_ID,
+          client_id: "client-2",
+          appointment_date: "2026-06-11T12:10:00.000Z",
+          service_name: "Color",
+          duration_minutes: 90,
+          status: "pending"
+        },
+        {
+          id: "appointment-cancelled",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T12:00:00.000Z",
+          service_name: "Gloss",
+          duration_minutes: 30,
+          status: "cancelled"
+        },
+        {
+          id: "appointment-outside-window",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T13:00:00.000Z",
+          service_name: "Cut",
+          duration_minutes: 30,
+          status: "scheduled"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "existing-reminder",
+          user_id: TEST_USER_ID,
+          client_id: "client-2",
+          appointment_id: "appointment-duplicate",
+          email_type: "appointment_reminder",
+          recipient_email: "sam@example.com",
+          status: "queued",
+          idempotency_key: "appointment_reminder:appointment-duplicate:2026-06-11T12:10:00.000Z",
+          created_at: "2026-06-10T11:55:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const result = await appointmentRemindersService.queueDueForUser(
+        TEST_USER_ID,
+        new Date("2026-06-10T12:00:00.000Z")
+      );
+
+      assert.deepEqual(result, { queued: 1, skipped: 1 });
+      assert.equal(supabase.state.appointment_email_events.length, 2);
+      assert.equal(supabase.state.appointment_email_events[1]?.email_type, "appointment_reminder");
+      assert.equal(supabase.state.appointment_email_events[1]?.appointment_id, "appointment-due");
+      assert.equal(
+        supabase.state.appointment_email_events[1]?.idempotency_key,
+        "appointment_reminder:appointment-due:2026-06-11T12:00:00.000Z"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues global appointment reminders from due appointments instead of the first users", async () => {
+    const disabledUserId = "33333333-3333-3333-3333-333333333333";
+    const enabledClientId = "44444444-4444-4444-4444-444444444444";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: disabledUserId,
+          email: "disabled@example.com",
+          business_name: "Disabled Salon",
+          timezone: "UTC"
+        },
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          user_id: TEST_USER_ID,
+          display_name: "Maya Johnson",
+          slug: "maya"
+        }
+      ],
+      clients: [
+        {
+          id: enabledClientId,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: disabledUserId,
+          key: "appointment_reminders",
+          enabled: false
+        },
+        {
+          user_id: TEST_USER_ID,
+          key: "appointment_reminders",
+          enabled: true
+        }
+      ],
+      appointments: [
+        {
+          id: "enabled-due-appointment",
+          user_id: TEST_USER_ID,
+          client_id: enabledClientId,
+          appointment_date: "2026-06-11T11:55:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        },
+        {
+          id: "disabled-due-appointment",
+          user_id: disabledUserId,
+          client_id: "disabled-client",
+          appointment_date: "2026-06-11T12:00:00.000Z",
+          service_name: "Color",
+          duration_minutes: 90,
+          status: "scheduled"
+        }
+      ]
+    });
+
+    try {
+      const result = await appointmentRemindersService.queueDue(
+        new Date("2026-06-10T12:00:00.000Z"),
+        { appointmentLimit: 1 }
+      );
+
+      assert.deepEqual(result, { processed_users: 1, queued: 1, skipped: 0 });
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.user_id, TEST_USER_ID);
+      assert.equal(supabase.state.appointment_email_events[0]?.appointment_id, "enabled-due-appointment");
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_reminder");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("applies separate user and appointment limits for global appointment reminders", async () => {
+    const secondUserId = "55555555-5555-4555-8555-555555555555";
+    const secondClientId = "66666666-6666-4666-8666-666666666666";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        },
+        {
+          id: secondUserId,
+          email: "taylor@example.com",
+          business_name: "Taylor Studio",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          user_id: TEST_USER_ID,
+          display_name: "Maya Johnson",
+          slug: "maya"
+        },
+        {
+          user_id: secondUserId,
+          display_name: "Taylor Reed",
+          slug: "taylor"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        },
+        {
+          id: secondClientId,
+          user_id: secondUserId,
+          first_name: "Alex",
+          last_name: "Rivera",
+          email: "alex@example.com"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "appointment_reminders",
+          enabled: true
+        },
+        {
+          user_id: secondUserId,
+          key: "appointment_reminders",
+          enabled: true
+        }
+      ],
+      appointments: [
+        {
+          id: "first-user-first-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T11:55:00.000Z",
+          service_name: "Trim",
+          duration_minutes: 45,
+          status: "scheduled"
+        },
+        {
+          id: "second-user-appointment",
+          user_id: secondUserId,
+          client_id: secondClientId,
+          appointment_date: "2026-06-11T12:00:00.000Z",
+          service_name: "Color",
+          duration_minutes: 90,
+          status: "scheduled"
+        },
+        {
+          id: "first-user-second-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-11T12:05:00.000Z",
+          service_name: "Gloss",
+          duration_minutes: 30,
+          status: "scheduled"
+        }
+      ]
+    });
+
+    try {
+      const result = await appointmentRemindersService.queueDue(
+        new Date("2026-06-10T12:00:00.000Z"),
+        { userLimit: 1, appointmentLimit: 3 }
+      );
+
+      assert.deepEqual(result, { processed_users: 1, queued: 2, skipped: 0 });
+      assert.deepEqual(
+        supabase.state.appointment_email_events.map((event) => event.appointment_id),
+        ["first-user-first-appointment", "first-user-second-appointment"]
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("does not queue birthday reminders while listing birthday reminder records", async () => {
     mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
     const supabase = installMockSupabase({
@@ -682,6 +1357,48 @@ describe("appointment email delivery", () => {
     } finally {
       supabase.restore();
       mock.timers.reset();
+    }
+  });
+
+  it("does not queue birthday reminders when the automation setting is disabled", async () => {
+    const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          id: "automation-setting-1",
+          user_id: TEST_USER_ID,
+          key: "birthday_reminders",
+          enabled: false
+        }
+      ],
+      users: [
+        { id: TEST_USER_ID, timezone: "UTC", business_name: "Maya Johnson Hair" }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com",
+          birthday: "1990-06-10"
+        }
+      ],
+      birthday_reminders: []
+    });
+
+    try {
+      const result = await birthdayRemindersService.queueUpcomingForUser(
+        TEST_USER_ID,
+        new Date("2026-06-06T16:00:00.000Z")
+      );
+
+      assert.deepEqual(result, {
+        queued: 0,
+        skipped: 0
+      });
+      assert.deepEqual(supabase.state.birthday_reminders, []);
+    } finally {
+      supabase.restore();
     }
   });
 
@@ -986,6 +1703,13 @@ describe("appointment email delivery", () => {
 
   it("refuses to process queued events without a real provider unless noop is explicitly allowed", async () => {
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -1017,6 +1741,13 @@ describe("appointment email delivery", () => {
 
   it("marks queued events skipped with the explicitly allowed noop provider", async () => {
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -1062,6 +1793,13 @@ describe("appointment email delivery", () => {
       }
     };
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -1109,6 +1847,13 @@ describe("appointment email delivery", () => {
       }
     };
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",
@@ -1168,6 +1913,13 @@ describe("appointment email delivery", () => {
       }
     };
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "failed-event",
@@ -1295,6 +2047,13 @@ describe("appointment email delivery", () => {
 
   it("processes queued appointment emails through the internal trigger", async () => {
     const supabase = installMockSupabase({
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: [
         {
           id: "email-event-1",

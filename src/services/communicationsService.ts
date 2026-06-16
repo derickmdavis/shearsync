@@ -102,7 +102,6 @@ export const communicationsService = {
     const preference = await communicationPreferencesService.getOrCreateCommunicationPreference({
       userId,
       clientId: typeof token.client_id === "string" ? token.client_id : null,
-      stylistId: typeof token.stylist_id === "string" ? token.stylist_id : null,
       email: channel === "email" ? contactValue : null,
       phone: channel === "sms" ? contactValue : null
     });
@@ -120,7 +119,7 @@ export const communicationsService = {
         source: "unsubscribe_link",
         userId,
         clientId: typeof token.client_id === "string" ? token.client_id : null,
-        stylistId: typeof token.stylist_id === "string" ? token.stylist_id : null,
+        stylistId: userId,
         messageType,
         preferenceTokenId: typeof token.id === "string" ? token.id : null,
         ipAddress: context.ipAddress,
@@ -131,7 +130,6 @@ export const communicationsService = {
     await communicationEventsService.logConsentEvent({
       userId,
       clientId: typeof token.client_id === "string" ? token.client_id : null,
-      stylistId: typeof token.stylist_id === "string" ? token.stylist_id : null,
       channel,
       contactValue,
       contactNormalized,
@@ -145,7 +143,6 @@ export const communicationsService = {
     await communicationEventsService.logCommunicationEvent({
       userId,
       clientId: typeof token.client_id === "string" ? token.client_id : null,
-      stylistId: typeof token.stylist_id === "string" ? token.stylist_id : null,
       channel,
       messageType,
       toAddress: contactValue,
@@ -188,7 +185,6 @@ export const communicationsService = {
       await Promise.all(preferences.map((preference) => communicationEventsService.logConsentEvent({
         userId: String(preference.user_id ?? ""),
         clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        stylistId: typeof preference.stylist_id === "string" ? preference.stylist_id : null,
         channel: "sms",
         contactValue: options.from ?? null,
         contactNormalized: fromNormalized,
@@ -202,7 +198,6 @@ export const communicationsService = {
       await Promise.all(preferences.map((preference) => communicationEventsService.logCommunicationEvent({
         userId: String(preference.user_id ?? ""),
         clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        stylistId: typeof preference.stylist_id === "string" ? preference.stylist_id : null,
         channel: "sms",
         toAddress: options.from ?? null,
         toNormalized: fromNormalized,
@@ -229,7 +224,6 @@ export const communicationsService = {
       await Promise.all(preferences.map((preference) => communicationEventsService.logConsentEvent({
         userId: String(preference.user_id ?? ""),
         clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        stylistId: typeof preference.stylist_id === "string" ? preference.stylist_id : null,
         channel: "sms",
         contactValue: options.from ?? null,
         contactNormalized: fromNormalized,
@@ -247,7 +241,6 @@ export const communicationsService = {
       await Promise.all(preferences.map((preference) => communicationEventsService.logCommunicationEvent({
         userId: String(preference.user_id ?? ""),
         clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        stylistId: typeof preference.stylist_id === "string" ? preference.stylist_id : null,
         channel: "sms",
         toAddress: options.from ?? null,
         toNormalized: fromNormalized,

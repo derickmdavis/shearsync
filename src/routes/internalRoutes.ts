@@ -4,15 +4,24 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { requireInternalApiSecret } from "../middleware/internalAuth";
 import { validate } from "../middleware/validate";
 import {
+  cleanupAppointmentImagesQuerySchema,
   processAppointmentEmailsQuerySchema,
   processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
+  purgeDeletedClientsQuerySchema,
+  queueAppointmentRemindersQuerySchema,
   queueBirthdayRemindersQuerySchema,
   queueRebookNudgesQuerySchema
 } from "../validators/internalValidators";
 
 export const internalRouter = Router();
 
+internalRouter.post(
+  "/appointment-reminders/queue",
+  requireInternalApiSecret,
+  validate({ query: queueAppointmentRemindersQuerySchema }),
+  asyncHandler(internalController.queueAppointmentReminders)
+);
 internalRouter.post(
   "/appointment-emails/process",
   requireInternalApiSecret,
@@ -42,4 +51,16 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processBirthdayRemindersQuerySchema }),
   asyncHandler(internalController.processBirthdayReminders)
+);
+internalRouter.post(
+  "/clients/purge",
+  requireInternalApiSecret,
+  validate({ query: purgeDeletedClientsQuerySchema }),
+  asyncHandler(internalController.purgeDeletedClients)
+);
+internalRouter.post(
+  "/appointment-images/cleanup",
+  requireInternalApiSecret,
+  validate({ query: cleanupAppointmentImagesQuerySchema }),
+  asyncHandler(internalController.cleanupAppointmentImages)
 );

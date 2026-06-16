@@ -11,7 +11,6 @@ import type { Row } from "./db";
 interface LogCommunicationEventOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   channel: CommunicationChannel;
   messageType?: MessageType | null;
   toAddress?: string | null;
@@ -27,7 +26,6 @@ interface LogCommunicationEventOptions {
 interface LogConsentEventOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   channel: CommunicationChannel;
   contactValue?: string | null;
   contactNormalized?: string | null;
@@ -51,7 +49,6 @@ export const communicationEventsService = {
       const { error } = await supabaseAdmin.from("communication_events").insert({
         user_id: options.userId,
         client_id: options.clientId ?? null,
-        stylist_id: options.stylistId ?? null,
         channel: options.channel,
         message_type: options.messageType ?? null,
         to_address: options.toAddress ?? null,
@@ -77,7 +74,6 @@ export const communicationEventsService = {
       const { error } = await supabaseAdmin.from("communication_consent_events").insert({
         user_id: options.userId,
         client_id: options.clientId ?? null,
-        stylist_id: options.stylistId ?? null,
         channel: options.channel,
         contact_value: options.contactValue ?? null,
         contact_normalized: options.contactNormalized ?? null,

@@ -1,4 +1,5 @@
 create extension if not exists pg_trgm;
+create extension if not exists pgcrypto;
 
 create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -24,7 +25,7 @@ create table if not exists public.clients (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   first_name text not null,
-  last_name text not null,
+  last_name text,
   preferred_name text,
   phone text,
   phone_normalized text,
@@ -36,12 +37,22 @@ create table if not exists public.clients (
   tags text[],
   source text check (source in ('referral', 'instagram', 'walk-in', 'existing-client', 'other')),
   reminder_consent boolean,
-  total_spend numeric(10, 2),
+  total_spend numeric(10, 2) not null default 0,
   last_visit_at timestamptz,
   deleted_at timestamptz,
   deleted_reason text,
+  purge_after timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
+);
+
+create table if not exists public.plan_usage_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  event_type text not null,
+  quantity integer not null default 1,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
 );
 
 create table if not exists public.appointments (
@@ -51,7 +62,7 @@ create table if not exists public.appointments (
   appointment_date timestamptz not null,
   service_name text not null,
   duration_minutes integer not null,
-  price numeric(10, 2) default 0,
+  price numeric(10, 2) not null default 0,
   notes text,
   status text not null default 'scheduled',
   booking_source text not null default 'internal' check (booking_source in ('public', 'internal')),
@@ -65,9 +76,76 @@ create table if not exists public.photos (
   user_id uuid not null references public.users(id) on delete cascade,
   client_id uuid not null references public.clients(id) on delete cascade,
   file_path text not null,
-  photo_type text default 'other',
+  photo_type text,
   caption text,
   created_at timestamptz default now()
+);
+
+create table if not exists public.appointment_images (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  bucket text not null default 'appointment-images',
+  storage_path text not null,
+  thumbnail_path text,
+  original_filename text,
+  content_type text not null,
+  file_size_bytes bigint not null,
+  thumbnail_size_bytes bigint,
+  width integer,
+  height integer,
+  image_role text not null default 'general',
+  image_source text not null default 'stylist',
+  captured_at timestamptz,
+  label text,
+  tags text[] not null default '{}',
+  uploaded_by_user_id uuid references public.users(id) on delete set null,
+  public_upload_token_id uuid,
+  caption text,
+  sort_order integer not null default 0,
+  cache_version integer not null default 1,
+  upload_status text not null default 'ready',
+  upload_expires_at timestamptz,
+  finalized_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint appointment_images_bucket_check
+    check (bucket = 'appointment-images'),
+  constraint appointment_images_content_type_check
+    check (content_type in ('image/jpeg', 'image/png', 'image/webp')),
+  constraint appointment_images_file_size_check
+    check (file_size_bytes > 0 and file_size_bytes <= 5242880),
+  constraint appointment_images_thumbnail_size_check
+    check (thumbnail_size_bytes is null or thumbnail_size_bytes > 0),
+  constraint appointment_images_width_check
+    check (width is null or width > 0),
+  constraint appointment_images_height_check
+    check (height is null or height > 0),
+  constraint appointment_images_role_check
+    check (image_role in ('before', 'after', 'inspiration', 'reference', 'formula', 'progress', 'general')),
+  constraint appointment_images_source_check
+    check (image_source in ('stylist', 'client')),
+  constraint appointment_images_upload_status_check
+    check (upload_status in ('pending', 'ready', 'failed', 'expired')),
+  constraint appointment_images_pending_expires_check
+    check (upload_status <> 'pending' or upload_expires_at is not null),
+  constraint appointment_images_ready_finalized_check
+    check (upload_status <> 'ready' or finalized_at is not null),
+  constraint appointment_images_upload_expires_after_created_check
+    check (upload_expires_at is null or upload_expires_at > created_at),
+  constraint appointment_images_label_length_check
+    check (label is null or char_length(trim(label)) between 1 and 120),
+  constraint appointment_images_caption_length_check
+    check (caption is null or char_length(caption) <= 1000),
+  constraint appointment_images_tags_count_check
+    check (array_length(tags, 1) is null or array_length(tags, 1) <= 10),
+  constraint appointment_images_sort_order_check
+    check (sort_order >= 0),
+  constraint appointment_images_cache_version_check
+    check (cache_version >= 1),
+  constraint appointment_images_storage_path_unique
+    unique (bucket, storage_path)
 );
 
 create table if not exists public.reminders (
@@ -110,6 +188,7 @@ create table if not exists public.appointment_email_events (
   client_id uuid not null references public.clients(id),
   appointment_id uuid references public.appointments(id),
   rebook_nudge_id uuid,
+  birthday_reminder_id uuid,
   email_type text not null,
   recipient_email text not null,
   status text not null default 'queued',
@@ -123,9 +202,55 @@ create table if not exists public.appointment_email_events (
   sent_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
-  check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled', 'rebooking_prompt')),
+  check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled', 'appointment_reminder', 'rebooking_prompt', 'birthday_reminder')),
   check (status in ('queued', 'sending', 'sent', 'failed', 'skipped'))
 );
+
+create table if not exists public.appointment_email_templates (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  email_type text not null,
+  subject_template text,
+  custom_message_block text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  constraint appointment_email_templates_email_type_check
+    check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed')),
+  constraint appointment_email_templates_subject_length_check
+    check (subject_template is null or (char_length(trim(subject_template)) between 1 and 160)),
+  constraint appointment_email_templates_custom_block_length_check
+    check (custom_message_block is null or (char_length(trim(custom_message_block)) between 1 and 4000)),
+  constraint appointment_email_templates_user_email_type_unique unique (user_id, email_type)
+);
+
+create table if not exists public.birthday_reminders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id) on delete cascade,
+  email_event_id uuid references public.appointment_email_events(id) on delete set null,
+  recipient_email text not null,
+  birthday date not null,
+  birthday_occurrence_date date not null,
+  scheduled_send_at timestamptz not null,
+  status text not null default 'queued',
+  template_data jsonb not null default '{}'::jsonb,
+  cancelled_at timestamptz,
+  cancelled_reason text,
+  sent_at timestamptz,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint birthday_reminders_recipient_email_check
+    check (char_length(trim(recipient_email)) > 0),
+  constraint birthday_reminders_status_check
+    check (status in ('queued', 'sending', 'sent', 'cancelled', 'skipped', 'failed'))
+);
+
+alter table public.appointment_email_events
+  add constraint appointment_email_events_birthday_reminder_id_fkey
+  foreign key (birthday_reminder_id)
+  references public.birthday_reminders(id)
+  on delete set null;
 
 create table if not exists public.rebook_nudge_settings (
   user_id uuid primary key references public.users(id) on delete cascade,
@@ -185,7 +310,6 @@ create table if not exists public.client_communication_preferences (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   client_id uuid references public.clients(id) on delete set null,
-  stylist_id uuid references public.users(id) on delete set null,
   email text,
   email_normalized text,
   phone text,
@@ -217,7 +341,6 @@ create table if not exists public.communication_events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   client_id uuid references public.clients(id) on delete set null,
-  stylist_id uuid references public.users(id) on delete set null,
   channel text not null,
   message_type text,
   to_address text,
@@ -269,7 +392,6 @@ create table if not exists public.communication_consent_events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   client_id uuid references public.clients(id) on delete set null,
-  stylist_id uuid references public.users(id) on delete set null,
   channel text not null,
   contact_value text,
   contact_normalized text,
@@ -333,7 +455,6 @@ create table if not exists public.communication_preference_tokens (
   token_hash text not null,
   user_id uuid not null references public.users(id) on delete cascade,
   client_id uuid references public.clients(id) on delete set null,
-  stylist_id uuid references public.users(id) on delete set null,
   channel text not null,
   contact_value text not null,
   contact_normalized text not null,
@@ -363,15 +484,50 @@ create table if not exists public.communication_preference_tokens (
     check (action in ('unsubscribe', 'manage_preferences', 'sms_opt_in', 'sms_opt_out'))
 );
 
+create table if not exists public.global_email_unsubscribes (
+  id uuid primary key default gen_random_uuid(),
+  email_normalized text not null,
+  opted_out_at timestamptz not null default now(),
+  opt_out_source text not null default 'unsubscribe_link',
+  triggering_user_id uuid references public.users(id) on delete set null,
+  triggering_client_id uuid references public.clients(id) on delete set null,
+  triggering_stylist_id uuid references public.users(id) on delete set null,
+  triggering_message_type text,
+  preference_token_id uuid references public.communication_preference_tokens(id) on delete set null,
+  ip_address text,
+  user_agent text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint global_email_unsubscribes_email_unique unique (email_normalized),
+  constraint global_email_unsubscribes_source_check
+    check (opt_out_source in ('unsubscribe_link', 'admin', 'manual', 'import', 'system')),
+  constraint global_email_unsubscribes_message_type_check
+    check (
+      triggering_message_type is null
+      or triggering_message_type in (
+        'appointment_confirmation',
+        'appointment_reminder',
+        'appointment_cancelled',
+        'appointment_rescheduled',
+        'waitlist_update',
+        'rebooking_prompt',
+        'birthday_reminder',
+        'marketing',
+        'business_recap'
+      )
+    )
+);
+
 create table if not exists public.automation_settings (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   key text not null,
-  enabled boolean not null default true,
+  enabled boolean not null default false,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   constraint automation_settings_key_check
-    check (key in ('rebook_nudges', 'appointment_reminders', 'email_confirmations', 'no_show_follow_up', 'waitlist_match')),
+    check (key in ('rebook_nudges', 'appointment_reminders', 'email_confirmations', 'no_show_follow_up', 'waitlist_match', 'birthday_reminders')),
   constraint automation_settings_user_key_unique unique (user_id, key)
 );
 
@@ -383,7 +539,7 @@ create table if not exists public.stylists (
   bio text,
   cover_photo_url text,
   instagram text,
-  booking_enabled boolean default false,
+  booking_enabled boolean not null default true,
   intelligent_scheduling_enabled boolean not null default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -392,10 +548,10 @@ create table if not exists public.stylists (
 create table if not exists public.booking_rules (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.users(id) on delete cascade,
-  lead_time_hours integer not null default 0,
-  same_day_booking_allowed boolean not null default false,
+  lead_time_hours integer not null default 2,
+  same_day_booking_allowed boolean not null default true,
   same_day_booking_cutoff time not null default '17:00:00',
-  max_booking_window_days integer not null default 30,
+  max_booking_window_days integer not null default 90,
   cancellation_window_hours integer not null default 24,
   late_cancellation_fee_enabled boolean not null default false,
   late_cancellation_fee_type text not null default 'flat' check (late_cancellation_fee_type in ('flat', 'percent')),
@@ -493,6 +649,12 @@ create index if not exists clients_user_updated_at_idx on public.clients(user_id
 create index if not exists clients_user_name_idx on public.clients(user_id, last_name, first_name, id);
 create index if not exists clients_user_total_spend_idx on public.clients(user_id, total_spend desc, id);
 create index if not exists clients_user_last_visit_at_idx on public.clients(user_id, last_visit_at desc, id);
+create index if not exists clients_user_active_updated_at_idx
+  on public.clients(user_id, updated_at desc, id)
+  where deleted_at is null;
+create index if not exists clients_purge_after_idx
+  on public.clients(purge_after)
+  where purge_after is not null;
 create index if not exists clients_user_first_name_trgm_idx on public.clients using gin (first_name gin_trgm_ops);
 create index if not exists clients_user_last_name_trgm_idx on public.clients using gin (last_name gin_trgm_ops);
 create index if not exists clients_user_preferred_name_trgm_idx on public.clients using gin (preferred_name gin_trgm_ops);
@@ -509,6 +671,23 @@ create unique index if not exists appointments_user_id_appointment_date_active_i
 create index if not exists appointments_time_range_gist_idx
   on public.appointments using gist (appointment_time_range);
 create index if not exists photos_user_id_client_id_idx on public.photos(user_id, client_id);
+create unique index if not exists appointment_images_thumbnail_path_unique_idx
+  on public.appointment_images(bucket, thumbnail_path)
+  where thumbnail_path is not null;
+create index if not exists appointment_images_appointment_id_idx
+  on public.appointment_images(appointment_id);
+create index if not exists appointment_images_client_id_idx
+  on public.appointment_images(client_id);
+create index if not exists appointment_images_user_id_idx
+  on public.appointment_images(user_id);
+create index if not exists appointment_images_user_appointment_sort_idx
+  on public.appointment_images(user_id, appointment_id, sort_order, created_at desc);
+create index if not exists appointment_images_user_client_idx
+  on public.appointment_images(user_id, client_id);
+create index if not exists appointment_images_user_created_idx
+  on public.appointment_images(user_id, created_at desc);
+create index if not exists appointment_images_user_status_expires_idx
+  on public.appointment_images(user_id, upload_status, upload_expires_at);
 create index if not exists reminders_user_id_due_date_idx on public.reminders(user_id, due_date);
 create index if not exists reminders_user_id_sent_at_idx on public.reminders(user_id, sent_at);
 create index if not exists booking_rules_user_id_idx on public.booking_rules(user_id);
@@ -533,12 +712,31 @@ create index if not exists activity_events_activity_type_idx on public.activity_
 create unique index if not exists activity_events_user_dedupe_key_idx on public.activity_events(user_id, dedupe_key);
 create unique index if not exists appointment_email_events_idempotency_key_idx
   on public.appointment_email_events(idempotency_key);
+create index if not exists appointment_email_events_delivery_retry_idx
+  on public.appointment_email_events(status, last_attempt_at, created_at);
 create index if not exists appointment_email_events_user_status_idx
   on public.appointment_email_events(user_id, status, created_at);
 create index if not exists appointment_email_events_appointment_id_idx
   on public.appointment_email_events(appointment_id);
 create index if not exists appointment_email_events_rebook_nudge_id_idx
   on public.appointment_email_events(rebook_nudge_id);
+create index if not exists appointment_email_events_birthday_reminder_id_idx
+  on public.appointment_email_events(birthday_reminder_id);
+create index if not exists appointment_email_templates_user_id_idx
+  on public.appointment_email_templates(user_id);
+create index if not exists birthday_reminders_user_status_send_at_idx
+  on public.birthday_reminders(user_id, status, scheduled_send_at);
+create index if not exists birthday_reminders_status_send_at_idx
+  on public.birthday_reminders(status, scheduled_send_at);
+create index if not exists birthday_reminders_client_id_idx
+  on public.birthday_reminders(client_id);
+create index if not exists birthday_reminders_email_event_id_idx
+  on public.birthday_reminders(email_event_id);
+create unique index if not exists birthday_reminders_active_client_year_idx
+  on public.birthday_reminders(user_id, client_id, birthday_occurrence_date)
+  where status in ('queued', 'sending', 'failed');
+create index if not exists plan_usage_events_user_month_idx
+  on public.plan_usage_events(user_id, created_at);
 create index if not exists rebook_nudge_settings_user_id_idx
   on public.rebook_nudge_settings(user_id);
 create index if not exists rebook_nudges_user_status_send_after_idx
@@ -576,21 +774,30 @@ create index if not exists communication_preference_tokens_contact_idx
   on public.communication_preference_tokens(channel, contact_normalized, created_at desc);
 create index if not exists communication_preference_tokens_expires_at_idx
   on public.communication_preference_tokens(expires_at);
+create index if not exists global_email_unsubscribes_email_idx
+  on public.global_email_unsubscribes(email_normalized);
+create index if not exists global_email_unsubscribes_opted_out_at_idx
+  on public.global_email_unsubscribes(opted_out_at desc);
 create index if not exists automation_settings_user_id_idx on public.automation_settings(user_id);
 
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
 alter table public.appointments enable row level security;
 alter table public.photos enable row level security;
+alter table public.appointment_images enable row level security;
 alter table public.reminders enable row level security;
 alter table public.activity_events enable row level security;
 alter table public.appointment_email_events enable row level security;
+alter table public.appointment_email_templates enable row level security;
+alter table public.birthday_reminders enable row level security;
+alter table public.plan_usage_events enable row level security;
 alter table public.rebook_nudge_settings enable row level security;
 alter table public.rebook_nudges enable row level security;
 alter table public.client_communication_preferences enable row level security;
 alter table public.communication_events enable row level security;
 alter table public.communication_consent_events enable row level security;
 alter table public.communication_preference_tokens enable row level security;
+alter table public.global_email_unsubscribes enable row level security;
 alter table public.automation_settings enable row level security;
 alter table public.stylists enable row level security;
 alter table public.booking_rules enable row level security;
@@ -598,6 +805,22 @@ alter table public.services enable row level security;
 alter table public.availability enable row level security;
 alter table public.stylist_off_days enable row level security;
 alter table public.waitlist_entries enable row level security;
+
+create or replace function public.set_appointment_images_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_appointment_images_updated_at on public.appointment_images;
+create trigger set_appointment_images_updated_at
+  before update on public.appointment_images
+  for each row
+  execute function public.set_appointment_images_updated_at();
 
 do $$
 begin
@@ -611,6 +834,63 @@ begin
     create policy activity_events_select_own
       on public.activity_events
       for select
+      using (auth.uid() = user_id);
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'appointment_images'
+      and policyname = 'appointment_images_select_own'
+  ) then
+    create policy appointment_images_select_own
+      on public.appointment_images
+      for select
+      using (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'appointment_images'
+      and policyname = 'appointment_images_insert_own'
+  ) then
+    create policy appointment_images_insert_own
+      on public.appointment_images
+      for insert
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'appointment_images'
+      and policyname = 'appointment_images_update_own'
+  ) then
+    create policy appointment_images_update_own
+      on public.appointment_images
+      for update
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'appointment_images'
+      and policyname = 'appointment_images_delete_own'
+  ) then
+    create policy appointment_images_delete_own
+      on public.appointment_images
+      for delete
       using (auth.uid() = user_id);
   end if;
 end
@@ -672,6 +952,20 @@ begin
   end if;
 end
 $$;
+
+create or replace view public.user_storage_usage
+with (security_invoker = true)
+as
+select
+  user_id,
+  count(*) filter (where upload_status = 'ready') as appointment_image_count,
+  coalesce(
+    sum(file_size_bytes + coalesce(thumbnail_size_bytes, 0))
+      filter (where upload_status = 'ready'),
+    0
+  )::bigint as appointment_image_bytes
+from public.appointment_images
+group by user_id;
 
 do $$
 begin

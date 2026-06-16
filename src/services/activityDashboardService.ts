@@ -59,6 +59,32 @@ const REMINDER_SELECT = `
   updated_at
 `;
 
+const APPOINTMENT_REMINDER_EMAIL_SELECT = `
+  id,
+  user_id,
+  client_id,
+  appointment_id,
+  email_type,
+  recipient_email,
+  status,
+  created_at,
+  updated_at,
+  template_data
+`;
+
+type ReminderQueueItem = {
+  reminder_id: unknown;
+  email_event_id?: unknown;
+  appointment_id?: unknown;
+  client_id?: unknown;
+  client_name: string;
+  send_at: unknown;
+  appointment_start_time?: unknown;
+  channel: unknown;
+  reminder_type: unknown;
+  status: string;
+};
+
 const WAITLIST_SELECT = `
   id,
   user_id,
@@ -121,12 +147,12 @@ const loadAutomationSettings = async (userId: string): Promise<Map<AutomationCon
   return new Map(
     ((data ?? []) as Row[])
       .filter((row) => typeof row.key === "string" && isAutomationControlKey(row.key))
-      .map((row) => [row.key as AutomationControlKey, row.enabled !== false])
+      .map((row) => [row.key as AutomationControlKey, row.enabled === true])
   );
 };
 
 const getEnabled = (settings: Map<AutomationControlKey, boolean>, key: AutomationControlKey): boolean =>
-  settings.get(key) ?? true;
+  settings.get(key) ?? false;
 
 const loadRecentActivity = async (userId: string): Promise<ActivityEventItem[]> => {
   const feed = await activityEventsService.getFeed(userId, { limit: 10 });
@@ -247,6 +273,83 @@ const loadReminderQueue = async (userId: string) => {
       status: "scheduled"
     };
   });
+};
+
+const loadAppointmentEmailReminderQueue = async (userId: string) => {
+  const { data, error } = await supabaseAdmin
+    .from("appointment_email_events")
+    .select(APPOINTMENT_REMINDER_EMAIL_SELECT)
+    .eq("user_id", userId)
+    .eq("email_type", "appointment_reminder")
+    .in("status", ["queued", "sending"])
+    .order("created_at", { ascending: true })
+    .limit(50);
+
+  handleSupabaseError(error, "Unable to load appointment reminder email queue");
+  const emailEvents = (data ?? []) as Row[];
+  const clientsById = await loadClientsById(userId, emailEvents.map((row) => getString(row, "client_id")));
+  const appointmentIds = [...new Set(emailEvents.map((row) => getString(row, "appointment_id")).filter((id): id is string => Boolean(id)))];
+  const appointmentData: Row[] = [];
+
+  if (appointmentIds.length > 0) {
+    const { data: appointments, error: appointmentError } = await supabaseAdmin
+      .from("appointments")
+      .select("id, appointment_date")
+      .eq("user_id", userId)
+      .in("id", appointmentIds);
+
+    handleSupabaseError(appointmentError, "Unable to load appointment reminder email appointments");
+    appointmentData.push(...((appointments ?? []) as Row[]));
+  }
+
+  const appointmentsById = new Map(appointmentData.map((appointment) => [appointment.id as string, appointment]));
+
+  return emailEvents.map((emailEvent) => {
+    const clientId = getString(emailEvent, "client_id");
+    const appointmentId = getString(emailEvent, "appointment_id");
+    const appointment = appointmentId ? appointmentsById.get(appointmentId) : undefined;
+    const templateData = (emailEvent.template_data ?? {}) as Row;
+    const appointmentStartTime = getString(appointment ?? {}, "appointment_date") ?? getString(templateData, "appointment_start_time");
+
+    return {
+      reminder_id: emailEvent.id,
+      email_event_id: emailEvent.id,
+      appointment_id: appointmentId,
+      client_id: clientId,
+      client_name: toClientName(clientId ? clientsById.get(clientId) : undefined),
+      send_at: emailEvent.created_at,
+      appointment_start_time: appointmentStartTime,
+      channel: "email",
+      reminder_type: "appointment_reminder",
+      status: emailEvent.status === "sending" ? "sending" : "queued"
+    };
+  });
+};
+
+const getReminderQueueDedupeKey = (item: ReminderQueueItem): string => {
+  const appointmentId = String(item.appointment_id ?? "");
+  const reminderType = String(item.reminder_type ?? "");
+  const channel = String(item.channel ?? "");
+
+  if (appointmentId && reminderType && channel) {
+    return `${appointmentId}:${reminderType}:${channel}`;
+  }
+
+  return `reminder:${String(item.reminder_id ?? "")}`;
+};
+
+const mergeReminderQueues = (
+  legacyReminderQueue: ReminderQueueItem[],
+  appointmentEmailReminderQueue: ReminderQueueItem[]
+): ReminderQueueItem[] => {
+  const appointmentEmailReminderKeys = new Set(
+    appointmentEmailReminderQueue.map((reminder) => getReminderQueueDedupeKey(reminder))
+  );
+
+  return [
+    ...legacyReminderQueue.filter((reminder) => !appointmentEmailReminderKeys.has(getReminderQueueDedupeKey(reminder))),
+    ...appointmentEmailReminderQueue
+  ];
 };
 
 const loadReviewRequestQueue = async (userId: string) => {
@@ -450,6 +553,7 @@ export const activityDashboardService = {
       recentActivity,
       cancellationReviewItems,
       reminderQueue,
+      appointmentEmailReminderQueue,
       reviewRequestQueue,
       waitlistMatches,
       feedCounts,
@@ -462,6 +566,7 @@ export const activityDashboardService = {
       loadRecentActivity(userId),
       loadCancellationReviewItems(userId, timeZone),
       loadReminderQueue(userId),
+      loadAppointmentEmailReminderQueue(userId),
       loadReviewRequestQueue(userId),
       loadWaitlistMatches(userId, timeZone),
       activityEventsService.getCategoryCounts(userId, {}, timeZone),
@@ -476,6 +581,7 @@ export const activityDashboardService = {
       loadImpactThisWeek(userId, timeZone)
     ]);
 
+    const appointmentReminderQueue = mergeReminderQueues(reminderQueue, appointmentEmailReminderQueue);
     const noShowTodayCount = 0;
     const automationControls = [
       {
@@ -493,8 +599,8 @@ export const activityDashboardService = {
         key: "appointment_reminders",
         label: AUTOMATION_LABELS.appointment_reminders,
         enabled: getEnabled(settings, "appointment_reminders"),
-        status_label: `${reminderQueue.length} scheduled`,
-        scheduled_count: reminderQueue.length
+        status_label: `${appointmentReminderQueue.length} scheduled`,
+        scheduled_count: appointmentReminderQueue.length
       },
       {
         key: "email_confirmations",
@@ -530,7 +636,7 @@ export const activityDashboardService = {
         cancellations_need_review_count: cancellationReviewItems.length,
         waitlist_match_count: waitlistMatches.length,
         pending_approval_count: feedCounts.approvals,
-        pending_reminder_count: reminderQueue.length,
+        pending_reminder_count: appointmentReminderQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
         pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
         birthday_reminder_count: birthdayReminderCounts.queued
@@ -546,9 +652,9 @@ export const activityDashboardService = {
       cancellation_review_items: cancellationReviewItems,
       waitlist_match_count: waitlistMatches.length,
       waitlist_matches: waitlistMatches,
-      pending_reminder_count: reminderQueue.length,
-      scheduled_reminder_count: reminderQueue.length,
-      reminder_queue: reminderQueue,
+      pending_reminder_count: appointmentReminderQueue.length,
+      scheduled_reminder_count: appointmentReminderQueue.length,
+      reminder_queue: appointmentReminderQueue,
       queued_review_request_count: reviewRequestQueue.length,
       review_request_queue: reviewRequestQueue,
       automation_health: automationHealth,

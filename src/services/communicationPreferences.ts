@@ -17,7 +17,6 @@ import { globalEmailUnsubscribesService, isGlobalEmailUnsubscribeExempt } from "
 interface PreferenceContactOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   email?: string | null;
   phone?: string | null;
 }
@@ -25,7 +24,6 @@ interface PreferenceContactOptions {
 interface CanSendCommunicationOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   channel: CommunicationChannel;
   to?: string | null;
   messageType: MessageType;
@@ -42,7 +40,6 @@ interface CanSendCommunicationResult {
 interface OptInSmsOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   phone: string;
   source: ConsentSource;
   consentText: string;
@@ -99,10 +96,6 @@ const updateMissingPreferenceFields = async (
 
   if (options.clientId && isMissing(preference.client_id)) {
     updates.client_id = options.clientId;
-  }
-
-  if (options.stylistId && isMissing(preference.stylist_id)) {
-    updates.stylist_id = options.stylistId;
   }
 
   if (options.email && emailNormalized && isMissing(preference.email)) {
@@ -212,7 +205,6 @@ export const communicationPreferencesService = {
       .insert({
         user_id: options.userId,
         client_id: options.clientId ?? null,
-        stylist_id: options.stylistId ?? null,
         email: options.email ?? null,
         email_normalized: emailNormalized,
         phone: options.phone ?? null,
@@ -257,7 +249,6 @@ export const communicationPreferencesService = {
       const createdPreference = await this.getOrCreateCommunicationPreference({
         userId: options.userId,
         clientId: options.clientId,
-        stylistId: options.stylistId,
         email: options.to ?? null
       });
       return { canSend: true, preference: createdPreference, toNormalized: normalized };
@@ -283,7 +274,6 @@ export const communicationPreferencesService = {
     const preference = await this.getOrCreateCommunicationPreference({
       userId: options.userId,
       clientId: options.clientId,
-      stylistId: options.stylistId,
       phone: options.phone
     });
 
@@ -311,7 +301,6 @@ export const communicationPreferencesService = {
     await communicationEventsService.logConsentEvent({
       userId: options.userId,
       clientId: options.clientId,
-      stylistId: options.stylistId,
       channel: "sms",
       contactValue: options.phone,
       contactNormalized: phoneNormalized,

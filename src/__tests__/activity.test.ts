@@ -1622,6 +1622,7 @@ describe("Activity handlers", () => {
     const waitlistEntryId = "66666666-6666-4666-8666-666666666666";
     const followUpReminderId = "12121212-1212-4121-8121-121212121212";
     const appointmentReminderId = "34343434-3434-4343-8343-343434343434";
+    const duplicateAppointmentReminderId = "45454545-4545-4545-8545-454545454545";
     const supabase = installMockSupabase({
       users: [
         { id: userId, timezone: "UTC" }
@@ -1685,6 +1686,19 @@ describe("Activity handlers", () => {
           reminder_type: "follow_up",
           created_at: "2026-06-05T12:00:00.000Z",
           updated_at: "2026-06-05T12:00:00.000Z"
+        },
+        {
+          id: duplicateAppointmentReminderId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: secondAppointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-07T15:55:00.000Z",
+          status: "open",
+          channel: "email",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-05T12:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
         }
       ],
       waitlist_entries: [
@@ -1745,6 +1759,19 @@ describe("Activity handlers", () => {
           user_id: userId,
           status: "queued",
           created_at: "2026-06-06T15:00:00.000Z"
+        },
+        {
+          id: "67676767-6767-4676-8676-676767676767",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: secondAppointmentId,
+          email_type: "appointment_reminder",
+          recipient_email: "sarah@example.com",
+          status: "queued",
+          created_at: "2026-06-06T15:55:00.000Z",
+          template_data: {
+            appointment_start_time: "2026-06-08T17:00:00.000Z"
+          }
         }
       ],
       automation_settings: [
@@ -1753,6 +1780,31 @@ describe("Activity handlers", () => {
           user_id: userId,
           key: "waitlist_match",
           enabled: false
+        },
+        {
+          user_id: userId,
+          key: "rebook_nudges",
+          enabled: true
+        },
+        {
+          user_id: userId,
+          key: "appointment_reminders",
+          enabled: true
+        },
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        },
+        {
+          user_id: userId,
+          key: "no_show_follow_up",
+          enabled: true
+        },
+        {
+          user_id: userId,
+          key: "birthday_reminders",
+          enabled: true
         }
       ]
     });
@@ -1778,7 +1830,7 @@ describe("Activity handlers", () => {
           };
           cancellation_review_items: Array<{ appointment_id: string; review_status: string }>;
           waitlist_matches: Array<{ waitlist_entry_id: string; matched_opening_start_time: string }>;
-          reminder_queue: Array<{ reminder_id: string; status: string }>;
+          reminder_queue: Array<{ reminder_id: string; status: string; channel?: string }>;
           review_request_queue: Array<{ review_request_id: string; status: string }>;
           automation_health: { score: number; status: string };
           automation_impact_this_week: { booked_count: number; reminders_sent_count: number };
@@ -1790,7 +1842,7 @@ describe("Activity handlers", () => {
         cancellations_need_review_count: 1,
         waitlist_match_count: 1,
         pending_approval_count: 1,
-        pending_reminder_count: 2,
+        pending_reminder_count: 3,
         queued_review_request_count: 1,
         pending_rebook_nudge_count: 0,
         birthday_reminder_count: 0
@@ -1803,8 +1855,11 @@ describe("Activity handlers", () => {
       ]);
       assert.deepEqual(payload.reminder_queue.map((item) => [item.reminder_id, item.status]), [
         [appointmentReminderId, "scheduled"],
-        [followUpReminderId, "scheduled"]
+        [followUpReminderId, "scheduled"],
+        ["67676767-6767-4676-8676-676767676767", "queued"]
       ]);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id === duplicateAppointmentReminderId), false);
+      assert.equal(payload.reminder_queue.find((item) => item.reminder_id === "67676767-6767-4676-8676-676767676767")?.channel, "email");
       assert.deepEqual(payload.review_request_queue.map((item) => [item.review_request_id, item.status]), [
         [followUpReminderId, "queued"]
       ]);
@@ -1815,7 +1870,7 @@ describe("Activity handlers", () => {
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.enabled, true);
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.status_label, "On for bookings");
       assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
-      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "2 scheduled");
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "3 scheduled");
 
       const updateReq = createMockRequest({
         user: { id: userId } as Request["user"],
@@ -1825,7 +1880,7 @@ describe("Activity handlers", () => {
 
       const updateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), updateReq);
       assert.equal(updateResponse.statusCode, 200);
-      assert.equal(supabase.state.automation_settings[0]?.enabled, true);
+      assert.equal(supabase.state.automation_settings.find((setting) => setting.key === "waitlist_match")?.enabled, true);
 
       const emailUpdateReq = createMockRequest({
         user: { id: userId } as Request["user"],
@@ -1917,17 +1972,17 @@ describe("Activity handlers", () => {
       assert.equal(payload.queued_review_request_count, 0);
       assert.deepEqual(payload.review_request_queue, []);
       assert.deepEqual(payload.automation_health, {
-        score: 100,
-        status: "all_good",
+        score: 40,
+        status: "issue",
         failed_count: 0,
         delayed_count: 0,
-        reasons: []
+        reasons: ["6 automation controls are disabled"]
       });
-      assert.equal(payload.automation_health_score, 100);
-      assert.equal(payload.automation_health_status, "all_good");
+      assert.equal(payload.automation_health_score, 40);
+      assert.equal(payload.automation_health_status, "issue");
       assert.equal(payload.failed_automation_count, 0);
       assert.equal(payload.delayed_automation_count, 0);
-      assert.deepEqual(payload.health_reasons, []);
+      assert.deepEqual(payload.health_reasons, ["6 automation controls are disabled"]);
       assert.deepEqual(payload.automation_impact_this_week, {
         booked_count: 0,
         total_booking_activity_count: 0,
@@ -1940,7 +1995,7 @@ describe("Activity handlers", () => {
       assert.equal(
         (payload.automation_controls as Array<{ key?: string; enabled?: boolean }>)
           .find((control) => control.key === "email_confirmations")?.enabled,
-        true
+        false
       );
       assert.equal(queryLog.some((entry) => entry.operation === "in" && entry.values.length === 0), false);
     } finally {

@@ -1,6 +1,9 @@
 import type { Request, Response } from "express";
 import { appointmentEmailDeliveryService } from "../services/appointmentEmailDeliveryService";
+import { appointmentImageCleanupService } from "../services/appointmentImageCleanupService";
+import { appointmentRemindersService } from "../services/appointmentRemindersService";
 import { birthdayRemindersService } from "../services/birthdayRemindersService";
+import { clientPurgeService } from "../services/clientPurgeService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
 
 export const internalController = {
@@ -14,6 +17,21 @@ export const internalController = {
       allowNoopProvider: query.allow_noop === true
     });
 
+    res.json({ data: result });
+  },
+
+  async queueAppointmentReminders(req: Request, res: Response) {
+    const query = req.query as {
+      limit?: number;
+      user_limit?: number;
+      appointment_limit?: number;
+      window_minutes?: number;
+    };
+    const result = await appointmentRemindersService.queueDue(new Date(), {
+      userLimit: query.user_limit,
+      appointmentLimit: query.appointment_limit ?? query.limit,
+      windowMinutes: query.window_minutes
+    });
     res.json({ data: result });
   },
 
@@ -39,5 +57,41 @@ export const internalController = {
     const query = req.query as { limit?: number };
     const result = await birthdayRemindersService.processQueuedBirthdayEmails(new Date(), query.limit);
     res.json({ data: result });
+  },
+
+  async purgeDeletedClients(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await clientPurgeService.purgeExpiredDeletedClients(new Date(), {
+      limit: query.limit
+    });
+    res.json({ data: result });
+  },
+
+  async cleanupAppointmentImages(req: Request, res: Response) {
+    const query = req.query as {
+      limit?: number;
+      dry_run?: boolean;
+      include_orphans?: boolean;
+      prefix?: string;
+    };
+    const [expiredPending, orphanedStorage] = await Promise.all([
+      appointmentImageCleanupService.cleanupExpiredPendingUploads(new Date(), {
+        limit: query.limit
+      }),
+      query.include_orphans === false
+        ? Promise.resolve(null)
+        : appointmentImageCleanupService.cleanupOrphanedStorageObjects({
+            limit: query.limit,
+            dryRun: query.dry_run !== false,
+            prefix: query.prefix
+          })
+    ]);
+
+    res.json({
+      data: {
+        expiredPending,
+        orphanedStorage
+      }
+    });
   }
 };

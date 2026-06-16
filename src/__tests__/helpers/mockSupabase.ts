@@ -11,9 +11,12 @@ interface MockSupabaseOptions {
 type SortDirection = { column: string; ascending: boolean };
 type Filter =
   | { type: "eq"; column: string; value: unknown }
+  | { type: "is"; column: string; value: unknown }
+  | { type: "not"; column: string; operator: "is"; value: unknown }
   | { type: "neq"; column: string; value: unknown }
   | { type: "in"; column: string; values: unknown[] }
   | { type: "gte"; column: string; value: unknown }
+  | { type: "lte"; column: string; value: unknown }
   | { type: "lt"; column: string; value: unknown }
   | { type: "or"; conditions: OrFilter[] };
 type SimpleOrFilter = { column: string; operator: "eq" | "neq" | "gte" | "gt" | "lte" | "lt" | "ilike" | "cs"; value: string };
@@ -136,6 +139,19 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
     return this;
   }
 
+  is(column: string, value: unknown) {
+    this.filters.push({ type: "is", column, value });
+    return this;
+  }
+
+  not(column: string, operator: string, value: unknown) {
+    if (operator === "is") {
+      this.filters.push({ type: "not", column, operator, value });
+    }
+
+    return this;
+  }
+
   neq(column: string, value: unknown) {
     this.filters.push({ type: "neq", column, value });
     return this;
@@ -149,6 +165,11 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
 
   gte(column: string, value: unknown) {
     this.filters.push({ type: "gte", column, value });
+    return this;
+  }
+
+  lte(column: string, value: unknown) {
+    this.filters.push({ type: "lte", column, value });
     return this;
   }
 
@@ -228,12 +249,26 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
         switch (filter.type) {
           case "eq":
             return row[filter.column] === filter.value;
+          case "is":
+            if (filter.value === null) {
+              return row[filter.column] === null || row[filter.column] === undefined;
+            }
+
+            return row[filter.column] === filter.value;
+          case "not":
+            if (filter.operator === "is" && filter.value === null) {
+              return row[filter.column] !== null && row[filter.column] !== undefined;
+            }
+
+            return row[filter.column] !== filter.value;
           case "neq":
             return row[filter.column] !== filter.value;
           case "in":
             return filter.values.includes(row[filter.column]);
           case "gte":
             return String(row[filter.column] ?? "") >= String(filter.value ?? "");
+          case "lte":
+            return String(row[filter.column] ?? "") <= String(filter.value ?? "");
           case "lt":
             return String(row[filter.column] ?? "") < String(filter.value ?? "");
           case "or":

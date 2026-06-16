@@ -14,7 +14,6 @@ import { handleSupabaseError } from "./db";
 interface CreateCommunicationPreferenceTokenOptions {
   userId: string;
   clientId?: string | null;
-  stylistId?: string | null;
   channel: CommunicationChannel;
   contactValue: string;
   messageType?: MessageType | null;
@@ -34,7 +33,6 @@ export const communicationPreferenceTokensService = {
       token_hash: hashToken(rawToken),
       user_id: options.userId,
       client_id: options.clientId ?? null,
-      stylist_id: options.stylistId ?? null,
       channel: options.channel,
       contact_value: options.contactValue,
       contact_normalized: contactNormalized,

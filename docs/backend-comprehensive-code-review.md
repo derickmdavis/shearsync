@@ -330,15 +330,15 @@ Fields: `id`, `email`, `full_name`, `phone_number`, `business_name`, `location_l
 
 ### `clients`
 
-Fields: `id`, `user_id`, `first_name`, `last_name`, `preferred_name`, `phone`, `phone_normalized`, `email`, `instagram`, `birthday`, `notes`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, `last_visit_at`, `deleted_at`, `deleted_reason`, timestamps.
+Fields: `id`, `user_id`, `first_name`, nullable `last_name`, `preferred_name`, `phone`, `phone_normalized`, `email`, `instagram`, `birthday`, `notes`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, `last_visit_at`, `deleted_at`, `deleted_reason`, timestamps. Production DB keeps `last_name` nullable and `total_spend` non-null with default `0`; API validation can still require last name on create.
 
 ### `appointments`
 
-Fields: `id`, `user_id`, `client_id`, nullable `service_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, nullable `appointment_time_range`, timestamps. DB/API default for `status` is `scheduled`; `booking_source` is non-null and defaults to `internal`. `service_id` references `services(id)` with `on delete set null` while `service_name`, `duration_minutes`, and `price` remain historical snapshots. `appointment_time_range` is maintained as `[appointment_date, appointment_date + duration_minutes)` on appointment create and timing updates, and has a GiST index in the checked-in schema. Active exact-start unique index exists in the checked-in schema on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps without using range queries yet.
+Fields: `id`, `user_id`, `client_id`, nullable `service_id`, `appointment_date`, `service_name`, `duration_minutes`, `price`, `notes`, `status`, `booking_source`, nullable `appointment_time_range`, timestamps. DB/API default for `status` is `scheduled`; `booking_source` is non-null and defaults to `internal`; `price` is non-null with default `0`. `service_id` references `services(id)` with `on delete set null` while `service_name`, `duration_minutes`, and `price` remain historical snapshots. `appointment_time_range` is maintained as `[appointment_date, appointment_date + duration_minutes)` on appointment create and timing updates, and has a GiST index in the checked-in schema. Active exact-start unique index exists in the checked-in schema on `(user_id, appointment_date) where status <> 'cancelled'`; service code also checks duration overlaps without using range queries yet.
 
 ### `photos`
 
-Fields: `id`, `user_id`, `client_id`, `file_path`, `photo_type`, `caption`, `created_at`.
+Fields: `id`, `user_id`, `client_id`, `file_path`, `photo_type`, `caption`, `created_at`. Production DB does not default `photo_type`; the API validator defaults omitted values to `other`.
 
 ### `reminders`
 
@@ -350,31 +350,43 @@ Fields: `id`, `user_id`, `client_id`, nullable `appointment_id`, `activity_type`
 
 ### `appointment_email_events`
 
-Fields: `id`, `user_id`, `client_id`, `appointment_id`, `email_type`, `recipient_email`, `status`, `idempotency_key`, `provider`, `provider_message_id`, `template_data`, `error`, `attempt_count`, `last_attempt_at`, `sent_at`, timestamps. Unique index on `idempotency_key`.
+Fields: `id`, `user_id`, `client_id`, nullable `appointment_id`, nullable `rebook_nudge_id`, nullable `birthday_reminder_id`, `email_type`, `recipient_email`, `status`, `idempotency_key`, `provider`, `provider_message_id`, `template_data`, `error`, `attempt_count`, `last_attempt_at`, `sent_at`, timestamps. Unique index on `idempotency_key`; `birthday_reminder_id` references `birthday_reminders(id)` with `on delete set null`.
+
+### `appointment_email_templates`
+
+Fields: `id`, `user_id`, `email_type`, `subject_template`, `custom_message_block`, timestamps. Unique `(user_id, email_type)`; `email_type` is limited to confirmation template types.
+
+### `birthday_reminders`
+
+Fields: `id`, `user_id`, `client_id`, nullable `email_event_id`, `recipient_email`, `birthday`, `birthday_occurrence_date`, `scheduled_send_at`, `status`, `template_data`, `cancelled_at`, `cancelled_reason`, `sent_at`, `error`, timestamps. Active unique index prevents duplicate queued/sending/failed reminders for the same client birthday occurrence.
 
 ### `client_communication_preferences`
 
-Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `email`, `email_normalized`, `phone`, `phone_normalized`, email preference booleans, email opt-out timestamp/source, SMS preference booleans, SMS opt-in timestamp/source/text, SMS opt-out timestamp/source, timestamps. Unique indexes enforce one row per `(user_id, email_normalized)` and one row per `(user_id, phone_normalized)` when those normalized contacts are present.
+Fields: `id`, `user_id`, nullable `client_id`, `email`, `email_normalized`, `phone`, `phone_normalized`, email preference booleans, email opt-out timestamp/source, SMS preference booleans, SMS opt-in timestamp/source/text, SMS opt-out timestamp/source, timestamps. Unique indexes enforce one row per `(user_id, email_normalized)` and one row per `(user_id, phone_normalized)` when those normalized contacts are present.
 
 ### `communication_events`
 
-Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, nullable `message_type`, `to_address`, `to_normalized`, `provider`, `provider_message_id`, `status`, `error_code`, `error_message`, `metadata`, `created_at`. Used for sent, skipped, failed, unsubscribed, and inbound SMS event logging.
+Fields: `id`, `user_id`, nullable `client_id`, `channel`, nullable `message_type`, `to_address`, `to_normalized`, `provider`, `provider_message_id`, `status`, `error_code`, `error_message`, `metadata`, `created_at`. Used for sent, skipped, failed, unsubscribed, and inbound SMS event logging.
 
 ### `communication_consent_events`
 
-Fields: `id`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, `contact_value`, `contact_normalized`, `event_type`, `source`, nullable `message_type`, `consent_text`, `ip_address`, `user_agent`, `metadata`, `created_at`. This is append-only audit history for opt-in/opt-out and preference changes.
+Fields: `id`, `user_id`, nullable `client_id`, `channel`, `contact_value`, `contact_normalized`, `event_type`, `source`, nullable `message_type`, `consent_text`, `ip_address`, `user_agent`, `metadata`, `created_at`. This is append-only audit history for opt-in/opt-out and preference changes.
 
 ### `communication_preference_tokens`
 
-Fields: `id`, `token_hash`, `user_id`, nullable `client_id`, nullable `stylist_id`, `channel`, `contact_value`, `contact_normalized`, nullable `message_type`, `action`, `expires_at`, `used_at`, `created_at`. Only token hashes are stored; raw tokens appear only in public URLs.
+Fields: `id`, `token_hash`, `user_id`, nullable `client_id`, `channel`, `contact_value`, `contact_normalized`, nullable `message_type`, `action`, `expires_at`, `used_at`, `created_at`. Only token hashes are stored; raw tokens appear only in public URLs.
+
+### `global_email_unsubscribes`
+
+Fields: `id`, `email_normalized`, `opted_out_at`, `opt_out_source`, nullable `triggering_user_id`, nullable `triggering_client_id`, nullable `triggering_stylist_id`, nullable `triggering_message_type`, nullable `preference_token_id`, `ip_address`, `user_agent`, `metadata`, timestamps. `email_normalized` is unique and blocks non-essential email across stylists.
 
 ### `stylists`
 
-Fields: `id`, `user_id`, `slug`, `display_name`, `bio`, `cover_photo_url`, `instagram`, `booking_enabled`, `intelligent_scheduling_enabled`, timestamps.
+Fields: `id`, `user_id`, `slug`, `display_name`, `bio`, `cover_photo_url`, `instagram`, `booking_enabled`, `intelligent_scheduling_enabled`, timestamps. Production DB defaults `booking_enabled` to `true`, but backend-created default stylist rows currently set it to `false` unless the payload explicitly provides a value.
 
 ### `booking_rules`
 
-Fields mirror the booking-rules mapping above. One row per `user_id`.
+Fields mirror the booking-rules mapping above. One row per `user_id`. `same_day_booking_cutoff` is stored as Postgres `time` and defaults to `17:00:00`; backend auto-created rows use `bookingRulesService.DEFAULT_BOOKING_RULES_INSERT`, so API-created defaults may differ from raw DB defaults for other booking-rule fields.
 
 ### `services`
 

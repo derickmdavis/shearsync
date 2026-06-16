@@ -221,7 +221,7 @@ const isRebookAutomationEnabled = async (userId: string): Promise<boolean> => {
     .maybeSingle();
 
   handleSupabaseError(error, "Unable to load rebook nudge automation setting");
-  return data?.enabled !== false;
+  return data?.enabled === true;
 };
 
 const insertNudge = async ({

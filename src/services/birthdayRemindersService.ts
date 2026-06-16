@@ -224,8 +224,24 @@ const queueEmailForReminder = async (reminder: Row): Promise<Row | null> => {
   return data as Row;
 };
 
+const isBirthdayRemindersEnabled = async (userId: string): Promise<boolean> => {
+  const { data, error } = await supabaseAdmin
+    .from("automation_settings")
+    .select("enabled")
+    .eq("user_id", userId)
+    .eq("key", "birthday_reminders")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to load birthday reminder automation setting");
+  return data?.enabled === true;
+};
+
 export const birthdayRemindersService = {
   async queueUpcomingForUser(userId: string, now = new Date(), windowDays = defaultWindowDays): Promise<{ queued: number; skipped: number }> {
+    if (!(await isBirthdayRemindersEnabled(userId))) {
+      return { queued: 0, skipped: 0 };
+    }
+
     const timeZone = await businessTimeZoneService.getForUser(userId);
     const today = getCurrentLocalDate(timeZone, now);
     const windowEndDate = addDays(today, windowDays);

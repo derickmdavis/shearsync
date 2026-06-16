@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "202606030001_align_user_owned_events_and_profile_schema";
+const REQUIRED_SCHEMA_VERSION = "202606160001_client_soft_delete_retention";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -39,7 +39,8 @@ const REQUIRED_TABLE_COLUMNS = {
     "total_spend",
     "last_visit_at",
     "deleted_at",
-    "deleted_reason"
+    "deleted_reason",
+    "purge_after"
   ]
 } as const;
 

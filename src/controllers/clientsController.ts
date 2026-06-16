@@ -31,5 +31,11 @@ export const clientsController = {
     const userId = await getAuthUserId(req);
     await clientsService.remove(userId, getRequiredParam(req, "id"));
     res.status(204).send();
+  },
+
+  async reactivate(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const client = await clientsService.reactivate(userId, getRequiredParam(req, "id"));
+    res.json({ data: client });
   }
 };

@@ -530,6 +530,7 @@ Important constraints:
 
 - `slug` is unique.
 - code handles slug collision by probing `slug`, `slug-2`, `slug-3`, ... up to `slug-100`
+- Production DB defaults `booking_enabled` to `true`, but backend auto-created stylist rows currently set it to `false` unless the create/upsert payload provides a value.
 
 ### `public.clients`
 
@@ -577,6 +578,7 @@ Important constraints and assumptions:
 - `phone_normalized` is indexed by `(user_id, phone_normalized)`
 - matching is always stylist-scoped
 - duplicate prevention in public booking is based on phone/email matching, not name
+- Production DB keeps `last_name` nullable and `total_spend` non-null with default `0`; API create validation may still require last name.
 
 Schema behavior:
 
@@ -638,6 +640,7 @@ Important constraints:
 - code also checks duration overlaps in application logic, not only exact start-time uniqueness
 - `status` defaults to `scheduled`.
 - `booking_source` is non-null and defaults to `internal`.
+- `price` is non-null and defaults to `0`.
 - `appointment_time_range` is maintained by the appointment service as `[appointment_date, appointment_date + duration_minutes)` and has a GiST index for future range queries.
 
 Important modeling note:
@@ -808,6 +811,8 @@ Ownership rules:
 Important constraints:
 
 - auto-created on first read/update if missing
+- `same_day_booking_cutoff` is stored as Postgres `time` and defaults to `17:00:00`.
+- Backend auto-created rows use `bookingRulesService.DEFAULT_BOOKING_RULES_INSERT`, so API-created defaults may differ from raw DB defaults for other booking-rule fields.
 - `lead_time_hours <= max_booking_window_days * 24`
 - `new_client_booking_window_days >= 0`
 - `max_reschedules` nullable means "unlimited" in API responses
@@ -896,6 +901,7 @@ Important note:
 
 - this backend does not upload bytes to Supabase Storage
 - it only records metadata and returns an `upload` helper block in the response
+- Production DB does not default `photo_type`; the API validator defaults omitted values to `other`.
 
 ### `public.activity_events`
 
@@ -938,6 +944,115 @@ Important constraints:
 - The production schema was renamed from the older `stylist_id` column to `user_id` because the value references `public.users.id`, not `public.stylists.id`.
 - `client_id` is required for client timeline integrity. `appointment_id` remains nullable for activity types that are not tied to an appointment.
 
+### `public.appointment_email_events`
+
+Purpose:
+
+- Provider-neutral appointment email outbox for appointment updates, rebooking prompts, and birthday reminders.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `client_id`
+- `appointment_id`
+- `rebook_nudge_id`
+- `birthday_reminder_id`
+- `email_type`
+- `recipient_email`
+- `status`
+- `idempotency_key`
+- `provider`
+- `provider_message_id`
+- `template_data`
+- `error`
+- `attempt_count`
+- `last_attempt_at`
+- `sent_at`
+- `created_at`
+- `updated_at`
+
+Email types:
+
+- `appointment_scheduled`
+- `appointment_pending`
+- `appointment_confirmed`
+- `appointment_cancelled`
+- `appointment_rescheduled`
+- `rebooking_prompt`
+- `birthday_reminder`
+
+Relationships:
+
+- `user_id -> users.id`
+- `client_id -> clients.id`
+- `appointment_id -> appointments.id`
+- `rebook_nudge_id -> rebook_nudges.id`
+- `birthday_reminder_id -> birthday_reminders.id`
+
+Important constraints:
+
+- unique index on `idempotency_key`
+- retry index on `(status, last_attempt_at, created_at)`
+
+### `public.appointment_email_templates`
+
+Purpose:
+
+- Per-stylist confirmation email subject and custom message block overrides.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `email_type`
+- `subject_template`
+- `custom_message_block`
+- `created_at`
+- `updated_at`
+
+Important constraints:
+
+- unique `(user_id, email_type)`
+- `email_type` is limited to appointment confirmation template types.
+- subject and custom block length checks match production.
+
+### `public.birthday_reminders`
+
+Purpose:
+
+- Queue and state table for birthday reminder emails generated from client birthdays.
+
+Fields actively used:
+
+- `id`
+- `user_id`
+- `client_id`
+- `email_event_id`
+- `recipient_email`
+- `birthday`
+- `birthday_occurrence_date`
+- `scheduled_send_at`
+- `status`
+- `template_data`
+- `cancelled_at`
+- `cancelled_reason`
+- `sent_at`
+- `error`
+- `created_at`
+- `updated_at`
+
+Relationships:
+
+- `user_id -> users.id`
+- `client_id -> clients.id`
+- `email_event_id -> appointment_email_events.id`
+
+Important constraints:
+
+- active unique index on `(user_id, client_id, birthday_occurrence_date)` for `queued`, `sending`, and `failed` rows.
+- status is limited to `queued`, `sending`, `sent`, `cancelled`, `skipped`, and `failed`.
+
 ### `public.plan_usage_events`
 
 Purpose:
@@ -958,6 +1073,35 @@ Relationships:
 
 - `user_id -> users.id`
 
+### `public.global_email_unsubscribes`
+
+Purpose:
+
+- Global email opt-out table used to block non-essential email across stylists while still allowing exempt appointment updates.
+
+Fields actively used:
+
+- `id`
+- `email_normalized`
+- `opted_out_at`
+- `opt_out_source`
+- `triggering_user_id`
+- `triggering_client_id`
+- `triggering_stylist_id`
+- `triggering_message_type`
+- `preference_token_id`
+- `ip_address`
+- `user_agent`
+- `metadata`
+- `created_at`
+- `updated_at`
+
+Important constraints:
+
+- `email_normalized` is unique.
+- `preference_token_id -> communication_preference_tokens.id`
+- source and triggering message type checks match the communication message-type contract.
+
 ### `public.client_communication_preferences`
 
 Purpose:
@@ -971,7 +1115,6 @@ Fields actively used:
 - `id`
 - `user_id`
 - `client_id`
-- `stylist_id`
 - `email`
 - `email_normalized`
 - `phone`
@@ -998,7 +1141,6 @@ Fields actively used:
 - `id`
 - `user_id`
 - `client_id`
-- `stylist_id`
 - `channel`
 - `message_type`
 - `to_address`
@@ -1022,7 +1164,6 @@ Fields actively used:
 - `id`
 - `user_id`
 - `client_id`
-- `stylist_id`
 - `channel`
 - `contact_value`
 - `contact_normalized`
@@ -1047,7 +1188,6 @@ Fields actively used:
 - `token_hash`
 - `user_id`
 - `client_id`
-- `stylist_id`
 - `channel`
 - `contact_value`
 - `contact_normalized`

@@ -1055,6 +1055,123 @@ describe("API handlers", () => {
     }
   });
 
+  it("soft-deletes clients and hides them from normal client flows", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-16T12:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "UTC" }],
+      clients: [
+        {
+          id: "client-active",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          updated_at: "2026-06-15T12:00:00.000Z"
+        },
+        {
+          id: "client-deleted",
+          user_id: userId,
+          first_name: "Noah",
+          last_name: "Kim",
+          deleted_at: "2026-06-01T12:00:00.000Z",
+          deleted_reason: "user_deleted",
+          purge_after: "2026-07-01T12:00:00.000Z",
+          updated_at: "2026-06-14T12:00:00.000Z"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const listResponse = await runWithErrorHandler(
+        (request, res) => clientsController.list(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      const listBody = listResponse.body as ClientsListTestResponse;
+
+      assert.equal(listResponse.statusCode, 200);
+      assert.deepEqual(listBody.data.map((client) => client.id), ["client-active"]);
+      assert.equal(listBody.totalCount, 1);
+
+      const deletedDetailResponse = await runWithErrorHandler(
+        (request, res) => clientsController.getById(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-deleted" }
+        })
+      );
+
+      assert.equal(deletedDetailResponse.statusCode, 404);
+
+      const deleteResponse = await runWithErrorHandler(
+        (request, res) => clientsController.remove(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-active" }
+        })
+      );
+
+      assert.equal(deleteResponse.statusCode, 204);
+      assert.equal(supabase.state.clients.length, 2);
+      assert.equal(supabase.state.clients[0]?.deleted_at, "2026-06-16T12:00:00.000Z");
+      assert.equal(supabase.state.clients[0]?.deleted_reason, "user_deleted");
+      assert.equal(supabase.state.clients[0]?.purge_after, "2026-07-16T12:00:00.000Z");
+
+      const hiddenAfterDeleteResponse = await runWithErrorHandler(
+        (request, res) => clientsController.getById(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-active" }
+        })
+      );
+
+      assert.equal(hiddenAfterDeleteResponse.statusCode, 404);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("reactivates soft-deleted clients within retention", async () => {
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "UTC" }],
+      clients: [
+        {
+          id: "client-deleted",
+          user_id: userId,
+          first_name: "Noah",
+          last_name: "Kim",
+          deleted_at: "2026-06-01T12:00:00.000Z",
+          deleted_reason: "user_deleted",
+          purge_after: "2026-07-01T12:00:00.000Z",
+          updated_at: "2026-06-14T12:00:00.000Z"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => clientsController.reactivate(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-deleted" }
+        })
+      );
+      const reactivatedClient = (response.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(reactivatedClient.id, "client-deleted");
+      assert.equal(reactivatedClient.deleted_at, null);
+      assert.equal(reactivatedClient.deleted_reason, null);
+      assert.equal(reactivatedClient.purge_after, null);
+      assert.equal(supabase.state.clients[0]?.deleted_at, null);
+      assert.equal(supabase.state.clients[0]?.deleted_reason, null);
+      assert.equal(supabase.state.clients[0]?.purge_after, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("validates birthday reminder query bounds", () => {
     assert.deepEqual(birthdayRemindersQuerySchema.parse({}), {
       window_days: 30,
@@ -3271,7 +3388,15 @@ describe("API handlers", () => {
           is_active: true
         }
       ],
-      clients: []
+      clients: [],
+      automation_settings: [
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: []
     });
 
     try {
@@ -4180,7 +4305,15 @@ describe("API handlers", () => {
           is_active: true
         }
       ],
-      clients: []
+      clients: [],
+      automation_settings: [
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: []
     });
 
     try {
@@ -5051,7 +5184,15 @@ describe("API handlers", () => {
           service_name: "Trim",
           status: "scheduled"
         }
-      ]
+      ],
+      automation_settings: [
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: []
     });
 
     try {
@@ -5185,7 +5326,15 @@ describe("API handlers", () => {
           phone_normalized: "+17205550103"
         }
       ],
-      appointments: []
+      appointments: [],
+      automation_settings: [
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: []
     });
 
     try {
@@ -5536,6 +5685,13 @@ describe("API handlers", () => {
         }
       ],
       appointments: [],
+      automation_settings: [
+        {
+          user_id: userId,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
       appointment_email_events: []
     });
 

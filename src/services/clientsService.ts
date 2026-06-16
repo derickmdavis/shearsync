@@ -7,7 +7,9 @@ import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
 
 const CLIENT_LIST_SELECT =
-  "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, total_spend, last_visit_at, created_at, updated_at";
+  "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, total_spend, last_visit_at, deleted_at, deleted_reason, purge_after, created_at, updated_at";
+
+const CLIENT_SOFT_DELETE_RETENTION_DAYS = 30;
 
 type ListClientsOptions = {
   search?: string;
@@ -223,7 +225,8 @@ export const clientsService = {
     let clientsQuery = supabaseAdmin
       .from("clients")
       .select(CLIENT_LIST_SELECT, { count: "exact" })
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .is("deleted_at", null);
 
     clientsQuery = applyClientListFilters(clientsQuery, normalizedOptions);
     clientsQuery = applyClientListSort(clientsQuery, normalizedOptions).range(rangeStart, rangeEnd);
@@ -287,6 +290,7 @@ export const clientsService = {
       .select("*")
       .eq("id", clientId)
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .maybeSingle();
 
     handleSupabaseError(error, "Unable to load client");
@@ -313,6 +317,7 @@ export const clientsService = {
       .update(sanitizeClientPayload(updates))
       .eq("id", clientId)
       .eq("user_id", userId)
+      .is("deleted_at", null)
       .select("*")
       .maybeSingle();
 
@@ -324,8 +329,38 @@ export const clientsService = {
   async remove(userId: string, clientId: string): Promise<void> {
     await this.getById(userId, clientId);
 
-    const { error } = await supabaseAdmin.from("clients").delete().eq("id", clientId).eq("user_id", userId);
+    const deletedAt = new Date();
+    const purgeAfter = new Date(deletedAt.getTime() + CLIENT_SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const { error } = await supabaseAdmin
+      .from("clients")
+      .update({
+        deleted_at: deletedAt.toISOString(),
+        deleted_reason: "user_deleted",
+        purge_after: purgeAfter.toISOString()
+      })
+      .eq("id", clientId)
+      .eq("user_id", userId)
+      .is("deleted_at", null);
+
     handleSupabaseError(error, "Unable to delete client");
+  },
+
+  async reactivate(userId: string, clientId: string): Promise<Row> {
+    const { data, error } = await supabaseAdmin
+      .from("clients")
+      .update({
+        deleted_at: null,
+        deleted_reason: null,
+        purge_after: null
+      })
+      .eq("id", clientId)
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+
+    handleSupabaseError(error, "Unable to reactivate client");
+    requireFound(data, "Client not found");
+    return this.getById(userId, clientId);
   },
 
   async findMatchingForBooking(userId: string, payload: Row): Promise<Row | null> {
@@ -341,7 +376,8 @@ export const clientsService = {
         .from("clients")
         .select("*")
         .eq("user_id", userId)
-        .eq("phone_normalized", phoneNormalized);
+        .eq("phone_normalized", phoneNormalized)
+        .is("deleted_at", null);
 
       handleSupabaseError(error, "Unable to match booking client");
 
@@ -355,7 +391,8 @@ export const clientsService = {
         .from("clients")
         .select("*")
         .eq("user_id", userId)
-        .eq("phone", phone);
+        .eq("phone", phone)
+        .is("deleted_at", null);
 
       handleSupabaseError(error, "Unable to match booking client");
       if ((data ?? []).length > 0) {

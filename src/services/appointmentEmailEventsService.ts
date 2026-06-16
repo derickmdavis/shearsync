@@ -13,6 +13,7 @@ export type AppointmentEmailType =
   | "appointment_confirmed"
   | "appointment_cancelled"
   | "appointment_rescheduled"
+  | "appointment_reminder"
   | "rebooking_prompt"
   | "birthday_reminder";
 
@@ -59,7 +60,7 @@ const getAppointmentEmailIdempotencyKey = (
   appointmentId: string,
   appointmentStartTime?: string
 ): string =>
-  emailType === "appointment_rescheduled" && appointmentStartTime
+  (emailType === "appointment_rescheduled" || emailType === "appointment_reminder") && appointmentStartTime
     ? `${emailType}:${appointmentId}:${appointmentStartTime}`
     : `${emailType}:${appointmentId}`;
 
@@ -141,7 +142,7 @@ const isEmailConfirmationsEnabled = async (userId: string): Promise<boolean> => 
     .maybeSingle();
 
   handleSupabaseError(error, "Unable to load email confirmation automation setting");
-  return data?.enabled !== false;
+  return data?.enabled === true;
 };
 
 const loadStylist = async (stylistId: string): Promise<Row | null> => {

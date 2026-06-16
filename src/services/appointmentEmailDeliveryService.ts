@@ -11,6 +11,7 @@ import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
 import { communicationPreferencesService } from "./communicationPreferences";
 import { appointmentEmailTemplatesService, renderEmailTemplateString } from "./appointmentEmailTemplatesService";
+import { activityEventsService } from "./activityEventsService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgeSettingsService, renderRebookNudgeTemplateString } from "./rebookNudgeSettingsService";
 import { rebookNudgesService } from "./rebookNudgesService";
@@ -188,6 +189,8 @@ const getAppointmentMessageType = (emailType: AppointmentEmailType): MessageType
     case "appointment_pending":
     case "appointment_confirmed":
       return "appointment_confirmation";
+    case "appointment_reminder":
+      return "appointment_reminder";
     case "rebooking_prompt":
       return "rebooking_prompt";
     case "birthday_reminder":
@@ -217,7 +220,7 @@ const isEmailConfirmationsEnabled = async (userId: string): Promise<boolean> => 
     .maybeSingle();
 
   handleSupabaseError(error, "Unable to load email confirmation automation setting");
-  return data?.enabled !== false;
+  return data?.enabled === true;
 };
 
 const getUnsubscribeLabel = (messageType: MessageType): string | null => {
@@ -248,7 +251,6 @@ const getUnsubscribeUrl = async (
   const token = await communicationPreferenceTokensService.createCommunicationPreferenceToken({
     userId,
     clientId: typeof emailEvent.client_id === "string" ? emailEvent.client_id : null,
-    stylistId: typeof emailEvent.stylist_id === "string" ? emailEvent.stylist_id : userId,
     channel: "email",
     contactValue: recipientEmail,
     messageType,
@@ -271,6 +273,8 @@ const getSubject = (emailType: AppointmentEmailType, serviceName: string, busine
       return `Your ${serviceName} appointment with ${businessName} was cancelled`;
     case "appointment_rescheduled":
       return `Your ${serviceName} appointment with ${businessName} was rescheduled`;
+    case "appointment_reminder":
+      return `Reminder: your ${serviceName} appointment with ${businessName}`;
     case "rebooking_prompt":
       return `Time to book your next visit with ${businessName}`;
     case "birthday_reminder":
@@ -382,6 +386,8 @@ const getIntro = (emailType: AppointmentEmailType, templateData: AppointmentEmai
       return templateData.status === "pending"
         ? `Your appointment with ${businessName} was rescheduled and is waiting for approval.`
         : `Your appointment with ${businessName} was rescheduled.`;
+    case "appointment_reminder":
+      return `This is a reminder that your appointment with ${businessName} is coming up.`;
     case "rebooking_prompt":
       return `It has been a little while since your last visit with ${businessName}.`;
     case "birthday_reminder":
@@ -627,6 +633,57 @@ const markEmailEvent = async (
   return data as Row | null;
 };
 
+const getQueuedAppointmentStartTime = (emailEvent: Row): string | null => {
+  const templateData = normalizeTemplateData(emailEvent.template_data);
+  if (typeof templateData.appointment_start_time === "string" && templateData.appointment_start_time.length > 0) {
+    return templateData.appointment_start_time;
+  }
+
+  const emailType = typeof emailEvent.email_type === "string" ? emailEvent.email_type : "";
+  const appointmentId = typeof emailEvent.appointment_id === "string" ? emailEvent.appointment_id : "";
+  const idempotencyKey = typeof emailEvent.idempotency_key === "string" ? emailEvent.idempotency_key : "";
+  const prefix = `${emailType}:${appointmentId}:`;
+  return idempotencyKey.startsWith(prefix) ? idempotencyKey.slice(prefix.length) : null;
+};
+
+const getAppointmentReminderSkipReason = async (emailEvent: Row): Promise<string | null> => {
+  if (emailEvent.email_type !== "appointment_reminder") {
+    return null;
+  }
+
+  const userId = typeof emailEvent.user_id === "string" ? emailEvent.user_id : "";
+  const appointmentId = typeof emailEvent.appointment_id === "string" ? emailEvent.appointment_id : "";
+  const queuedStartTime = getQueuedAppointmentStartTime(emailEvent);
+
+  if (!userId || !appointmentId || !queuedStartTime) {
+    return "appointment_reminder_missing_appointment_context";
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("appointments")
+    .select("id, appointment_date, status")
+    .eq("id", appointmentId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to validate appointment reminder freshness");
+
+  const appointment = data as Row | null;
+  if (!appointment) {
+    return "appointment_reminder_appointment_missing";
+  }
+
+  if (appointment.status !== "pending" && appointment.status !== "scheduled") {
+    return "appointment_reminder_appointment_not_active";
+  }
+
+  if (appointment.appointment_date !== queuedStartTime) {
+    return "appointment_reminder_appointment_changed";
+  }
+
+  return null;
+};
+
 const claimEmailEvent = async (emailEvent: Row, now: Date): Promise<Row | null> => {
   const emailEventId = String(emailEvent.id ?? "");
   const currentStatus = String(emailEvent.status ?? "");
@@ -688,7 +745,6 @@ export const appointmentEmailDeliveryService = {
       try {
         const userId = typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "";
         const clientId = typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null;
-        const stylistId = typeof claimedEvent.stylist_id === "string" ? claimedEvent.stylist_id : userId || null;
         const messageType = getEmailEventMessageType(claimedEvent);
         const recipientEmail = getString(claimedEvent.recipient_email, "");
         if (
@@ -699,7 +755,6 @@ export const appointmentEmailDeliveryService = {
           await communicationEventsService.logCommunicationEvent({
             userId,
             clientId,
-            stylistId,
             channel: "email",
             messageType,
             toAddress: recipientEmail,
@@ -724,7 +779,6 @@ export const appointmentEmailDeliveryService = {
           ? await communicationPreferencesService.canSendCommunication({
             userId,
             clientId,
-            stylistId,
             channel: "email",
             to: recipientEmail,
             messageType,
@@ -737,7 +791,6 @@ export const appointmentEmailDeliveryService = {
           await communicationEventsService.logCommunicationEvent({
             userId: userId || "unknown",
             clientId,
-            stylistId,
             channel: "email",
             messageType,
             toAddress: recipientEmail,
@@ -765,6 +818,28 @@ export const appointmentEmailDeliveryService = {
           continue;
         }
 
+        const appointmentReminderSkipReason = await getAppointmentReminderSkipReason(claimedEvent);
+        if (appointmentReminderSkipReason) {
+          await communicationEventsService.logCommunicationEvent({
+            userId: userId || "unknown",
+            clientId,
+            channel: "email",
+            messageType,
+            toAddress: recipientEmail,
+            toNormalized: normalizeEmail(recipientEmail),
+            provider: null,
+            status: "skipped_opted_out",
+            errorCode: appointmentReminderSkipReason,
+            metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+          });
+          await markEmailEvent(String(claimedEvent.id ?? ""), {
+            status: "skipped",
+            error: appointmentReminderSkipReason
+          });
+          result.skipped += 1;
+          continue;
+        }
+
         const { message, toNormalized } = await prepareEmailMessage(claimedEvent, {
           appointmentManagementBaseUrl: options.appointmentManagementBaseUrl
         });
@@ -780,20 +855,39 @@ export const appointmentEmailDeliveryService = {
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "sent", null);
           await birthdayRemindersService.markForEmailEvent(claimedEvent, "sent", null);
+          try {
+            await activityEventsService.recordAppointmentReminderEmailSent(userId, {
+              ...claimedEvent,
+              sent_at: now.toISOString()
+            });
+          } catch (activityError) {
+            console.warn("[APPOINTMENT_EMAIL_DELIVERY] reminder activity logging failed", {
+              emailEventId: claimedEvent.id ?? null,
+              userId,
+              error: activityError instanceof Error ? activityError.message : String(activityError)
+            });
+          }
           result.sent += 1;
-          await communicationEventsService.logCommunicationEvent({
-            userId,
-            clientId,
-            stylistId,
-            channel: "email",
-            messageType,
-            toAddress: recipientEmail,
-            toNormalized,
-            provider: providerResult.provider,
-            providerMessageId: providerResult.providerMessageId ?? null,
-            status: "sent",
-            metadata: { appointment_email_event_id: claimedEvent.id ?? null }
-          });
+          try {
+            await communicationEventsService.logCommunicationEvent({
+              userId,
+              clientId,
+              channel: "email",
+              messageType,
+              toAddress: recipientEmail,
+              toNormalized,
+              provider: providerResult.provider,
+              providerMessageId: providerResult.providerMessageId ?? null,
+              status: "sent",
+              metadata: { appointment_email_event_id: claimedEvent.id ?? null }
+            });
+          } catch (telemetryError) {
+            console.warn("[APPOINTMENT_EMAIL_DELIVERY] sent email telemetry failed", {
+              emailEventId: claimedEvent.id ?? null,
+              userId,
+              error: telemetryError instanceof Error ? telemetryError.message : String(telemetryError)
+            });
+          }
           continue;
         }
 
@@ -817,7 +911,6 @@ export const appointmentEmailDeliveryService = {
         await communicationEventsService.logCommunicationEvent({
           userId,
           clientId,
-          stylistId,
           channel: "email",
           messageType,
           toAddress: recipientEmail,
@@ -839,9 +932,6 @@ export const appointmentEmailDeliveryService = {
         await communicationEventsService.logCommunicationEvent({
           userId: typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "unknown",
           clientId: typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null,
-          stylistId: typeof claimedEvent.stylist_id === "string"
-            ? claimedEvent.stylist_id
-            : typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : null,
           channel: "email",
           messageType: getEmailEventMessageType(claimedEvent),
           toAddress: getString(claimedEvent.recipient_email, ""),
