@@ -5,6 +5,7 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import {
   appointmentImageParamsSchema,
+  appointmentImageThumbnailPrefetchQuerySchema,
   appointmentImageUploadIntentSchema,
   finalizeAppointmentImageSchema,
   reorderAppointmentImagesSchema,
@@ -29,6 +30,11 @@ appointmentRouter.get(
   "/:id/activity",
   validate({ params: uuidParamSchema }),
   asyncHandler(appointmentsController.listActivity)
+);
+appointmentRouter.get(
+  "/images/thumbnail-prefetch",
+  validate({ query: appointmentImageThumbnailPrefetchQuerySchema }),
+  asyncHandler(appointmentImagesController.prefetchThumbnails)
 );
 appointmentRouter.get(
   "/:id/images",

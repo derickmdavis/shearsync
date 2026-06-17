@@ -3,6 +3,12 @@ import { getAuthUserId, getRequiredParam } from "../lib/request";
 import { appointmentImagesService } from "../services/appointmentImagesService";
 
 export const appointmentImagesController = {
+  async prefetchThumbnails(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const result = await appointmentImagesService.prefetchThumbnails(userId, req.query);
+    res.json({ data: result.appointments, meta: result.meta });
+  },
+
   async list(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const images = await appointmentImagesService.list(userId, getRequiredParam(req, "id"));

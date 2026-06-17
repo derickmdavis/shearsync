@@ -4,6 +4,10 @@ import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import { publicAppointmentManagementTokenParamSchema, slugParamSchema } from "../validators/common";
 import {
+  finalizePublicReferencePhotoSchema,
+  publicReferencePhotoUploadIntentSchema
+} from "../validators/appointmentImageValidators";
+import {
   getPublicAvailabilitySchema,
   createPublicBookingIntakeSchema,
   createPublicBookingSchema,
@@ -37,6 +41,16 @@ publicRouter.post(
   asyncHandler(publicController.createBookingIntake)
 );
 publicRouter.post("/bookings", validate({ body: createPublicBookingSchema }), asyncHandler(publicController.createBooking));
+publicRouter.post(
+  "/appointment-reference-photos/upload-intent",
+  validate({ body: publicReferencePhotoUploadIntentSchema }),
+  asyncHandler(publicController.createReferencePhotoUploadIntent)
+);
+publicRouter.post(
+  "/appointment-reference-photos",
+  validate({ body: finalizePublicReferencePhotoSchema }),
+  asyncHandler(publicController.finalizeReferencePhoto)
+);
 publicRouter.post(
   "/stylists/:slug/waitlist",
   validate({ params: slugParamSchema, body: createPublicWaitlistEntrySchema }),

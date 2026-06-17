@@ -15,6 +15,32 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 const SIGNED_THUMBNAIL_URL_TTL_SECONDS = 300;
 const SIGNED_DISPLAY_URL_TTL_SECONDS = 300;
+const DEFAULT_THUMBNAIL_PREFETCH_WINDOW_DAYS = 7;
+
+type ThumbnailPrefetchQuery = {
+  start_at?: string;
+  end_at?: string;
+  appointment_limit?: number;
+  image_limit_per_appointment?: number;
+  total_image_limit?: number;
+};
+
+type ThumbnailPrefetchAppointment = Row & {
+  images: RowList;
+};
+
+type ThumbnailPrefetchResult = {
+  appointments: ThumbnailPrefetchAppointment[];
+  meta: {
+    start_at: string;
+    end_at: string;
+    appointment_limit: number;
+    image_limit_per_appointment: number;
+    total_image_limit: number;
+    appointment_count: number;
+    image_count: number;
+  };
+};
 
 type UploadIntentPayload = {
   original_filename?: string | null;
@@ -51,6 +77,8 @@ type UpdatePayload = {
 };
 
 const toIso = (date: Date): string => date.toISOString();
+
+const addDays = (date: Date, days: number): Date => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 
 const getClientId = (appointment: Row): string | null =>
   typeof appointment.client_id === "string" ? appointment.client_id : null;
@@ -138,6 +166,105 @@ export const appointmentImagesService = {
 
     handleSupabaseError(error, "Unable to load appointment images");
     return Promise.all((data ?? []).map((image) => normalizeImage(image, true)));
+  },
+
+  async prefetchThumbnails(
+    userId: string,
+    query: ThumbnailPrefetchQuery = {},
+    now = new Date()
+  ): Promise<ThumbnailPrefetchResult> {
+    const startAt = query.start_at ?? toIso(now);
+    const endAt = query.end_at ?? toIso(addDays(new Date(startAt), DEFAULT_THUMBNAIL_PREFETCH_WINDOW_DAYS));
+    const appointmentLimit = query.appointment_limit ?? 25;
+    const imageLimitPerAppointment = query.image_limit_per_appointment ?? 2;
+    const totalImageLimit = query.total_image_limit ?? 50;
+
+    const { data: appointments, error: appointmentsError } = await supabaseAdmin
+      .from("appointments")
+      .select("id, client_id, appointment_date, service_name, status")
+      .eq("user_id", userId)
+      .in("status", ["pending", "scheduled"])
+      .gte("appointment_date", startAt)
+      .lt("appointment_date", endAt)
+      .order("appointment_date", { ascending: true })
+      .limit(appointmentLimit);
+
+    handleSupabaseError(appointmentsError, "Unable to load appointments for image thumbnail prefetch");
+    const boundedAppointments = (appointments ?? []) as RowList;
+    const appointmentIds = boundedAppointments
+      .map((appointment) => appointment.id)
+      .filter((id): id is string => typeof id === "string");
+
+    if (appointmentIds.length === 0) {
+      return {
+        appointments: [],
+        meta: {
+          start_at: startAt,
+          end_at: endAt,
+          appointment_limit: appointmentLimit,
+          image_limit_per_appointment: imageLimitPerAppointment,
+          total_image_limit: totalImageLimit,
+          appointment_count: 0,
+          image_count: 0
+        }
+      };
+    }
+
+    const imageQueryLimit = Math.min(appointmentIds.length * MAX_APPOINTMENT_IMAGES, 1000);
+    const { data: images, error: imagesError } = await supabaseAdmin
+      .from("appointment_images")
+      .select("*")
+      .eq("user_id", userId)
+      .in("appointment_id", appointmentIds)
+      .eq("upload_status", "ready")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true })
+      .limit(imageQueryLimit);
+
+    handleSupabaseError(imagesError, "Unable to load appointment image thumbnails for prefetch");
+
+    const imagesByAppointment = new Map<string, RowList>();
+    let imageCount = 0;
+
+    for (const image of images ?? []) {
+      if (imageCount >= totalImageLimit) {
+        break;
+      }
+
+      const appointmentId = typeof image.appointment_id === "string" ? image.appointment_id : null;
+      if (!appointmentId) {
+        continue;
+      }
+
+      const appointmentImages = imagesByAppointment.get(appointmentId) ?? [];
+      if (appointmentImages.length >= imageLimitPerAppointment) {
+        continue;
+      }
+
+      appointmentImages.push(await normalizeImage(image, true));
+      imagesByAppointment.set(appointmentId, appointmentImages);
+      imageCount += 1;
+    }
+
+    const prefetchAppointments = boundedAppointments
+      .map((appointment) => ({
+        ...appointment,
+        images: imagesByAppointment.get(appointment.id as string) ?? []
+      }))
+      .filter((appointment) => appointment.images.length > 0);
+
+    return {
+      appointments: prefetchAppointments,
+      meta: {
+        start_at: startAt,
+        end_at: endAt,
+        appointment_limit: appointmentLimit,
+        image_limit_per_appointment: imageLimitPerAppointment,
+        total_image_limit: totalImageLimit,
+        appointment_count: prefetchAppointments.length,
+        image_count: imageCount
+      }
+    };
   },
 
   async createUploadIntent(userId: string, appointmentId: string, payload: UploadIntentPayload, now = new Date()): Promise<Row> {

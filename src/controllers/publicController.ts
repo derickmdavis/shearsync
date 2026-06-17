@@ -5,6 +5,7 @@ import { getRequiredParam } from "../lib/request";
 import { availabilityService } from "../services/availabilityService";
 import { publicBookingIntakeService } from "../services/publicBookingIntakeService";
 import { publicAppointmentManagementService } from "../services/publicAppointmentManagementService";
+import { publicAppointmentImagesService } from "../services/publicAppointmentImagesService";
 import { publicBookingsService } from "../services/publicBookingsService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
@@ -74,6 +75,16 @@ export const publicController = {
   async createBooking(req: Request, res: Response) {
     const confirmation = await publicBookingsService.create(req.body);
     res.status(201).json({ data: confirmation });
+  },
+
+  async createReferencePhotoUploadIntent(req: Request, res: Response) {
+    const intent = await publicAppointmentImagesService.createUploadIntent(req.body);
+    res.status(201).json({ data: intent });
+  },
+
+  async finalizeReferencePhoto(req: Request, res: Response) {
+    const image = await publicAppointmentImagesService.finalize(req.body);
+    res.status(201).json({ data: image });
   },
 
   async createWaitlistEntry(req: Request, res: Response) {

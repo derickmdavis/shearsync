@@ -63,7 +63,7 @@ Railway uses `npm run build` and `npm run start` from `railway.json`.
 
 The API validates bearer tokens through Supabase Auth using the configured `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Authenticated business data is also scoped by `user_id` in every service query.
 
-The API requires the production schema through `202606030001_align_user_owned_events_and_profile_schema` plus the communication preference tables represented in `supabase/schema.sql`. Startup and `GET /health` fail clearly if required `users` or `clients` columns are missing.
+The API requires the production schema through `202606160001_client_soft_delete_retention` plus the communication preference tables represented in `supabase/schema.sql`. Startup and `GET /health` fail clearly if required `users` or `clients` columns are missing.
 
 ## Routes
 

@@ -2,7 +2,7 @@
 
 This document describes the authenticated frontend contract for the private stylist appointment image UI.
 
-It covers Chunk 7 of `docs/appointment-images-implementation-plan.md`: the appointment detail UI where stylists can add, view, update, reorder, and delete private appointment images.
+It covers Chunks 7-10 of `docs/appointment-images-implementation-plan.md`: the appointment detail UI, local image cache expectations, bounded thumbnail prefetch for upcoming appointments, and the public booking reference photo API.
 
 ## Current Backend Status
 
@@ -19,6 +19,8 @@ The backend is ready for the private stylist workflow:
 - Expired pending upload cleanup
 - Orphan Storage cleanup/reporting
 - Client purge Storage cleanup
+- Bounded upcoming appointment thumbnail prefetch
+- Public booking reference photo upload token, upload intent, and finalize endpoints
 
 The next frontend step is to build the private mobile appointment images UI.
 
@@ -36,7 +38,7 @@ When this chunk is complete, a stylist should be able to:
 - Delete images.
 - See useful loading, empty, progress, failure, and retry states.
 
-Local caching, thumbnail prefetch, and public booking reference photos are not part of this chunk.
+Public booking reference photo UI is part of a later chunk.
 
 ## Authentication
 
@@ -134,11 +136,231 @@ type AppointmentImage = {
 type AppointmentImageListResponse = {
   data: AppointmentImage[];
 };
+
+type AppointmentImageThumbnailPrefetchAppointment = {
+  id: string;
+  client_id: string | null;
+  appointment_date: string;
+  service_name: string;
+  status: "pending" | "scheduled";
+  images: AppointmentImage[];
+};
+
+type AppointmentImageThumbnailPrefetchResponse = {
+  data: AppointmentImageThumbnailPrefetchAppointment[];
+  meta: {
+    start_at: string;
+    end_at: string;
+    appointment_limit: number;
+    image_limit_per_appointment: number;
+    total_image_limit: number;
+    appointment_count: number;
+    image_count: number;
+  };
+};
+
+type PublicBookingConfirmation = {
+  appointment_id: string;
+  client_id: string;
+  stylist_slug: string;
+  stylist_display_name: string;
+  business_name: string | null;
+  service_id: string;
+  service_name: string;
+  service_duration_minutes: number;
+  service_price: number;
+  appointment_date: string;
+  appointment_end: string;
+  business_timezone: string;
+  status: "pending" | "scheduled" | "completed" | "cancelled" | "no_show";
+  reference_photo_upload_token: string;
+  reference_photo_upload_token_expires_at: string;
+};
 ```
 
 Only `upload_status = "ready"` images are returned by the list endpoint.
 
 ## Endpoints
+
+### Public Booking Confirmation Reference Token
+
+```http
+POST /api/public/bookings
+```
+
+The public booking confirmation now includes:
+
+```ts
+type ReferencePhotoTokenFields = {
+  reference_photo_upload_token: string;
+  reference_photo_upload_token_expires_at: string; // appointment start time
+};
+```
+
+Token behavior:
+
+- The token is a signed, short-lived public JWT scoped to one appointment, client, stylist, and appointment start time.
+- The token expires at the appointment start time.
+- If the appointment is rescheduled, the old token is rejected because its embedded start time no longer matches the appointment.
+- If the appointment is cancelled, upload intent creation is rejected.
+- The token only authorizes creating/finalizing one client-sourced reference photo. It does not authorize listing images or reading stylist images.
+
+Frontend notes:
+
+- Store the token only as transient booking-confirmation state.
+- Do not log or analytics-track the token.
+- If the user reloads and loses the token, the MVP can hide the reference upload affordance unless a later chunk adds token recovery.
+
+### Create Public Reference Photo Upload Intent
+
+```http
+POST /api/public/appointment-reference-photos/upload-intent
+```
+
+Request:
+
+```ts
+type CreatePublicReferencePhotoUploadIntentRequest = {
+  reference_photo_upload_token: string;
+  original_filename?: string | null;
+  content_type: "image/jpeg" | "image/png" | "image/webp";
+  input_size_bytes: number;
+  display_content_type: "image/jpeg" | "image/png" | "image/webp";
+  thumbnail_content_type: "image/jpeg" | "image/png" | "image/webp";
+};
+```
+
+Response:
+
+```ts
+type SignedUploadUrl = {
+  signedUrl: string;
+  token: string;
+  path: string;
+};
+
+type CreatePublicReferencePhotoUploadIntentResponse = {
+  data: AppointmentImage & {
+    image_source: "client";
+    image_role: "reference";
+    signed_upload_urls: {
+      display: SignedUploadUrl;
+      thumbnail: SignedUploadUrl;
+    };
+    max_constraints: {
+      max_reference_images: 1;
+      max_file_size_bytes: 5242880;
+      upload_expires_in_minutes: 15;
+    };
+    appointment_status: "pending" | "scheduled";
+  };
+};
+```
+
+Backend behavior:
+
+- Verifies the public token.
+- Verifies the appointment still matches the token appointment/client/stylist/start time.
+- Rejects cancelled appointments.
+- Expires stale pending client reference upload rows.
+- Enforces one active client reference photo per appointment, counting ready rows and unexpired pending rows.
+- Creates a pending `appointment_images` row with `image_source = "client"` and `image_role = "reference"`.
+- Returns signed Supabase Storage upload URLs for display and thumbnail objects.
+
+### Finalize Public Reference Photo
+
+```http
+POST /api/public/appointment-reference-photos
+```
+
+Request:
+
+```ts
+type FinalizePublicReferencePhotoRequest = {
+  reference_photo_upload_token: string;
+  image_id: string;
+  storage_path: string;
+  thumbnail_path: string;
+  original_filename?: string | null;
+  content_type: "image/jpeg" | "image/png" | "image/webp";
+  file_size_bytes: number;
+  thumbnail_size_bytes?: number | null;
+  width?: number | null;
+  height?: number | null;
+  caption?: string | null;
+};
+```
+
+Response:
+
+```ts
+type FinalizePublicReferencePhotoResponse = {
+  data: AppointmentImage & {
+    image_source: "client";
+    image_role: "reference";
+  };
+};
+```
+
+Backend behavior:
+
+- Verifies the same public token used for upload intent.
+- Requires the pending image row to belong to the token appointment/client/stylist.
+- Requires the pending image row to have `image_source = "client"` and `image_role = "reference"`.
+- Verifies paths match the server-generated intent paths.
+- Verifies uploaded Storage objects exist and match submitted content type and byte-size metadata.
+- Marks the image `ready` as a client reference photo.
+- On Storage verification failure, deletes uploaded objects and marks the pending row `failed`.
+
+Important frontend notes:
+
+- The public API never lists images and never returns display-size read URLs.
+- The upload/finalize flow mirrors the private stylist flow, but the public request must include `reference_photo_upload_token`.
+- The frontend must not send `image_source` or `image_role`; the backend fixes them to `client` and `reference`.
+- A `409` means the appointment already has an active reference photo or the appointment no longer accepts uploads.
+- A `410` means the upload intent expired; start over with a new intent if the reference token is still valid.
+
+### Prefetch Upcoming Appointment Thumbnails
+
+```http
+GET /api/appointments/images/thumbnail-prefetch
+```
+
+Optional query params:
+
+```ts
+type Query = {
+  start_at?: string; // ISO datetime, defaults to server now
+  end_at?: string; // ISO datetime, defaults to start_at + 7 days
+  appointment_limit?: number; // 1-100, defaults to 25
+  image_limit_per_appointment?: number; // 1-10, defaults to 2
+  total_image_limit?: number; // 1-100, defaults to 50
+};
+```
+
+Response:
+
+```ts
+type Response = AppointmentImageThumbnailPrefetchResponse;
+```
+
+Backend behavior:
+
+- Returns only appointments owned by the authenticated stylist.
+- Returns only `pending` and `scheduled` appointments with `appointment_date >= start_at` and `< end_at`.
+- Returns only `upload_status = "ready"` images.
+- Includes signed `thumbnail_url` values when `thumbnail_path` exists.
+- Does not return display-size signed URLs.
+- Groups images under appointments and omits appointments with no prefetchable images.
+- Enforces appointment, per-appointment image, and total image caps.
+
+Important frontend notes:
+
+- Use this for cache warming thumbnails for today/upcoming appointments.
+- Do not use it to render display/full-screen images.
+- Signed thumbnail URLs expire after about 5 minutes.
+- Persist downloaded thumbnail files in the local app-private cache; do not persist signed URLs.
+- Throttle calls by date window, network type, and app lifecycle.
 
 ### List Appointment Images
 
@@ -666,12 +888,20 @@ Do not retry by reusing the same pending `image_id` unless the original finalize
 - Basic metadata display/update if product wants it now.
 - Empty/progress/failure/retry states.
 
-### Not In Chunk 7
+### In Chunk 9
 
-- Local disk cache.
-- Offline image rendering.
-- Upcoming appointment thumbnail prefetch.
-- Public booking reference uploads.
+- Bounded thumbnail prefetch for today/upcoming appointments.
+- Ready image metadata with signed thumbnail URLs.
+- No display-size image prefetching.
+
+### In Chunk 10
+
+- Public booking confirmation returns a reference photo upload token.
+- Public upload intent/finalize routes create exactly one client-sourced reference photo.
+- Public routes do not list appointment images or expose stylist-created images.
+
+### Not In Chunks 7-10
+
 - Client-facing image UI.
 - Storage usage dashboard.
 - Drag-and-drop reorder unless it is already cheap in the UI framework.

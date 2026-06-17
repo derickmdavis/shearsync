@@ -16,6 +16,10 @@ import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
+import {
+  createPublicAppointmentImageUploadToken,
+  getPublicAppointmentImageUploadExpiresAt
+} from "../lib/publicAppointmentImageUpload";
 
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -60,6 +64,7 @@ const buildConfirmation = async ({
     businessTimeZoneService.getForUser(userId),
     usersService.getById(userId)
   ]);
+  const appointmentStartTime = appointment.appointment_date as string;
 
   return {
     appointment_id: appointment.id as string,
@@ -71,13 +76,20 @@ const buildConfirmation = async ({
     service_name: service.name as string,
     service_duration_minutes: serviceDurationMinutes,
     service_price: Number(service.price ?? 0),
-    appointment_date: appointment.appointment_date as string,
+    appointment_date: appointmentStartTime,
     appointment_end: formatInstantInTimeZoneOffset(
-      getAppointmentEndIso(appointment.appointment_date as string, serviceDurationMinutes),
+      getAppointmentEndIso(appointmentStartTime, serviceDurationMinutes),
       timeZone
     ),
     business_timezone: timeZone,
-    status: appointment.status as PublicBookingConfirmation["status"]
+    status: appointment.status as PublicBookingConfirmation["status"],
+    reference_photo_upload_token: createPublicAppointmentImageUploadToken({
+      appointmentId: appointment.id as string,
+      clientId: appointment.client_id as string,
+      stylistId: userId,
+      appointmentStartTime
+    }),
+    reference_photo_upload_token_expires_at: getPublicAppointmentImageUploadExpiresAt(appointmentStartTime)
   };
 };
 

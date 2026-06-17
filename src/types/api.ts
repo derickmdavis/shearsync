@@ -235,6 +235,8 @@ export interface PublicBookingConfirmation {
   appointment_end: string;
   business_timezone: string;
   status: AppointmentStatus;
+  reference_photo_upload_token: string;
+  reference_photo_upload_token_expires_at: string;
 }
 
 export interface PublicBookingIntakeResponse {

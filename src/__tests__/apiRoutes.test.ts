@@ -214,6 +214,22 @@ const withBookingContextTokenPlaceholder = <T extends { data: { bookingContextTo
   };
 };
 
+const withReferencePhotoUploadTokenPlaceholder = <
+  T extends { data: { reference_photo_upload_token: string; reference_photo_upload_token_expires_at: string } }
+>(payload: T): T => {
+  assert.equal(typeof payload.data.reference_photo_upload_token, "string");
+  assert.ok(payload.data.reference_photo_upload_token.length > 20);
+  assert.equal(typeof payload.data.reference_photo_upload_token_expires_at, "string");
+
+  return {
+    ...payload,
+    data: {
+      ...payload.data,
+      reference_photo_upload_token: "reference-photo-upload-token"
+    }
+  };
+};
+
 const runWithErrorHandler = async (
   callback: (req: Request, res: Response, next: NextFunction) => Promise<void> | void,
   req: Request
@@ -446,6 +462,41 @@ describe("API handlers", () => {
           assert.equal(
             ((error as { details?: { missingColumn?: string } }).details)?.missingColumn,
             "total_spend"
+          );
+          return true;
+        }
+      );
+    } finally {
+      fromMock.mock.restore();
+    }
+  });
+
+  it("reports missing schema readiness columns from qualified database errors", async () => {
+    const fromMock = mock.method(supabaseAdmin, "from", (table: string) => ({
+      select: () => ({
+        limit: async () => ({
+          data: [],
+          error:
+            table === "clients"
+              ? {
+                  code: "42703",
+                  message: "column clients.purge_after does not exist",
+                  details: null,
+                  hint: null
+                }
+              : null
+        })
+      })
+    }));
+
+    try {
+      await assert.rejects(
+        () => schemaReadinessService.assertReady(),
+        (error: unknown) => {
+          assert.equal((error as { statusCode?: number }).statusCode, 503);
+          assert.equal(
+            ((error as { details?: { missingColumn?: string } }).details)?.missingColumn,
+            "purge_after"
           );
           return true;
         }
@@ -4333,7 +4384,12 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), req);
 
       assert.equal(response.statusCode, 201);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withReferencePhotoUploadTokenPlaceholder(response.body as {
+        data: {
+          reference_photo_upload_token: string;
+          reference_photo_upload_token_expires_at: string;
+        };
+      }), {
         data: {
           appointment_id: supabase.state.appointments[0]?.id,
           client_id: supabase.state.clients[0]?.id,
@@ -4347,7 +4403,9 @@ describe("API handlers", () => {
           appointment_date: requestedDateTime,
           appointment_end: `${monday}T10:00:00+00:00`,
           business_timezone: "UTC",
-          status: "pending"
+          status: "pending",
+          reference_photo_upload_token: "reference-photo-upload-token",
+          reference_photo_upload_token_expires_at: requestedDateTime
         }
       });
       assert.equal(supabase.state.appointments[0]?.status, "pending");
@@ -5354,7 +5412,12 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), req);
 
       assert.equal(response.statusCode, 201);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withReferencePhotoUploadTokenPlaceholder(response.body as {
+        data: {
+          reference_photo_upload_token: string;
+          reference_photo_upload_token_expires_at: string;
+        };
+      }), {
         data: {
           appointment_id: supabase.state.appointments[0]?.id,
           client_id: "client-1",
@@ -5368,7 +5431,9 @@ describe("API handlers", () => {
           appointment_date: requestedDateTime,
           appointment_end: `${monday}T10:00:00+00:00`,
           business_timezone: "UTC",
-          status: "scheduled"
+          status: "scheduled",
+          reference_photo_upload_token: "reference-photo-upload-token",
+          reference_photo_upload_token_expires_at: requestedDateTime
         }
       });
       assert.equal(supabase.state.appointments.length, 1);
@@ -6616,7 +6681,12 @@ describe("API handlers", () => {
 
       assert.equal(response.statusCode, 201);
       assert.equal(supabase.state.appointments[0]?.appointment_date, canonicalRequestedDateTime);
-      assert.deepEqual(response.body, {
+      assert.deepEqual(withReferencePhotoUploadTokenPlaceholder(response.body as {
+        data: {
+          reference_photo_upload_token: string;
+          reference_photo_upload_token_expires_at: string;
+        };
+      }), {
         data: {
           appointment_id: supabase.state.appointments[0]?.id,
           client_id: supabase.state.clients[0]?.id,
@@ -6630,7 +6700,9 @@ describe("API handlers", () => {
           appointment_date: canonicalRequestedDateTime,
           appointment_end: `${sunday}T16:30:00-06:00`,
           business_timezone: "America/Denver",
-          status: "scheduled"
+          status: "scheduled",
+          reference_photo_upload_token: "reference-photo-upload-token",
+          reference_photo_upload_token_expires_at: canonicalRequestedDateTime
         }
       });
     } finally {
@@ -6731,7 +6803,20 @@ describe("API handlers", () => {
       const secondResponse = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), secondReq);
 
       assert.equal(secondResponse.statusCode, 201);
-      assert.deepEqual(secondResponse.body, firstResponse.body);
+      assert.deepEqual(
+        withReferencePhotoUploadTokenPlaceholder(secondResponse.body as {
+          data: {
+            reference_photo_upload_token: string;
+            reference_photo_upload_token_expires_at: string;
+          };
+        }),
+        withReferencePhotoUploadTokenPlaceholder(firstResponse.body as {
+          data: {
+            reference_photo_upload_token: string;
+            reference_photo_upload_token_expires_at: string;
+          };
+        })
+      );
       assert.equal(supabase.state.appointments.length, 1);
     } finally {
       supabase.restore();
@@ -6831,7 +6916,20 @@ describe("API handlers", () => {
       const secondResponse = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), secondReq);
 
       assert.equal(secondResponse.statusCode, 201);
-      assert.deepEqual(secondResponse.body, firstResponse.body);
+      assert.deepEqual(
+        withReferencePhotoUploadTokenPlaceholder(secondResponse.body as {
+          data: {
+            reference_photo_upload_token: string;
+            reference_photo_upload_token_expires_at: string;
+          };
+        }),
+        withReferencePhotoUploadTokenPlaceholder(firstResponse.body as {
+          data: {
+            reference_photo_upload_token: string;
+            reference_photo_upload_token_expires_at: string;
+          };
+        })
+      );
       assert.equal(supabase.state.appointments.length, 1);
     } finally {
       supabase.restore();

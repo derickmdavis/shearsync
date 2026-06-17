@@ -19,6 +19,7 @@ export const handleSupabaseError = (error: PostgrestError | null, fallbackMessag
 
 const MISSING_COLUMN_PATTERNS = [
   /Could not find the ['"]([A-Za-z0-9_]+)['"] column of ['"][A-Za-z0-9_]+['"] in the schema cache/i,
+  /column [A-Za-z0-9_]+\.([A-Za-z0-9_]+) does not exist/i,
   /column ["']([A-Za-z0-9_]+)["'] of relation ["'][A-Za-z0-9_]+["'] does not exist/i,
   /column ["']([A-Za-z0-9_]+)["'] does not exist/i
 ];

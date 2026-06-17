@@ -19,6 +19,48 @@ export const appointmentImageUploadIntentSchema = z.object({
   thumbnail_content_type: contentTypeSchema
 });
 
+const publicReferencePhotoUploadTokenSchema = z.string().trim().min(1).max(4000);
+
+export const publicReferencePhotoUploadIntentSchema = z.object({
+  reference_photo_upload_token: publicReferencePhotoUploadTokenSchema,
+  original_filename: z.string().trim().min(1).max(255).nullable().optional(),
+  content_type: contentTypeSchema,
+  input_size_bytes: z.number().int().positive().max(5 * 1024 * 1024),
+  display_content_type: contentTypeSchema,
+  thumbnail_content_type: contentTypeSchema
+});
+
+export const finalizePublicReferencePhotoSchema = z.object({
+  reference_photo_upload_token: publicReferencePhotoUploadTokenSchema,
+  image_id: z.string().uuid(),
+  storage_path: z.string().trim().min(1).max(2000),
+  thumbnail_path: z.string().trim().min(1).max(2000),
+  original_filename: z.string().trim().min(1).max(255).nullable().optional(),
+  content_type: contentTypeSchema,
+  file_size_bytes: z.number().int().positive().max(5 * 1024 * 1024),
+  thumbnail_size_bytes: z.number().int().positive().nullable().optional(),
+  width: z.number().int().positive().nullable().optional(),
+  height: z.number().int().positive().nullable().optional(),
+  caption: z.string().max(1000).nullable().optional()
+});
+
+export const appointmentImageThumbnailPrefetchQuerySchema = z.object({
+  start_at: isoDateTimeSchema.optional(),
+  end_at: isoDateTimeSchema.optional(),
+  appointment_limit: z.coerce.number().int().min(1).max(100).default(25),
+  image_limit_per_appointment: z.coerce.number().int().min(1).max(10).default(2),
+  total_image_limit: z.coerce.number().int().min(1).max(100).default(50)
+}).refine((value) => {
+  if (!value.start_at || !value.end_at) {
+    return true;
+  }
+
+  return Date.parse(value.start_at) < Date.parse(value.end_at);
+}, {
+  message: "end_at must be after start_at",
+  path: ["end_at"]
+});
+
 export const finalizeAppointmentImageSchema = z.object({
   image_id: z.string().uuid(),
   storage_path: z.string().trim().min(1).max(2000),
