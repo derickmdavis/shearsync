@@ -285,6 +285,7 @@ export interface PublicStylistProfile {
   timezone: string;
   features: {
     waitlistEnabled: boolean;
+    appointmentPhotos: boolean;
   };
   intelligent_scheduling_enabled: boolean;
 }

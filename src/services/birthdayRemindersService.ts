@@ -6,6 +6,7 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
+import { entitlementsService } from "./entitlementsService";
 
 type BirthdayReminderStatus = "queued" | "sending" | "sent" | "cancelled" | "skipped" | "failed";
 
@@ -225,6 +226,10 @@ const queueEmailForReminder = async (reminder: Row): Promise<Row | null> => {
 };
 
 const isBirthdayRemindersEnabled = async (userId: string): Promise<boolean> => {
+  if (!(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
+    return false;
+  }
+
   const { data, error } = await supabaseAdmin
     .from("automation_settings")
     .select("enabled")
@@ -366,6 +371,8 @@ export const birthdayRemindersService = {
   },
 
   async listForUser(userId: string, filters: ListBirthdayReminderFilters) {
+    await entitlementsService.assertFeatureAllowed(userId, "birthdayReminders");
+
     const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
     let query = supabaseAdmin
       .from("birthday_reminders")
@@ -396,6 +403,10 @@ export const birthdayRemindersService = {
   },
 
   async getQueuedForUser(userId: string, limit = 50): Promise<Row[]> {
+    if (!(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
+      return [];
+    }
+
     const { data, error } = await supabaseAdmin
       .from("birthday_reminders")
       .select("*")
@@ -409,6 +420,12 @@ export const birthdayRemindersService = {
   },
 
   async getCountsForUser(userId: string): Promise<{ queued: number }> {
+    if (!(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
+      return {
+        queued: 0
+      };
+    }
+
     const { count, data, error } = await supabaseAdmin
       .from("birthday_reminders")
       .select("id", { count: "exact", head: true })
@@ -422,6 +439,8 @@ export const birthdayRemindersService = {
   },
 
   async cancelForUser(userId: string, reminderId: string, reason?: string | null): Promise<Row> {
+    await entitlementsService.assertFeatureAllowed(userId, "birthdayReminders");
+
     const { data, error } = await supabaseAdmin
       .from("birthday_reminders")
       .update({
@@ -454,6 +473,11 @@ export const birthdayRemindersService = {
     let queuedEmails = 0;
 
     for (const reminder of (data ?? []) as Row[]) {
+      const userId = String(reminder.user_id ?? "");
+      if (!userId || !(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
+        continue;
+      }
+
       const emailEvent = await queueEmailForReminder(reminder);
       if (!emailEvent) {
         continue;

@@ -23,7 +23,8 @@ docs/supabase/appointment-images-chunk3-01-storage.sql
 Expected result:
 
 - A private Storage bucket named `appointment-images`.
-- `file_size_limit` set to `5242880` bytes, which is 5 MB.
+- `file_size_limit` set to `2097152` bytes, which is 2 MB for display objects.
+- Thumbnail objects are further limited by backend finalize validation and DB checks to `307200` bytes, which is 300 KB.
 - Allowed MIME types: `image/jpeg`, `image/png`, `image/webp`.
 
 Do not create broad `storage.objects` policies for this bucket right now. Later backend chunks will use service-role generated signed upload/read URLs so the backend keeps control of paths and metadata.

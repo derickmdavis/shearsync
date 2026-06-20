@@ -1,0 +1,147 @@
+# Frontend Referrals Contract
+
+This is the frontend integration contract for client referral links and public booking attribution.
+
+## Authenticated Client Referral Link
+
+### Get Existing Link
+
+```http
+GET /api/clients/:id/referral-link
+```
+
+Auth is required. `:id` must be a client owned by the authenticated stylist.
+
+Response:
+
+```ts
+type ReferralLinkResponse = {
+  data: ReferralLink | null;
+};
+
+type ReferralLink = {
+  id: string;
+  user_id: string;
+  client_id: string;
+  referral_code: string;
+  referral_url: string;
+  status: "active" | "disabled" | string;
+  created_at: string;
+  updated_at: string;
+};
+```
+
+Use this for initial client-detail rendering. If `data` is `null`, show a "Create referral link" action.
+
+### Create Or Return Link
+
+```http
+POST /api/clients/:id/referral-link
+```
+
+Auth is required. The endpoint is idempotent: if the client already has an active link, the backend returns it instead of creating a duplicate.
+
+Response:
+
+```ts
+type CreateReferralLinkResponse = {
+  data: ReferralLink;
+};
+```
+
+Frontend behavior:
+
+- Disable the create/copy button while the request is in flight.
+- After success, render `data.referral_url`.
+- Copy/share `data.referral_url`, not just `data.referral_code`.
+
+## Referral Stats
+
+```http
+GET /api/clients/:id/referral-stats
+```
+
+Auth is required.
+
+Response:
+
+```ts
+type ReferralStatsResponse = {
+  data: {
+    referral_link_id: string | null;
+    referral_code: string | null;
+    referral_url: string | null;
+    opened_count: number;
+    booking_attributed_count: number;
+  };
+};
+```
+
+Counts are lightweight and intended for simple client-detail UI. They are not a full analytics report.
+
+## Public Referral Resolution
+
+```http
+GET /api/public/referrals/:referralCode
+```
+
+Auth is not required.
+
+Response:
+
+```ts
+type PublicReferralResponse = {
+  data: {
+    referralLinkId: string;
+    referralCode: string;
+    referralUrl: string;
+    stylistSlug: string;
+    bookingUrl: string;
+    expiresAt: string;
+  };
+};
+```
+
+Recommended public web flow:
+
+1. Add a frontend route such as `/r/:referralCode`.
+2. Call `GET /api/public/referrals/:referralCode`.
+3. Store `data.referralCode` in the booking flow state.
+4. Redirect or navigate to the stylist booking page from `data.bookingUrl`.
+5. Preserve the referral code through service, date, time, and contact steps.
+6. Send it as `referral_code` in the final booking request.
+
+The backend records an `opened` referral event when this endpoint resolves successfully.
+
+## Final Public Booking
+
+```http
+POST /api/public/bookings
+```
+
+Existing request fields remain unchanged. The request now also accepts:
+
+```ts
+type PublicBookingRequest = {
+  stylist_slug: string;
+  service_id: string;
+  requested_datetime: string;
+  guest_first_name: string;
+  guest_last_name: string;
+  guest_email?: string;
+  guest_phone: string;
+  booking_context_token?: string;
+  referral_code?: string;
+  notes?: string;
+};
+```
+
+Referral behavior:
+
+- `referral_code` is optional.
+- Valid format is `rf_` followed by 8-24 alphanumeric characters.
+- Invalid, inactive, wrong-stylist, or self-referral codes do not block booking.
+- Valid non-self referrals are persisted on the appointment.
+- If the booking creates a new client, the new client also gets original referral source fields.
+
+Do not show attribution success/failure to the public guest unless product explicitly wants that. The booking confirmation response shape is unchanged.

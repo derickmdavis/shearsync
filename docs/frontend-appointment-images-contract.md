@@ -53,11 +53,21 @@ Content-Type: application/json
 
 The backend derives `user_id` from the token and only returns images for appointments owned by that stylist.
 
+Plan entitlement:
+
+- Appointment photos, before/after photos, client visual history, thumbnail prefetch, display URL access, and public reference photo upload require `data.features.appointmentPhotos === true` from `GET /api/account/plan`.
+- Basic accounts receive `403` for appointment image APIs.
+- Public reference photo upload is also blocked when the stylist is Basic.
+- Downgrading to Basic does not delete existing `appointment_images` rows or Storage objects; access resumes if the stylist upgrades again.
+
 ## Limits And Constants
 
 ```ts
 const APPOINTMENT_IMAGE_MAX_COUNT = 10;
-const APPOINTMENT_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+const APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES = 2 * 1024 * 1024; // 2 MB
+const APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES = 300 * 1024; // 300 KB
+const APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE = 1600;
+const APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE = 400;
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 const SIGNED_THUMBNAIL_URL_TTL_SECONDS = 300;
 const SIGNED_DISPLAY_URL_TTL_SECONDS = 300;
@@ -79,7 +89,10 @@ Recommended frontend behavior:
 
 - Prefer JPEG or WebP for generated display images.
 - Generate thumbnails as JPEG or WebP.
-- Keep both display image and thumbnail under 5 MB.
+- Keep display images under 2 MB.
+- Keep thumbnails under 300 KB.
+- Keep display images at or below 1600 px on the longest edge.
+- Keep thumbnails at or below 400 px on the longest edge.
 - Treat signed URLs as short-lived and refresh them when needed.
 - Do not store signed URLs as durable state.
 
@@ -105,14 +118,17 @@ type AppointmentImage = {
   client_id: string | null;
   appointment_id: string;
   bucket: "appointment-images";
-  storage_path: string;
-  thumbnail_path: string | null;
+  // Present on upload-intent/finalize-style responses only; omitted from thumbnail/list views.
+  storage_path?: string;
+  thumbnail_path?: string | null;
   original_filename: string | null;
   content_type: "image/jpeg" | "image/png" | "image/webp";
   file_size_bytes: number;
   thumbnail_size_bytes: number | null;
   width: number | null;
   height: number | null;
+  thumbnail_width: number | null;
+  thumbnail_height: number | null;
   image_role: AppointmentImageRole;
   image_source: AppointmentImageSource;
   captured_at: string | null;
@@ -129,12 +145,28 @@ type AppointmentImage = {
   created_at: string;
   updated_at: string;
 
-  // Present on list/finalize/update responses when thumbnail_path exists.
+  // Present on list/finalize/update responses when a thumbnail object exists.
   thumbnail_url?: string;
 };
 
 type AppointmentImageListResponse = {
   data: AppointmentImage[];
+};
+
+type ClientVisualHistoryImage = AppointmentImage & {
+  thumbnail_url: string | null;
+  // Null unless include_display_urls=true is requested.
+  display_url: string | null;
+  appointment: {
+    appointment_id: string;
+    appointment_date: string;
+    service_name: string;
+    status: string;
+  } | null;
+};
+
+type ClientVisualHistoryResponse = {
+  data: ClientVisualHistoryImage[];
 };
 
 type AppointmentImageThumbnailPrefetchAppointment = {
@@ -230,6 +262,8 @@ type CreatePublicReferencePhotoUploadIntentRequest = {
 };
 ```
 
+`content_type` must match `display_content_type`. Send the MIME type of the generated display image, not the original asset, when those differ.
+
 Response:
 
 ```ts
@@ -249,7 +283,11 @@ type CreatePublicReferencePhotoUploadIntentResponse = {
     };
     max_constraints: {
       max_reference_images: 1;
-      max_file_size_bytes: 5242880;
+      max_file_size_bytes: 2097152;
+      max_display_file_size_bytes: 2097152;
+      max_thumbnail_file_size_bytes: 307200;
+      max_display_long_edge_px: 1600;
+      max_thumbnail_long_edge_px: 400;
       upload_expires_in_minutes: 15;
     };
     appointment_status: "pending" | "scheduled";
@@ -285,8 +323,10 @@ type FinalizePublicReferencePhotoRequest = {
   content_type: "image/jpeg" | "image/png" | "image/webp";
   file_size_bytes: number;
   thumbnail_size_bytes?: number | null;
-  width?: number | null;
-  height?: number | null;
+  width: number;
+  height: number;
+  thumbnail_width: number;
+  thumbnail_height: number;
   caption?: string | null;
 };
 ```
@@ -351,6 +391,7 @@ Backend behavior:
 - Returns only `upload_status = "ready"` images.
 - Includes signed `thumbnail_url` values when `thumbnail_path` exists.
 - Does not return display-size signed URLs.
+- Omits raw `storage_path` and `thumbnail_path` from prefetch image rows.
 - Groups images under appointments and omits appointments with no prefetchable images.
 - Enforces appointment, per-appointment image, and total image caps.
 
@@ -361,6 +402,46 @@ Important frontend notes:
 - Signed thumbnail URLs expire after about 5 minutes.
 - Persist downloaded thumbnail files in the local app-private cache; do not persist signed URLs.
 - Throttle calls by date window, network type, and app lifecycle.
+
+### List Client Visual History
+
+```http
+GET /api/clients/:clientId/visual-history
+```
+
+Optional query params:
+
+```ts
+type Query = {
+  limit?: number; // 1-100, defaults to 50
+  include_display_urls?: boolean; // defaults to false
+};
+```
+
+Response:
+
+```ts
+type Response = ClientVisualHistoryResponse;
+```
+
+Backend behavior:
+
+- Verifies the client belongs to the authenticated stylist.
+- Returns ready `appointment_images` rows for that client, newest `created_at` first.
+- Includes `image_source` and `image_role` so client reference photos can be distinguished from stylist appointment photos.
+- Includes appointment context as `appointment.appointment_id`, `appointment.appointment_date`, `appointment.service_name`, and `appointment.status`.
+- Includes signed `thumbnail_url` values when thumbnail Storage paths exist.
+- Does not include signed display URLs by default; `display_url` is `null` unless `include_display_urls=true`.
+- Omits raw `storage_path` and `thumbnail_path` from visual-history responses.
+
+Important frontend notes:
+
+- Use this for the Client Detail Visual History section.
+- Render the grid from `thumbnail_url`.
+- For full-screen viewing, call `GET /api/appointments/:appointmentId/images/:imageId/display-url` when the user opens an image.
+- Use `include_display_urls=true` only for a view that truly needs display URLs for every returned image.
+- Signed URLs expire after about 5 minutes; refresh the relevant thumbnail list or display URL when an image fails due to expiry.
+- `/api/clients/:clientId/photos` remains legacy metadata-only and should not be used for production visual history.
 
 ### List Appointment Images
 
@@ -381,6 +462,7 @@ type Response = {
 Important frontend notes:
 
 - Each image may include a `thumbnail_url`.
+- Raw `storage_path` and `thumbnail_path` are omitted from this list response.
 - Thumbnail URLs expire after about 5 minutes.
 - If an image load fails with an expired signed URL, call list again or update local state after a fresh list response.
 - Do not request display-size URLs for the grid/list.
@@ -403,6 +485,8 @@ type CreateUploadIntentRequest = {
 };
 ```
 
+`content_type` must match `display_content_type`. Send the MIME type of the generated display image, not the original asset, when those differ.
+
 Response:
 
 ```ts
@@ -420,7 +504,11 @@ type CreateUploadIntentResponse = {
     };
     max_constraints: {
       max_images: 10;
-      max_file_size_bytes: 5242880;
+      max_file_size_bytes: 2097152;
+      max_display_file_size_bytes: 2097152;
+      max_thumbnail_file_size_bytes: 307200;
+      max_display_long_edge_px: 1600;
+      max_thumbnail_long_edge_px: 400;
       upload_expires_in_minutes: 15;
     };
   };
@@ -477,6 +565,8 @@ Important frontend notes:
 - `contentType` matters. If the app says `image/jpeg`, upload a real JPEG with that content type.
 - `file_size_bytes` in finalize must match the display object size.
 - `thumbnail_size_bytes` in finalize should match the thumbnail object size.
+- `width` and `height` must describe the final display object after compression.
+- `thumbnail_width` and `thumbnail_height` must describe the final thumbnail object after generation.
 
 ### Finalize Appointment Image
 
@@ -495,8 +585,10 @@ type FinalizeAppointmentImageRequest = {
   content_type: "image/jpeg" | "image/png" | "image/webp";
   file_size_bytes: number;
   thumbnail_size_bytes?: number | null;
-  width?: number | null;
-  height?: number | null;
+  width: number;
+  height: number;
+  thumbnail_width: number;
+  thumbnail_height: number;
   image_role?: AppointmentImageRole; // defaults to "general"
   captured_at?: string | null; // ISO datetime
   label?: string | null; // 1-120 trimmed chars
@@ -526,7 +618,10 @@ What the backend verifies:
 - Display object byte size equals `file_size_bytes`.
 - Thumbnail content type is inferred from its file extension.
 - Thumbnail byte size equals `thumbnail_size_bytes` when supplied.
-- Neither object exceeds 5 MB.
+- Display object does not exceed 2 MB.
+- Thumbnail object does not exceed 300 KB.
+- Display dimensions do not exceed 1600 px on either edge.
+- Thumbnail dimensions do not exceed 400 px on either edge.
 
 Finalize failure behavior:
 
@@ -552,6 +647,8 @@ type DisplayUrlResponse = {
     content_type: "image/jpeg" | "image/png" | "image/webp";
     width: number | null;
     height: number | null;
+    thumbnail_width: number | null;
+    thumbnail_height: number | null;
   };
 };
 ```
@@ -656,8 +753,12 @@ async function uploadAppointmentImage(input: {
   const thumbnail = await createThumbnailImage(original);
 
   // 3. Enforce limits before creating an intent.
-  if (display.sizeBytes > 5 * 1024 * 1024) {
+  if (display.sizeBytes > 2 * 1024 * 1024) {
     throw new Error("Image is too large");
+  }
+
+  if (thumbnail.sizeBytes > 300 * 1024) {
+    throw new Error("Thumbnail is too large");
   }
 
   // 4. Create upload intent.
@@ -706,6 +807,8 @@ async function uploadAppointmentImage(input: {
       thumbnail_size_bytes: thumbnail.sizeBytes,
       width: display.width,
       height: display.height,
+      thumbnail_width: thumbnail.width,
+      thumbnail_height: thumbnail.height,
       image_role: input.role ?? "general",
       captured_at: original.capturedAt ?? null,
       label: input.label ?? null,
@@ -768,8 +871,8 @@ Purpose: full-screen viewing.
 Recommended:
 
 - Preserve useful quality.
-- Limit long edge to a reasonable mobile display size, for example 1600-2400 px.
-- Keep under 5 MB.
+- Limit longest edge to 1600 px.
+- Keep under 2 MB.
 - Prefer JPEG/WebP unless the source transparency matters.
 - Capture final `width`, `height`, `contentType`, and byte size after compression.
 
@@ -780,8 +883,8 @@ Purpose: appointment detail grid/list.
 Recommended:
 
 - Square crop or center-fit depending on UI.
-- Around 300-600 px.
-- Keep small; ideally well under 500 KB.
+- Longest edge no more than 400 px.
+- Keep under 300 KB; ideally 100-150 KB.
 - Use JPEG/WebP.
 - Capture final `contentType` and byte size after generation.
 
@@ -917,7 +1020,7 @@ Use these as manual acceptance tests.
 5. Closing and reopening viewer refreshes display signed URL when needed.
 6. Delete removes image after API success.
 7. Delete failure keeps image visible.
-8. Uploading an image over 5 MB is blocked before or rejected by backend.
+8. Uploading a display image over 2 MB or thumbnail over 300 KB is blocked before or rejected by backend.
 9. Unsupported file type is blocked before upload.
 10. 10 existing ready images disables or rejects additional upload.
 11. Upload can recover cleanly after network failure.

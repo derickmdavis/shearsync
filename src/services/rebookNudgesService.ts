@@ -8,6 +8,7 @@ import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { rebookNudgeSettingsService } from "./rebookNudgeSettingsService";
 import { usersService } from "./usersService";
+import { entitlementsService } from "./entitlementsService";
 
 type RebookNudgeStatus =
   | "pending_approval"
@@ -213,6 +214,10 @@ const getLatestPastAppointment = async (userId: string, clientId: string, now: D
 };
 
 const isRebookAutomationEnabled = async (userId: string): Promise<boolean> => {
+  if (!(await entitlementsService.isFeatureAllowed(userId, "rebookNudges"))) {
+    return false;
+  }
+
   const { data, error } = await supabaseAdmin
     .from("automation_settings")
     .select("enabled")
@@ -371,6 +376,8 @@ const queueEmailForNudge = async (nudge: Row): Promise<Row | null> => {
 
 export const rebookNudgesService = {
   async listForUser(userId: string, filters: ListRebookNudgesFilters) {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const cursor = filters.cursor ? decodeCursor(filters.cursor) : null;
     let query = supabaseAdmin
       .from("rebook_nudges")
@@ -404,6 +411,10 @@ export const rebookNudgesService = {
   },
 
   async getOutstandingForUser(userId: string, limit = 50): Promise<RowList> {
+    if (!(await entitlementsService.isFeatureAllowed(userId, "rebookNudges"))) {
+      return [];
+    }
+
     const { data, error } = await supabaseAdmin
       .from("rebook_nudges")
       .select("*")
@@ -417,6 +428,13 @@ export const rebookNudgesService = {
   },
 
   async getCountsForUser(userId: string) {
+    if (!(await entitlementsService.isFeatureAllowed(userId, "rebookNudges"))) {
+      return {
+        pending_approval: 0,
+        queued: 0
+      };
+    }
+
     const [pendingResult, queuedResult] = await Promise.all([
       supabaseAdmin
         .from("rebook_nudges")
@@ -440,6 +458,8 @@ export const rebookNudgesService = {
   },
 
   async queueManualForUser(userId: string, options: QueueManualRebookNudgeOptions): Promise<Row> {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const settings = await rebookNudgeSettingsService.getRawForUser(userId);
     const intervalDays = options.rebookIntervalDays ?? Number(settings?.default_rebook_interval_days ?? rebookNudgeSettingsService.defaultIntervalDays);
     const approvalRequired = options.approvalRequired ?? settings?.approval_required !== false;
@@ -481,6 +501,8 @@ export const rebookNudgesService = {
   },
 
   async approveForUser(userId: string, nudgeId: string): Promise<Row> {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const { data, error } = await supabaseAdmin
       .from("rebook_nudges")
       .update({
@@ -500,6 +522,8 @@ export const rebookNudgesService = {
   },
 
   async cancelForUser(userId: string, nudgeId: string, reason?: string | null): Promise<Row> {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const { data, error } = await supabaseAdmin
       .from("rebook_nudges")
       .update({
@@ -616,6 +640,11 @@ export const rebookNudgesService = {
     let queuedEmails = 0;
 
     for (const nudge of (data ?? []) as Row[]) {
+      const userId = String(nudge.user_id ?? "");
+      if (!userId || !(await entitlementsService.isFeatureAllowed(userId, "rebookNudges"))) {
+        continue;
+      }
+
       const emailEvent = await queueEmailForNudge(nudge);
       if (!emailEvent) {
         continue;

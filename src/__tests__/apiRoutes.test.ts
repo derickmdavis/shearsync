@@ -1561,7 +1561,8 @@ describe("API handlers", () => {
           phone_number: "555-0101",
           timezone: "America/Denver",
           features: {
-            waitlistEnabled: true
+            waitlistEnabled: true,
+            appointmentPhotos: true
           },
           intelligent_scheduling_enabled: true
         }
@@ -1612,7 +1613,8 @@ describe("API handlers", () => {
           phone_number: null,
           timezone: "America/Denver",
           features: {
-            waitlistEnabled: false
+            waitlistEnabled: false,
+            appointmentPhotos: false
           },
           intelligent_scheduling_enabled: true
         }
@@ -4183,7 +4185,7 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 201);
       assert.equal((response.body as { data: { appointment_date: string } }).data.appointment_date, returningOnlySlotIso);
       assert.equal(supabase.state.appointments.length, 1);
-      assert.notEqual(supabase.state.appointments[0]?.client_id, "client-1");
+      assert.equal(supabase.state.appointments[0]?.client_id, "client-1");
     } finally {
       supabase.restore();
     }
@@ -7405,6 +7407,11 @@ describe("API handlers", () => {
         emailReminders: true,
         smsReminders: false,
         waitlist: false,
+        appointmentPhotos: false,
+        rebookNudges: false,
+        birthdayReminders: false,
+        waitlistMatch: false,
+        noShowFollowUp: false,
         customCoverPhoto: false,
         customSlug: false,
         googleCalendarSync: false,
@@ -7444,6 +7451,11 @@ describe("API handlers", () => {
         emailReminders: true,
         smsReminders: true,
         waitlist: true,
+        appointmentPhotos: true,
+        rebookNudges: true,
+        birthdayReminders: true,
+        waitlistMatch: true,
+        noShowFollowUp: true,
         customCoverPhoto: true,
         customSlug: false,
         googleCalendarSync: false,
@@ -7484,6 +7496,11 @@ describe("API handlers", () => {
         emailReminders: true,
         smsReminders: true,
         waitlist: true,
+        appointmentPhotos: true,
+        rebookNudges: true,
+        birthdayReminders: true,
+        waitlistMatch: true,
+        noShowFollowUp: true,
         customCoverPhoto: true,
         customSlug: true,
         googleCalendarSync: true,

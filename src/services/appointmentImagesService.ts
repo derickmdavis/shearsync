@@ -3,19 +3,107 @@ import { ApiError, requireFound } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import {
   APPOINTMENT_IMAGES_BUCKET,
+  APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+  APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
+  APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
+  APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
   AppointmentImagePaths,
   appointmentImageStorageService
 } from "./appointmentImageStorageService";
 import { appointmentsService } from "./appointmentsService";
+import { clientsService } from "./clientsService";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
+import { entitlementsService } from "./entitlementsService";
 
 const MAX_APPOINTMENT_IMAGES = 10;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 const SIGNED_THUMBNAIL_URL_TTL_SECONDS = 300;
 const SIGNED_DISPLAY_URL_TTL_SECONDS = 300;
 const DEFAULT_THUMBNAIL_PREFETCH_WINDOW_DAYS = 7;
+const APPOINTMENT_IMAGE_LIST_FIELDS = [
+  "id",
+  "user_id",
+  "client_id",
+  "appointment_id",
+  "bucket",
+  "thumbnail_path",
+  "original_filename",
+  "content_type",
+  "file_size_bytes",
+  "thumbnail_size_bytes",
+  "width",
+  "height",
+  "thumbnail_width",
+  "thumbnail_height",
+  "image_role",
+  "image_source",
+  "captured_at",
+  "label",
+  "tags",
+  "uploaded_by_user_id",
+  "public_upload_token_id",
+  "caption",
+  "sort_order",
+  "cache_version",
+  "upload_status",
+  "upload_expires_at",
+  "finalized_at",
+  "created_at",
+  "updated_at"
+].join(", ");
+const APPOINTMENT_IMAGE_THUMBNAIL_FIELDS = [
+  "id",
+  "user_id",
+  "client_id",
+  "appointment_id",
+  "bucket",
+  "thumbnail_path",
+  "content_type",
+  "thumbnail_size_bytes",
+  "thumbnail_width",
+  "thumbnail_height",
+  "image_role",
+  "image_source",
+  "label",
+  "tags",
+  "caption",
+  "sort_order",
+  "cache_version",
+  "created_at",
+  "updated_at"
+].join(", ");
+const CLIENT_VISUAL_HISTORY_FIELDS = [
+  "id",
+  "user_id",
+  "client_id",
+  "appointment_id",
+  "bucket",
+  "storage_path",
+  "thumbnail_path",
+  "original_filename",
+  "content_type",
+  "file_size_bytes",
+  "thumbnail_size_bytes",
+  "width",
+  "height",
+  "thumbnail_width",
+  "thumbnail_height",
+  "image_role",
+  "image_source",
+  "captured_at",
+  "label",
+  "tags",
+  "uploaded_by_user_id",
+  "public_upload_token_id",
+  "caption",
+  "sort_order",
+  "cache_version",
+  "upload_status",
+  "finalized_at",
+  "created_at",
+  "updated_at"
+].join(", ");
 
 type ThumbnailPrefetchQuery = {
   start_at?: string;
@@ -42,6 +130,11 @@ type ThumbnailPrefetchResult = {
   };
 };
 
+type ClientVisualHistoryQuery = {
+  limit?: number;
+  include_display_urls?: boolean;
+};
+
 type UploadIntentPayload = {
   original_filename?: string | null;
   content_type: string;
@@ -58,8 +151,10 @@ type FinalizePayload = {
   content_type: string;
   file_size_bytes: number;
   thumbnail_size_bytes?: number | null;
-  width?: number | null;
-  height?: number | null;
+  width: number;
+  height: number;
+  thumbnail_width: number;
+  thumbnail_height: number;
   image_role: string;
   captured_at?: string | null;
   label?: string | null;
@@ -82,6 +177,10 @@ const addDays = (date: Date, days: number): Date => new Date(date.getTime() + da
 
 const getClientId = (appointment: Row): string | null =>
   typeof appointment.client_id === "string" ? appointment.client_id : null;
+
+const assertAppointmentPhotosAllowed = async (userId: string): Promise<void> => {
+  await entitlementsService.assertFeatureAllowed(userId, "appointmentPhotos");
+};
 
 const isActiveImageForLimit = (image: Row, nowIso: string): boolean => {
   if (image.upload_status === "ready") {
@@ -109,18 +208,65 @@ const inferContentTypeFromPath = (path: string): string | null => {
   return null;
 };
 
-const normalizeImage = async (image: Row, includeThumbnailUrl = false): Promise<Row> => {
-  if (!includeThumbnailUrl || typeof image.thumbnail_path !== "string") {
-    return image;
+const assertLongestEdgeWithinLimit = (
+  label: string,
+  width: number,
+  height: number,
+  maxLongEdge: number
+): void => {
+  if (Math.max(width, height) > maxLongEdge) {
+    throw new ApiError(400, `${label} dimensions exceed maximum size`);
   }
+};
 
-  return {
+const omitStoragePaths = (image: Row): Row => {
+  const { storage_path: _storagePath, thumbnail_path: _thumbnailPath, ...rest } = image;
+  return rest;
+};
+
+const normalizeImage = async (
+  image: Row,
+  includeThumbnailUrl = false,
+  exposeStoragePaths = true
+): Promise<Row> => {
+  const normalized = includeThumbnailUrl && typeof image.thumbnail_path === "string"
+    ? {
+        ...image,
+        thumbnail_url: await appointmentImageStorageService.createSignedReadUrl(
+          image.thumbnail_path,
+          SIGNED_THUMBNAIL_URL_TTL_SECONDS
+        )
+      }
+    : image;
+
+  return exposeStoragePaths ? normalized : omitStoragePaths(normalized);
+};
+
+const normalizeImageForVisualHistory = async (
+  image: Row,
+  appointment: Row | undefined,
+  includeDisplayUrl = false
+): Promise<Row> => {
+  const thumbnailUrl = typeof image.thumbnail_path === "string"
+    ? await appointmentImageStorageService.createSignedReadUrl(image.thumbnail_path, SIGNED_THUMBNAIL_URL_TTL_SECONDS)
+    : null;
+  const displayUrl = includeDisplayUrl && typeof image.storage_path === "string"
+    ? await appointmentImageStorageService.createSignedReadUrl(image.storage_path, SIGNED_DISPLAY_URL_TTL_SECONDS)
+    : null;
+
+  return omitStoragePaths({
     ...image,
-    thumbnail_url: await appointmentImageStorageService.createSignedReadUrl(
-      image.thumbnail_path,
-      SIGNED_THUMBNAIL_URL_TTL_SECONDS
-    )
-  };
+    thumbnail_url: thumbnailUrl,
+    display_url: displayUrl,
+    appointment: appointment
+      ? {
+          appointment_id: appointment.id,
+          appointment_date: appointment.appointment_date,
+          service_name: appointment.service_name,
+          status: appointment.status
+        }
+      : null
+  });
 };
 
 export const appointmentImagesService = {
@@ -153,11 +299,12 @@ export const appointmentImagesService = {
   },
 
   async list(userId: string, appointmentId: string): Promise<RowList> {
+    await assertAppointmentPhotosAllowed(userId);
     await appointmentsService.getOwned(userId, appointmentId);
 
     const { data, error } = await supabaseAdmin
       .from("appointment_images")
-      .select("*")
+      .select(APPOINTMENT_IMAGE_LIST_FIELDS)
       .eq("user_id", userId)
       .eq("appointment_id", appointmentId)
       .eq("upload_status", "ready")
@@ -165,7 +312,8 @@ export const appointmentImagesService = {
       .order("created_at", { ascending: true });
 
     handleSupabaseError(error, "Unable to load appointment images");
-    return Promise.all((data ?? []).map((image) => normalizeImage(image, true)));
+    const images = (data ?? []) as unknown as RowList;
+    return Promise.all(images.map((image) => normalizeImage(image, true, false)));
   },
 
   async prefetchThumbnails(
@@ -173,6 +321,7 @@ export const appointmentImagesService = {
     query: ThumbnailPrefetchQuery = {},
     now = new Date()
   ): Promise<ThumbnailPrefetchResult> {
+    await assertAppointmentPhotosAllowed(userId);
     const startAt = query.start_at ?? toIso(now);
     const endAt = query.end_at ?? toIso(addDays(new Date(startAt), DEFAULT_THUMBNAIL_PREFETCH_WINDOW_DAYS));
     const appointmentLimit = query.appointment_limit ?? 25;
@@ -213,7 +362,7 @@ export const appointmentImagesService = {
     const imageQueryLimit = Math.min(appointmentIds.length * MAX_APPOINTMENT_IMAGES, 1000);
     const { data: images, error: imagesError } = await supabaseAdmin
       .from("appointment_images")
-      .select("*")
+      .select(APPOINTMENT_IMAGE_THUMBNAIL_FIELDS)
       .eq("user_id", userId)
       .in("appointment_id", appointmentIds)
       .eq("upload_status", "ready")
@@ -222,11 +371,12 @@ export const appointmentImagesService = {
       .limit(imageQueryLimit);
 
     handleSupabaseError(imagesError, "Unable to load appointment image thumbnails for prefetch");
+    const readyImages = (images ?? []) as unknown as RowList;
 
     const imagesByAppointment = new Map<string, RowList>();
     let imageCount = 0;
 
-    for (const image of images ?? []) {
+    for (const image of readyImages) {
       if (imageCount >= totalImageLimit) {
         break;
       }
@@ -241,7 +391,7 @@ export const appointmentImagesService = {
         continue;
       }
 
-      appointmentImages.push(await normalizeImage(image, true));
+      appointmentImages.push(await normalizeImage(image, true, false));
       imagesByAppointment.set(appointmentId, appointmentImages);
       imageCount += 1;
     }
@@ -267,8 +417,69 @@ export const appointmentImagesService = {
     };
   },
 
+  async listClientVisualHistory(userId: string, clientId: string, query: ClientVisualHistoryQuery = {}): Promise<RowList> {
+    await assertAppointmentPhotosAllowed(userId);
+    await clientsService.assertOwned(userId, clientId);
+    const limit = query.limit ?? 50;
+    const includeDisplayUrls = query.include_display_urls ?? false;
+
+    const { data: images, error: imagesError } = await supabaseAdmin
+      .from("appointment_images")
+      .select(CLIENT_VISUAL_HISTORY_FIELDS)
+      .eq("user_id", userId)
+      .eq("client_id", clientId)
+      .eq("upload_status", "ready")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    handleSupabaseError(imagesError, "Unable to load client visual history");
+    const visualHistoryImages = (images ?? []) as unknown as RowList;
+
+    const appointmentIds = [
+      ...new Set(
+        visualHistoryImages
+          .map((image) => image.appointment_id)
+          .filter((id): id is string => typeof id === "string")
+      )
+    ];
+
+    const appointmentsById = new Map<string, Row>();
+    if (appointmentIds.length > 0) {
+      const { data: appointments, error: appointmentsError } = await supabaseAdmin
+        .from("appointments")
+        .select("id, appointment_date, service_name, status")
+        .eq("user_id", userId)
+        .eq("client_id", clientId)
+        .in("id", appointmentIds);
+
+      handleSupabaseError(appointmentsError, "Unable to load visual history appointment context");
+
+      for (const appointment of appointments ?? []) {
+        if (typeof appointment.id === "string") {
+          appointmentsById.set(appointment.id, appointment);
+        }
+      }
+    }
+
+    return Promise.all(
+      visualHistoryImages.map((image) =>
+        normalizeImageForVisualHistory(
+          image,
+          typeof image.appointment_id === "string" ? appointmentsById.get(image.appointment_id) : undefined,
+          includeDisplayUrls
+        )
+      )
+    );
+  },
+
   async createUploadIntent(userId: string, appointmentId: string, payload: UploadIntentPayload, now = new Date()): Promise<Row> {
-    if (payload.input_size_bytes > MAX_IMAGE_BYTES) {
+    await assertAppointmentPhotosAllowed(userId);
+
+    if (payload.content_type !== payload.display_content_type) {
+      throw new ApiError(400, "Upload intent content_type must match display_content_type");
+    }
+
+    if (payload.input_size_bytes > APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES) {
       throw new ApiError(400, "Appointment image exceeds maximum size");
     }
 
@@ -319,13 +530,18 @@ export const appointmentImagesService = {
       signed_upload_urls: uploadUrls,
       max_constraints: {
         max_images: MAX_APPOINTMENT_IMAGES,
-        max_file_size_bytes: MAX_IMAGE_BYTES,
+        max_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+        max_display_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+        max_thumbnail_file_size_bytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
+        max_display_long_edge_px: APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
+        max_thumbnail_long_edge_px: APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
         upload_expires_in_minutes: UPLOAD_INTENT_TTL_MINUTES
       }
     };
   },
 
   async finalize(userId: string, appointmentId: string, payload: FinalizePayload, now = new Date()): Promise<Row> {
+    await assertAppointmentPhotosAllowed(userId);
     const appointment = await appointmentsService.getOwned(userId, appointmentId);
     const { data: pendingImage, error: pendingError } = await supabaseAdmin
       .from("appointment_images")
@@ -370,16 +586,29 @@ export const appointmentImagesService = {
     });
 
     try {
+      assertLongestEdgeWithinLimit(
+        "Appointment image display",
+        payload.width,
+        payload.height,
+        APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE
+      );
+      assertLongestEdgeWithinLimit(
+        "Appointment image thumbnail",
+        payload.thumbnail_width,
+        payload.thumbnail_height,
+        APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE
+      );
+
       const verified = await appointmentImageStorageService.verifyObjects(paths, {
         display: {
           expectedContentType: payload.content_type,
           expectedSizeBytes: payload.file_size_bytes,
-          maxSizeBytes: MAX_IMAGE_BYTES
+          maxSizeBytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES
         },
         thumbnail: {
           expectedContentType: inferContentTypeFromPath(payload.thumbnail_path) ?? undefined,
           expectedSizeBytes: payload.thumbnail_size_bytes ?? undefined,
-          maxSizeBytes: MAX_IMAGE_BYTES
+          maxSizeBytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES
         }
       });
 
@@ -405,8 +634,10 @@ export const appointmentImagesService = {
         content_type: payload.content_type,
         file_size_bytes: payload.file_size_bytes,
         thumbnail_size_bytes: payload.thumbnail_size_bytes ?? null,
-        width: payload.width ?? null,
-        height: payload.height ?? null,
+        width: payload.width,
+        height: payload.height,
+        thumbnail_width: payload.thumbnail_width,
+        thumbnail_height: payload.thumbnail_height,
         image_role: payload.image_role,
         image_source: "stylist",
         captured_at: payload.captured_at ?? null,
@@ -430,6 +661,7 @@ export const appointmentImagesService = {
   },
 
   async getDisplayUrl(userId: string, appointmentId: string, imageId: string): Promise<Row> {
+    await assertAppointmentPhotosAllowed(userId);
     await appointmentsService.getOwned(userId, appointmentId);
     const image = await this.getReadyImage(userId, appointmentId, imageId);
     const displayUrl = await appointmentImageStorageService.createSignedReadUrl(
@@ -449,6 +681,7 @@ export const appointmentImagesService = {
   },
 
   async update(userId: string, appointmentId: string, imageId: string, payload: UpdatePayload): Promise<Row> {
+    await assertAppointmentPhotosAllowed(userId);
     await appointmentsService.getOwned(userId, appointmentId);
 
     const { data, error } = await supabaseAdmin
@@ -466,6 +699,7 @@ export const appointmentImagesService = {
   },
 
   async remove(userId: string, appointmentId: string, imageId: string): Promise<void> {
+    await assertAppointmentPhotosAllowed(userId);
     await appointmentsService.getOwned(userId, appointmentId);
     const image = await this.getImage(userId, appointmentId, imageId);
     await appointmentImageStorageService.deleteObjects({
@@ -484,6 +718,7 @@ export const appointmentImagesService = {
   },
 
   async reorder(userId: string, appointmentId: string, imageIds: string[]): Promise<RowList> {
+    await assertAppointmentPhotosAllowed(userId);
     await appointmentsService.getOwned(userId, appointmentId);
     const { data: existingImages, error: existingError } = await supabaseAdmin
       .from("appointment_images")

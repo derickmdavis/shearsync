@@ -7,13 +7,17 @@ import {
 import { supabaseAdmin } from "../lib/supabase";
 import {
   APPOINTMENT_IMAGES_BUCKET,
+  APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+  APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
+  APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
+  APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
   AppointmentImagePaths,
   appointmentImageStorageService
 } from "./appointmentImageStorageService";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
+import { entitlementsService } from "./entitlementsService";
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 
 type PublicUploadIntentPayload = {
@@ -34,12 +38,18 @@ type PublicFinalizePayload = {
   content_type: string;
   file_size_bytes: number;
   thumbnail_size_bytes?: number | null;
-  width?: number | null;
-  height?: number | null;
+  width: number;
+  height: number;
+  thumbnail_width: number;
+  thumbnail_height: number;
   caption?: string | null;
 };
 
 const toIso = (date: Date): string => date.toISOString();
+
+const assertReferencePhotosAllowed = async (stylistId: string): Promise<void> => {
+  await entitlementsService.assertFeatureAllowed(stylistId, "appointmentPhotos");
+};
 
 const isActiveReferenceImage = (image: Row, nowIso: string): boolean => {
   if (image.upload_status === "ready") {
@@ -65,6 +75,17 @@ const inferContentTypeFromPath = (path: string): string | null => {
   }
 
   return null;
+};
+
+const assertLongestEdgeWithinLimit = (
+  label: string,
+  width: number,
+  height: number,
+  maxLongEdge: number
+): void => {
+  if (Math.max(width, height) > maxLongEdge) {
+    throw new ApiError(400, `${label} dimensions exceed maximum size`);
+  }
 };
 
 const resolveContext = (token: string): ResolvedPublicAppointmentImageUploadContext =>
@@ -129,11 +150,16 @@ export const publicAppointmentImagesService = {
   },
 
   async createUploadIntent(payload: PublicUploadIntentPayload, now = new Date()): Promise<Row> {
-    if (payload.input_size_bytes > MAX_IMAGE_BYTES) {
+    if (payload.content_type !== payload.display_content_type) {
+      throw new ApiError(400, "Reference photo upload intent content_type must match display_content_type");
+    }
+
+    if (payload.input_size_bytes > APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES) {
       throw new ApiError(400, "Appointment reference photo exceeds maximum size");
     }
 
     const context = resolveContext(payload.reference_photo_upload_token);
+    await assertReferencePhotosAllowed(context.stylistId);
     const appointment = await this.getTokenAppointment(context);
     await this.expirePendingReferenceUploads(context, now);
     await this.assertReferenceImageAvailable(context, now);
@@ -182,7 +208,11 @@ export const publicAppointmentImagesService = {
       signed_upload_urls: uploadUrls,
       max_constraints: {
         max_reference_images: 1,
-        max_file_size_bytes: MAX_IMAGE_BYTES,
+        max_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+        max_display_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+        max_thumbnail_file_size_bytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
+        max_display_long_edge_px: APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
+        max_thumbnail_long_edge_px: APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
         upload_expires_in_minutes: UPLOAD_INTENT_TTL_MINUTES
       },
       appointment_status: appointment.status
@@ -191,6 +221,7 @@ export const publicAppointmentImagesService = {
 
   async finalize(payload: PublicFinalizePayload, now = new Date()): Promise<Row> {
     const context = resolveContext(payload.reference_photo_upload_token);
+    await assertReferencePhotosAllowed(context.stylistId);
     await this.getTokenAppointment(context);
 
     const { data: pendingImage, error: pendingError } = await supabaseAdmin
@@ -243,16 +274,29 @@ export const publicAppointmentImagesService = {
     });
 
     try {
+      assertLongestEdgeWithinLimit(
+        "Reference photo display",
+        payload.width,
+        payload.height,
+        APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE
+      );
+      assertLongestEdgeWithinLimit(
+        "Reference photo thumbnail",
+        payload.thumbnail_width,
+        payload.thumbnail_height,
+        APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE
+      );
+
       const verified = await appointmentImageStorageService.verifyObjects(paths, {
         display: {
           expectedContentType: payload.content_type,
           expectedSizeBytes: payload.file_size_bytes,
-          maxSizeBytes: MAX_IMAGE_BYTES
+          maxSizeBytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES
         },
         thumbnail: {
           expectedContentType: inferContentTypeFromPath(payload.thumbnail_path) ?? undefined,
           expectedSizeBytes: payload.thumbnail_size_bytes ?? undefined,
-          maxSizeBytes: MAX_IMAGE_BYTES
+          maxSizeBytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES
         }
       });
 
@@ -277,8 +321,10 @@ export const publicAppointmentImagesService = {
         content_type: payload.content_type,
         file_size_bytes: payload.file_size_bytes,
         thumbnail_size_bytes: payload.thumbnail_size_bytes ?? null,
-        width: payload.width ?? null,
-        height: payload.height ?? null,
+        width: payload.width,
+        height: payload.height,
+        thumbnail_width: payload.thumbnail_width,
+        thumbnail_height: payload.thumbnail_height,
         image_role: "reference",
         image_source: "client",
         captured_at: null,

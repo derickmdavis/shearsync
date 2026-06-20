@@ -11,7 +11,8 @@ const { supabaseAdmin } = require("../lib/supabase") as typeof import("../lib/su
 const { ApiError } = require("../lib/errors") as typeof import("../lib/errors");
 const {
   appointmentImageStorageService,
-  APPOINTMENT_IMAGES_BUCKET
+  APPOINTMENT_IMAGES_BUCKET,
+  APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES
 } = require("../services/appointmentImageStorageService") as typeof import("../services/appointmentImageStorageService");
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -197,7 +198,7 @@ describe("appointment image storage helpers", () => {
         await appointmentImageStorageService.verifyObject("display.jpg", {
           expectedContentType: "image/jpeg",
           expectedSizeBytes: 4096,
-          maxSizeBytes: 5242880
+          maxSizeBytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES
         }),
         {
           exists: true,

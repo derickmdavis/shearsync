@@ -7,6 +7,11 @@ export type PlanFeatureKey =
   | "emailReminders"
   | "smsReminders"
   | "waitlist"
+  | "appointmentPhotos"
+  | "rebookNudges"
+  | "birthdayReminders"
+  | "waitlistMatch"
+  | "noShowFollowUp"
   | "customCoverPhoto"
   | "customSlug"
   | "googleCalendarSync"
@@ -19,6 +24,11 @@ export interface PlanFeatures {
   emailReminders: boolean;
   smsReminders: boolean;
   waitlist: boolean;
+  appointmentPhotos: boolean;
+  rebookNudges: boolean;
+  birthdayReminders: boolean;
+  waitlistMatch: boolean;
+  noShowFollowUp: boolean;
   customCoverPhoto: boolean;
   customSlug: boolean;
   googleCalendarSync: boolean;
@@ -60,6 +70,11 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       emailReminders: true,
       smsReminders: false,
       waitlist: false,
+      appointmentPhotos: false,
+      rebookNudges: false,
+      birthdayReminders: false,
+      waitlistMatch: false,
+      noShowFollowUp: false,
       customCoverPhoto: false,
       customSlug: false,
       googleCalendarSync: false,
@@ -77,6 +92,11 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       emailReminders: true,
       smsReminders: true,
       waitlist: true,
+      appointmentPhotos: true,
+      rebookNudges: true,
+      birthdayReminders: true,
+      waitlistMatch: true,
+      noShowFollowUp: true,
       customCoverPhoto: true,
       customSlug: false,
       googleCalendarSync: false,
@@ -94,6 +114,11 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       emailReminders: true,
       smsReminders: true,
       waitlist: true,
+      appointmentPhotos: true,
+      rebookNudges: true,
+      birthdayReminders: true,
+      waitlistMatch: true,
+      noShowFollowUp: true,
       customCoverPhoto: true,
       customSlug: true,
       googleCalendarSync: true,

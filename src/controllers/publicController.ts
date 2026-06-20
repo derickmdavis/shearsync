@@ -7,6 +7,7 @@ import { publicBookingIntakeService } from "../services/publicBookingIntakeServi
 import { publicAppointmentManagementService } from "../services/publicAppointmentManagementService";
 import { publicAppointmentImagesService } from "../services/publicAppointmentImagesService";
 import { publicBookingsService } from "../services/publicBookingsService";
+import { referralLinksService } from "../services/referralLinksService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
@@ -33,6 +34,11 @@ export const publicController = {
   async getStylist(req: Request, res: Response) {
     const stylist = await stylistsService.getPublicProfileBySlug(getRequiredParam(req, "slug"));
     res.json({ data: stylist });
+  },
+
+  async resolveReferral(req: Request, res: Response) {
+    const referral = await referralLinksService.resolvePublicCode(getRequiredParam(req, "referralCode"));
+    res.json({ data: referral });
   },
 
   async getServices(req: Request, res: Response) {

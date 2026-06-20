@@ -5,6 +5,7 @@ import { bookingRulesService } from "../services/bookingRulesService";
 import { renderAppointmentEmail } from "../services/appointmentEmailDeliveryService";
 import { appointmentEmailTemplatesService } from "../services/appointmentEmailTemplatesService";
 import { rebookNudgeSettingsService } from "../services/rebookNudgeSettingsService";
+import { entitlementsService } from "../services/entitlementsService";
 import { stylistsService } from "../services/stylistsService";
 import { usersService } from "../services/usersService";
 
@@ -88,6 +89,8 @@ export const settingsController = {
   },
 
   async previewRebookNudgeSettings(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
     rebookNudgeSettingsService.validateSettingsPayload(req.body);
     const message = renderAppointmentEmail({
       id: "preview",

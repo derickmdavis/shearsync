@@ -200,7 +200,8 @@ export const stylistsService = {
       phone_number: (user?.phone_number as string | null | undefined) ?? null,
       timezone: resolveBusinessTimeZone(user),
       features: {
-        waitlistEnabled: entitlements.effectiveFeatures.waitlistEnabled
+        waitlistEnabled: entitlements.effectiveFeatures.waitlistEnabled,
+        appointmentPhotos: entitlements.features.appointmentPhotos
       },
       intelligent_scheduling_enabled: stylist.intelligent_scheduling_enabled !== false
     };

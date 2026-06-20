@@ -78,6 +78,11 @@ const sanitizeClientPayload = (payload: Row): Row => {
     notes: payload.notes === null ? null : normalizeEmptyString(payload.notes as string | undefined),
     tags: payload.tags === null ? null : normalizeTagList(payload.tags),
     source: payload.source,
+    original_referral_link_id: payload.original_referral_link_id,
+    original_referred_by_client_id: payload.original_referred_by_client_id,
+    original_referral_code: payload.original_referral_code,
+    original_acquisition_source: payload.original_acquisition_source,
+    original_referral_attributed_at: payload.original_referral_attributed_at,
     reminder_consent: payload.reminder_consent,
     total_spend: payload.total_spend,
     last_visit_at: payload.last_visit_at
@@ -363,8 +368,15 @@ export const clientsService = {
     return this.getById(userId, clientId);
   },
 
-  async findMatchingForBooking(userId: string, payload: Row): Promise<Row | null> {
-    const [existing] = await this.findBookingMatches(userId, payload);
+  async findMatchingForBooking(
+    userId: string,
+    payload: Row,
+    options: { includeEmail?: boolean } = {}
+  ): Promise<Row | null> {
+    const matches = options.includeEmail
+      ? await this.findBookingMatchesIncludingEmail(userId, payload)
+      : await this.findBookingMatches(userId, payload);
+    const [existing] = matches;
     return existing ?? null;
   },
 
@@ -392,6 +404,30 @@ export const clientsService = {
         .select("*")
         .eq("user_id", userId)
         .eq("phone", phone)
+        .is("deleted_at", null);
+
+      handleSupabaseError(error, "Unable to match booking client");
+      if ((data ?? []).length > 0) {
+        return data ?? [];
+      }
+    }
+
+    return [];
+  },
+
+  async findBookingMatchesIncludingEmail(userId: string, payload: Row): Promise<RowList> {
+    const phoneMatches = await this.findBookingMatches(userId, payload);
+    if (phoneMatches.length > 0) {
+      return phoneMatches;
+    }
+
+    const email = normalizeEmptyString(payload.email as string | undefined)?.toLowerCase();
+    if (email) {
+      const { data, error } = await supabaseAdmin
+        .from("clients")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("email", email)
         .is("deleted_at", null);
 
       handleSupabaseError(error, "Unable to match booking client");

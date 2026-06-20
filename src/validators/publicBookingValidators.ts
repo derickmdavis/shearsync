@@ -10,6 +10,7 @@ const publicPhoneSchema = z
   .refine((value) => normalizePhone(value) !== null, "phone must be a valid phone number");
 
 const bookingContextTokenSchema = z.string().min(1).max(4000).optional();
+const referralCodeSchema = z.string().regex(/^rf_[A-Za-z0-9]{8,24}$/).optional();
 
 export const createPublicBookingSchema = z.object({
   stylist_slug: z.string().min(2).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -20,6 +21,7 @@ export const createPublicBookingSchema = z.object({
   guest_email: optionalEmailSchema,
   guest_phone: publicPhoneSchema,
   booking_context_token: bookingContextTokenSchema,
+  referral_code: referralCodeSchema,
   notes: z.string().max(2000).optional()
 });
 

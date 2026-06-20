@@ -16,7 +16,7 @@ values (
   'appointment-images',
   'appointment-images',
   false,
-  5242880,
+  2097152,
   array['image/jpeg', 'image/png', 'image/webp']
 )
 on conflict (id) do update

@@ -93,6 +93,11 @@ Current feature matrix from `PLAN_CONFIG`:
 | `emailReminders` | true | true | true |
 | `smsReminders` | false | true | true |
 | `waitlist` | false | true | true |
+| `appointmentPhotos` | false | true | true |
+| `rebookNudges` | false | true | true |
+| `birthdayReminders` | false | true | true |
+| `waitlistMatch` | false | true | true |
+| `noShowFollowUp` | false | true | true |
 | `customCoverPhoto` | false | true | true |
 | `customSlug` | false | false | true |
 | `googleCalendarSync` | false | false | true |
@@ -107,6 +112,11 @@ Recommended gating examples:
 
 - Hide SMS reminder settings when `data.features.smsReminders === false`
 - Hide or upsell stylist waitlist management when `data.features.waitlist === false`
+- Hide or upsell appointment photos, before/after galleries, and public reference photo upload when `data.features.appointmentPhotos === false`
+- Hide or upsell rebook nudge automation when `data.features.rebookNudges === false`
+- Hide or upsell birthday reminder automation when `data.features.birthdayReminders === false`
+- Hide or upsell waitlist match automation when `data.features.waitlistMatch === false`
+- Hide or upsell no-show follow-up automation when `data.features.noShowFollowUp === false`
 - Show the stylist waitlist on/off toggle from `data.settings.waitlistEnabled` when `data.features.waitlist === true`
 - Treat authenticated waitlist actions as usable only when `data.effectiveFeatures.waitlistEnabled === true`
 - Hide cover photo editing when `data.features.customCoverPhoto === false`
@@ -270,6 +280,11 @@ type AccountPlan = {
     emailReminders: boolean;
     smsReminders: boolean;
     waitlist: boolean;
+    appointmentPhotos: boolean;
+    rebookNudges: boolean;
+    birthdayReminders: boolean;
+    waitlistMatch: boolean;
+    noShowFollowUp: boolean;
     customCoverPhoto: boolean;
     customSlug: boolean;
     googleCalendarSync: boolean;
@@ -293,6 +308,8 @@ Use these checks directly:
 const canUseSms = plan.features.smsReminders && plan.smsMonthlyLimit > 0;
 const canShowWaitlistToggle = plan.features.waitlist;
 const canUseWaitlist = plan.effectiveFeatures.waitlistEnabled;
+const canUseRebookNudges = plan.features.rebookNudges;
+const canUseBirthdayReminders = plan.features.birthdayReminders;
 const canEditCoverPhoto = plan.features.customCoverPhoto;
 const canEditBookingSlug = plan.features.customSlug;
 const canExportClients = plan.features.clientExport;

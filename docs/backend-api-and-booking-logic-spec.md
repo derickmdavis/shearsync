@@ -557,6 +557,11 @@ Fields actively used:
 - `reminder_consent`
 - `total_spend`
 - `last_visit_at`
+- `original_referral_link_id`
+- `original_referred_by_client_id`
+- `original_referral_code`
+- `original_acquisition_source`
+- `original_referral_attributed_at`
 - `deleted_at`
 - `deleted_reason`
 - `created_at`
@@ -606,6 +611,11 @@ Fields actively used:
 - `status`
 - `booking_source`
 - `appointment_time_range`
+- `referral_link_id`
+- `referred_by_client_id`
+- `referral_code_used`
+- `referral_attributed_at`
+- `acquisition_source`
 - `created_at`
 - `updated_at`
 
@@ -1263,6 +1273,7 @@ All route declarations are defined in `src/routes/*`. Controllers are in `src/co
   - `smsUsedThisMonth`
   - `smsRemainingThisMonth`
   - `features`
+    - includes `appointmentPhotos`, which gates appointment photos, before/after photos, client visual history, and public reference photo uploads
   - `settings.waitlistEnabled`
   - `effectiveFeatures.waitlistEnabled`
 
@@ -1400,6 +1411,54 @@ Important waitlist distinction:
 - Important note:
   - There is no archive/soft-delete behavior.
 
+### 7.11a `GET /api/clients/:id/referral-link`
+
+- Auth: required
+- Validator: `uuidParamSchema`
+- Controller: `clientsController.getReferralLink`
+- Purpose: load the active referral link for a stylist-owned client without creating one.
+- Main service: `referralLinksService.getForClient`
+- Response: `{ data: ReferralLink | null }`
+- Ownership:
+  - client must belong to the authenticated stylist
+  - cross-stylist access returns the same not-found style error as other client-owned resources
+
+Referral link rows include:
+
+- `id`
+- `user_id`
+- `client_id`
+- `referral_code`
+- `referral_url`
+- `status`
+- `created_at`
+- `updated_at`
+
+### 7.11b `POST /api/clients/:id/referral-link`
+
+- Auth: required
+- Validator: `uuidParamSchema`
+- Controller: `clientsController.createReferralLink`
+- Purpose: create or return the active referral link for a stylist-owned client.
+- Main service: `referralLinksService.getOrCreateForClient`
+- Response: `201 { data: ReferralLink }`
+- Behavior:
+  - idempotent for clients that already have an active link
+  - generated codes use the `rf_` prefix
+  - generated URLs use `WEB_APP_URL` first, then `CLIENT_APP_URL`
+
+### 7.11c `GET /api/clients/:id/referral-stats`
+
+- Auth: required
+- Validator: `uuidParamSchema`
+- Controller: `clientsController.getReferralStats`
+- Purpose: return lightweight referral counts for a stylist-owned client.
+- Main service: `referralLinksService.getClientReferralStats`
+- Response: `{ data: { referral_link_id, referral_code, referral_url, opened_count, booking_attributed_count } }`
+- Counts:
+  - `opened_count` counts `referral_events.event_type = "opened"`
+  - `booking_attributed_count` counts `referral_events.event_type = "booking_attributed"`
+
 ### 7.12 `GET /api/clients/:id/appointments`
 
 - Auth: required
@@ -1419,6 +1478,27 @@ Important waitlist distinction:
 - Main service: `photosService.listByClient`
 - Response: `{ data: Row[] }`
 - Order: `created_at desc`
+- Important: legacy metadata-only endpoint; do not use for production visual history rendering.
+
+### 7.13a `GET /api/clients/:id/visual-history`
+
+- Auth: required
+- Validator: `uuidParamSchema`, `clientVisualHistoryQuerySchema`
+- Query params:
+  - `limit`, integer 1-100, default 50
+  - `include_display_urls`, boolean, default false
+- Controller: `appointmentImagesController.listClientVisualHistory`
+- Purpose: list production-ready appointment image history for one client
+- Main service: `appointmentImagesService.listClientVisualHistory`
+- Response: `{ data: Row[] }`
+- Order: `created_at desc`
+- Important implementation details:
+  - verifies the client belongs to the authenticated user
+  - reads ready rows from `appointment_images`, not legacy `photos`
+  - includes signed `thumbnail_url` values
+  - returns `display_url: null` by default; signs display URLs only when `include_display_urls=true`
+  - includes `image_source` and `image_role`
+  - includes appointment context under `appointment`: `appointment_id`, `appointment_date`, `service_name`, and `status`
 
 ### 7.14 `GET /api/appointments/internal-context`
 
@@ -2110,6 +2190,26 @@ Important waitlist distinction:
 
 Intelligent Scheduling is a ranking/display feature, not a hard availability rule. It runs after all technical booking validation has produced valid slots. It never removes valid appointment times from the response; it only splits the best initial options from the remaining valid options.
 
+### 7.43a `GET /api/public/referrals/:referralCode`
+
+- Auth: public
+- Validator: `referralCodeParamSchema`
+- Controller: `publicController.resolveReferral`
+- Purpose: resolve an active referral code into a public booking handoff.
+- Main service: `referralLinksService.resolvePublicCode`
+- Response:
+  - `referralLinkId`
+  - `referralCode`
+  - `referralUrl`
+  - `stylistSlug`
+  - `bookingUrl`
+  - `expiresAt`
+- Behavior:
+  - only active referral links resolve
+  - response includes the stylist booking URL with the referral code attached as `ref`
+  - records a `referral_events` row with `event_type = "opened"`
+  - `expiresAt` is a frontend handoff hint; final booking still revalidates the referral code server-side
+
 ### 7.44 `POST /api/public/booking-intake`
 
 - Auth: public
@@ -2130,7 +2230,7 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - stylist-scoped only
   - normalized phone first if column exists
   - raw phone next
-  - email last
+  - no email fallback during intake; email can be collected for follow-up but phone controls the intake match
 - `matchStatus` values:
   - `matched`
   - `not_found`
@@ -2149,6 +2249,7 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - `guest_email`
   - `guest_phone`
   - optional `booking_context_token`
+  - optional `referral_code`
   - optional `notes`
 - Purpose: final public booking creation
 - Main service: `publicBookingsService.create`
@@ -2157,6 +2258,11 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - accepts but does not require `booking_context_token`
   - uses a valid booking context token for existing/new-client rule validation when provided
   - otherwise rematches the client directly from submitted contact info
+  - final booking matching tries phone first, then email
+  - accepts but does not require `referral_code`
+  - invalid, inactive, wrong-stylist, or self-referral codes do not block booking
+  - valid non-self referrals write referral fields to the appointment
+  - valid referrals also write original referral fields to a newly created client
   - can create `status = scheduled` or `status = pending`
   - stores `service_id` plus snapshot fields `service_name`, `duration_minutes`, and `price`
   - writes `booking_source = public`
@@ -2258,17 +2364,24 @@ No other public service visibility logic exists.
 
 ### 8.6 Public client matching / intake matching
 
-Shared matching behavior lives in `clientsService.findBookingMatches()` and `findMatchingForBooking()`.
+Shared phone matching behavior lives in `clientsService.findBookingMatches()` and `findMatchingForBooking()`.
 
-Order of matching:
+Default order of matching:
 
 1. normalized phone match on `phone_normalized`, if a normalized phone can be computed
 2. raw `phone`
-3. `email`
 
 Matching is always scoped by `user_id`.
 
 Name is not used for matching.
+
+Final public booking opts into `clientsService.findBookingMatchesIncludingEmail()`:
+
+1. normalized phone
+2. raw phone
+3. email
+
+Booking intake remains phone-only so the frontend can preserve the original phone-based returning-client handoff behavior.
 
 Consequences:
 
@@ -2363,13 +2476,15 @@ Service recommendation is text-based, not foreign-key-based.
 5. normalize `requested_datetime` into business-local wall-clock time
 6. normalize guest phone
 7. lowercase guest email
-8. rematch existing client by phone/email
-9. decide whether caller is existing client from that direct match
-10. validate booking rules
-11. validate availability
-12. find or create client
-13. create appointment with `booking_source = "public"`
-14. return confirmation payload
+8. rematch existing client by phone, then email
+9. resolve optional referral attribution
+10. decide whether caller is existing client from booking context token or direct match
+11. validate booking rules
+12. validate availability
+13. find or create client
+14. create appointment with `booking_source = "public"` and referral attribution fields when applicable
+15. record a `booking_attributed` referral event when applicable
+16. return confirmation payload
 
 ### 8.11 Datetime normalization during final booking
 
@@ -2524,7 +2639,47 @@ This creates:
 
 This happens for both `scheduled` and `pending` public bookings.
 
-### 8.21 Known booking gaps visible in code
+### 8.21 Referral attribution during public booking
+
+Referral attribution is resolved by `referralLinksService.resolveAttributionForBooking()` before final appointment creation.
+
+Valid attribution requires:
+
+- a syntactically valid `referral_code`
+- an active `client_referral_links` row
+- the referral link must belong to the stylist being booked
+- the booking guest must not be the referring client
+
+Self-referral prevention checks:
+
+- matched client id
+- normalized guest phone
+- lowercase guest email
+
+When attribution is valid:
+
+- `appointments` receives:
+  - `referral_link_id`
+  - `referred_by_client_id`
+  - `referral_code_used`
+  - `referral_attributed_at`
+  - `acquisition_source = "client_referral_link"`
+- a newly created `clients` row receives:
+  - `source = "referral"`
+  - `original_referral_link_id`
+  - `original_referred_by_client_id`
+  - `original_referral_code`
+  - `original_acquisition_source = "client_referral_link"`
+  - `original_referral_attributed_at`
+- `referral_events` receives `event_type = "booking_attributed"` with the appointment id
+
+When attribution is not valid:
+
+- booking still proceeds if all normal booking rules pass
+- invalid or wrong-stylist codes do not write attribution fields
+- self-referrals write a `self_referral_blocked` event and do not write appointment attribution
+
+### 8.22 Known booking gaps visible in code
 
 - final booking accepts `booking_context_token` but still relies on submitted phone/email to resolve or create the client record
 - intake ambiguity suggests `collect_email_or_name`, but name is not actually used for final disambiguation
@@ -2715,7 +2870,7 @@ Public booking can:
 - match an existing client
 - create a new client
 
-Client matching uses only stylist-scoped phone/email matching.
+Final public booking matching uses only stylist-scoped phone/email matching. Booking intake remains stylist-scoped and phone-only.
 
 Public booking-created client rows use:
 
@@ -2723,7 +2878,17 @@ Public booking-created client rows use:
 - `last_name`
 - `email`
 - `phone`
-- `notes`
+
+Public booking notes are stored on the appointment, not copied into client notes.
+
+When a valid non-self referral code is attached to a public booking, newly created client rows also use:
+
+- `source = "referral"`
+- `original_referral_link_id`
+- `original_referred_by_client_id`
+- `original_referral_code`
+- `original_acquisition_source`
+- `original_referral_attributed_at`
 
 ### Validation
 
@@ -2879,6 +3044,8 @@ Waitlist settings live in `users`:
 - `waitlist_enabled`
 
 The public booking profile response exposes the effective waitlist state as `data.features.waitlistEnabled`. That value combines `users.waitlist_enabled`, plan eligibility, and cancelled-plan blocking.
+
+The same response exposes `data.features.appointmentPhotos` so the public booking frontend can hide reference photo upload for Basic stylists. The backend still enforces the entitlement on public reference photo upload intent and finalize.
 
 ### Booking settings plan gates
 

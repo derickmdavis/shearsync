@@ -3,6 +3,10 @@ import { supabaseAdmin } from "../lib/supabase";
 
 export const APPOINTMENT_IMAGES_BUCKET = "appointment-images";
 export const APPOINTMENT_IMAGE_ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES = 2 * 1024 * 1024;
+export const APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES = 300 * 1024;
+export const APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE = 1600;
+export const APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE = 400;
 
 export type AppointmentImageContentType = (typeof APPOINTMENT_IMAGE_ALLOWED_CONTENT_TYPES)[number];
 

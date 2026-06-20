@@ -79,12 +79,16 @@ Authenticated routes:
 - `GET /api/clients/:id`
 - `PATCH /api/clients/:id`
 - `DELETE /api/clients/:id`
+- `GET /api/clients/:id/referral-link`
+- `POST /api/clients/:id/referral-link`
+- `GET /api/clients/:id/referral-stats`
 - `GET /api/clients/:id/appointments`
 - `POST /api/appointments`
 - `GET /api/appointments/internal-context?date=YYYY-MM-DD&durationMinutes=90`
 - `GET /api/appointments/:id`
 - `GET /api/appointments/:id/activity`
 - `PATCH /api/appointments/:id`
+- `GET /api/clients/:id/visual-history`
 - `GET /api/clients/:id/photos`
 - `POST /api/photos`
 - `GET /api/activity`
@@ -184,6 +188,7 @@ Public booking routes:
 - `GET /api/public/services/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug/slots?service_id=...&date=YYYY-MM-DD&booking_context_token=...`
+- `GET /api/public/referrals/:referralCode`
 - `POST /api/public/stylists/:slug/waitlist`
 - `POST /api/public/booking-intake`
 - `POST /api/public/bookings`
@@ -197,7 +202,7 @@ Public communication routes:
 
 Recommended public flow:
 
-1. `GET /api/public/stylists/:slug` and read `booking_enabled` plus `features.waitlistEnabled`.
+1. `GET /api/public/stylists/:slug` and read `booking_enabled`, `features.waitlistEnabled`, and `features.appointmentPhotos`.
 2. If `booking_enabled` is `false`, stop the booking flow and show an "online booking unavailable" state.
 3. `POST /api/public/booking-intake` with guest contact details.
 4. Read `isExistingClient`, `bookingContextToken`, and `bookingEnabled` from the response.
@@ -207,8 +212,9 @@ Recommended public flow:
 8. Pass the same `booking_context_token` into `GET /api/public/availability/:slug/slots` so slot generation uses the same client-specific rules and client-specific availability windows.
    - When Intelligent Scheduling is enabled, this endpoint returns up to 5 ranked initial `slots`, the remaining valid `moreSlots`, `hasMore`, and `intelligentSchedulingEnabled`.
    - Intelligent Scheduling is display ranking only. The backend still returns every technically valid slot across `slots` and `moreSlots`.
-9. Submit the final booking through `POST /api/public/bookings`.
-10. If the selected day has no useful slots and `features.waitlistEnabled=true`, the client may submit `POST /api/public/stylists/:slug/waitlist`.
+9. If the visitor entered through `GET /api/public/referrals/:referralCode` or a `/r/:referralCode` frontend route, carry the referral code through the flow.
+10. Submit the final booking through `POST /api/public/bookings`, including optional `referral_code` when present.
+11. If the selected day has no useful slots and `features.waitlistEnabled=true`, the client may submit `POST /api/public/stylists/:slug/waitlist`.
 
 `POST /api/public/bookings` still re-checks the real client match and booking rules server-side:
 
@@ -216,9 +222,26 @@ Recommended public flow:
 2. Confirms online booking is enabled.
 3. Confirms the service is active for that stylist.
 4. Checks that the requested datetime falls inside an active availability window.
-5. Matches an existing client by email or phone, or creates a new client.
-6. Creates a scheduled or pending appointment, depending on booking rules.
-7. Returns a confirmation payload.
+5. Matches an existing client by phone, then email, or creates a new client.
+6. If `referral_code` is valid for this stylist and is not a self-referral, stores referral attribution on the appointment and on a newly created client.
+7. Creates a scheduled or pending appointment, depending on booking rules.
+8. Returns a confirmation payload.
+
+## Referrals
+
+Authenticated client referral endpoints:
+
+- `GET /api/clients/:id/referral-link` returns the active referral link for a stylist-owned client, or `null`.
+- `POST /api/clients/:id/referral-link` creates or returns the active referral link for a stylist-owned client.
+- `GET /api/clients/:id/referral-stats` returns lightweight counts for referral link opens and attributed bookings.
+
+Public referral endpoint:
+
+- `GET /api/public/referrals/:referralCode` validates an active referral code and returns the stylist booking URL plus an expiry timestamp for frontend handoff.
+
+Final public bookings accept optional `referral_code`. Invalid, wrong-stylist, or self-referral codes do not block booking; they simply do not write attribution. Valid referral bookings write referral fields on the appointment, and new referred clients get original referral source fields.
+
+Frontend handoff details are documented in [docs/frontend-referrals-contract.md](docs/frontend-referrals-contract.md).
 
 The public read endpoints also enforce booking availability now:
 
@@ -250,7 +273,8 @@ Public metadata:
     "slug": "maya-johnson",
     "booking_enabled": true,
     "features": {
-      "waitlistEnabled": true
+      "waitlistEnabled": true,
+      "appointmentPhotos": true
     }
   }
 }
@@ -290,6 +314,7 @@ Stylist settings toggle:
 - Update with `PATCH /api/settings/profile` and body `{ "waitlist_enabled": false }` or `{ "waitlist_enabled": true }`.
 - The account plan endpoint also returns:
   - `data.features.waitlist`: tier eligibility
+  - `data.features.appointmentPhotos`: tier eligibility for appointment photos, before/after photos, and public reference photo upload
   - `data.settings.waitlistEnabled`: stored stylist toggle
   - `data.effectiveFeatures.waitlistEnabled`: eligible, not cancelled, and toggled on
 
@@ -326,6 +351,8 @@ See [docs/frontend-public-booking-client-context-handoff.md](docs/frontend-publi
 See [docs/tiers-overview.md](docs/tiers-overview.md) for the full plan/tier entitlement contract.
 
 ## Photo Upload Placeholder
+
+`GET /api/clients/:id/visual-history` returns production appointment image history for the Client Detail screen. Results are backed by `appointment_images`, include appointment context, and include short-lived signed `thumbnail_url` and `display_url` fields for private Storage objects.
 
 `POST /api/photos` records photo metadata:
 

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { publicController } from "../controllers/publicController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
-import { publicAppointmentManagementTokenParamSchema, slugParamSchema } from "../validators/common";
+import { publicAppointmentManagementTokenParamSchema, referralCodeParamSchema, slugParamSchema } from "../validators/common";
 import {
   finalizePublicReferencePhotoSchema,
   publicReferencePhotoUploadIntentSchema
@@ -19,6 +19,11 @@ import { createPublicWaitlistEntrySchema } from "../validators/waitlistValidator
 
 export const publicRouter = Router();
 
+publicRouter.get(
+  "/referrals/:referralCode",
+  validate({ params: referralCodeParamSchema }),
+  asyncHandler(publicController.resolveReferral)
+);
 publicRouter.get("/stylists/:slug", validate({ params: slugParamSchema }), asyncHandler(publicController.getStylist));
 publicRouter.get(
   "/services/:slug",

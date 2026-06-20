@@ -55,6 +55,41 @@ create table if not exists public.plan_usage_events (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.account_deletion_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.users(id) on delete set null,
+  status text not null default 'pending',
+  reason text,
+  client_request_id text,
+  requested_at timestamptz not null default now(),
+  scheduled_deletion_at timestamptz,
+  processing_started_at timestamptz,
+  completed_at timestamptz,
+  failed_at timestamptz,
+  failure_reason text,
+  created_ip_hash text,
+  created_user_agent text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint account_deletion_requests_status_check
+    check (status in ('pending', 'processing', 'failed_retryable', 'completed', 'cancelled')),
+  constraint account_deletion_requests_reason_length_check
+    check (reason is null or char_length(reason) <= 1000),
+  constraint account_deletion_requests_client_request_id_length_check
+    check (client_request_id is null or char_length(client_request_id) <= 120)
+);
+
+create table if not exists public.account_deletion_audit_events (
+  id uuid primary key default gen_random_uuid(),
+  request_id uuid references public.account_deletion_requests(id) on delete set null,
+  user_id uuid references public.users(id) on delete set null,
+  event_type text not null,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint account_deletion_audit_events_event_type_length_check
+    check (char_length(trim(event_type)) between 1 and 80)
+);
+
 create table if not exists public.appointments (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -95,6 +130,8 @@ create table if not exists public.appointment_images (
   thumbnail_size_bytes bigint,
   width integer,
   height integer,
+  thumbnail_width integer,
+  thumbnail_height integer,
   image_role text not null default 'general',
   image_source text not null default 'stylist',
   captured_at timestamptz,
@@ -115,13 +152,21 @@ create table if not exists public.appointment_images (
   constraint appointment_images_content_type_check
     check (content_type in ('image/jpeg', 'image/png', 'image/webp')),
   constraint appointment_images_file_size_check
-    check (file_size_bytes > 0 and file_size_bytes <= 5242880),
+    check (file_size_bytes > 0 and file_size_bytes <= 2097152),
   constraint appointment_images_thumbnail_size_check
-    check (thumbnail_size_bytes is null or thumbnail_size_bytes > 0),
+    check (thumbnail_size_bytes is null or (thumbnail_size_bytes > 0 and thumbnail_size_bytes <= 307200)),
   constraint appointment_images_width_check
-    check (width is null or width > 0),
+    check (width is null or (width > 0 and width <= 1600)),
   constraint appointment_images_height_check
-    check (height is null or height > 0),
+    check (height is null or (height > 0 and height <= 1600)),
+  constraint appointment_images_thumbnail_width_check
+    check (thumbnail_width is null or (thumbnail_width > 0 and thumbnail_width <= 400)),
+  constraint appointment_images_thumbnail_height_check
+    check (thumbnail_height is null or (thumbnail_height > 0 and thumbnail_height <= 400)),
+  constraint appointment_images_ready_display_dimensions_check
+    check (upload_status <> 'ready' or (width is not null and height is not null)),
+  constraint appointment_images_ready_thumbnail_dimensions_check
+    check (upload_status <> 'ready' or (thumbnail_width is not null and thumbnail_height is not null)),
   constraint appointment_images_role_check
     check (image_role in ('before', 'after', 'inspiration', 'reference', 'formula', 'progress', 'general')),
   constraint appointment_images_source_check
@@ -737,6 +782,20 @@ create unique index if not exists birthday_reminders_active_client_year_idx
   where status in ('queued', 'sending', 'failed');
 create index if not exists plan_usage_events_user_month_idx
   on public.plan_usage_events(user_id, created_at);
+create unique index if not exists account_deletion_requests_user_active_idx
+  on public.account_deletion_requests(user_id)
+  where user_id is not null
+    and status in ('pending', 'processing', 'failed_retryable');
+create unique index if not exists account_deletion_requests_user_client_request_idx
+  on public.account_deletion_requests(user_id, client_request_id)
+  where user_id is not null
+    and client_request_id is not null;
+create index if not exists account_deletion_requests_status_scheduled_idx
+  on public.account_deletion_requests(status, scheduled_deletion_at);
+create index if not exists account_deletion_audit_events_request_idx
+  on public.account_deletion_audit_events(request_id, created_at);
+create index if not exists account_deletion_audit_events_user_idx
+  on public.account_deletion_audit_events(user_id, created_at);
 create index if not exists rebook_nudge_settings_user_id_idx
   on public.rebook_nudge_settings(user_id);
 create index if not exists rebook_nudges_user_status_send_after_idx
@@ -791,6 +850,8 @@ alter table public.appointment_email_events enable row level security;
 alter table public.appointment_email_templates enable row level security;
 alter table public.birthday_reminders enable row level security;
 alter table public.plan_usage_events enable row level security;
+alter table public.account_deletion_requests enable row level security;
+alter table public.account_deletion_audit_events enable row level security;
 alter table public.rebook_nudge_settings enable row level security;
 alter table public.rebook_nudges enable row level security;
 alter table public.client_communication_preferences enable row level security;
@@ -833,6 +894,23 @@ begin
   ) then
     create policy activity_events_select_own
       on public.activity_events
+      for select
+      using (auth.uid() = user_id);
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'account_deletion_requests'
+      and policyname = 'account_deletion_requests_select_own'
+  ) then
+    create policy account_deletion_requests_select_own
+      on public.account_deletion_requests
       for select
       using (auth.uid() = user_id);
   end if;

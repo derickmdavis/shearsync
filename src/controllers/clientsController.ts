@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { getAuthUserId, getRequiredParam } from "../lib/request";
 import { clientsService } from "../services/clientsService";
+import { referralLinksService } from "../services/referralLinksService";
 
 export const clientsController = {
   async list(req: Request, res: Response) {
@@ -37,5 +38,23 @@ export const clientsController = {
     const userId = await getAuthUserId(req);
     const client = await clientsService.reactivate(userId, getRequiredParam(req, "id"));
     res.json({ data: client });
+  },
+
+  async getReferralLink(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const link = await referralLinksService.getForClient(userId, getRequiredParam(req, "id"));
+    res.json({ data: link });
+  },
+
+  async createReferralLink(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const link = await referralLinksService.getOrCreateForClient(userId, getRequiredParam(req, "id"));
+    res.status(201).json({ data: link });
+  },
+
+  async getReferralStats(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const stats = await referralLinksService.getClientReferralStats(userId, getRequiredParam(req, "id"));
+    res.json({ data: stats });
   }
 };

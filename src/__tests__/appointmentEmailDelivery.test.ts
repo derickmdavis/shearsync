@@ -696,7 +696,9 @@ describe("appointment email delivery", () => {
           id: TEST_USER_ID,
           email: "maya@example.com",
           business_name: "Maya Johnson Hair",
-          timezone: "UTC"
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
         }
       ],
       stylists: [
@@ -784,7 +786,9 @@ describe("appointment email delivery", () => {
           id: TEST_USER_ID,
           email: "maya@example.com",
           business_name: "Maya Johnson Hair",
-          timezone: "UTC"
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
         }
       ],
       stylists: [],
@@ -830,6 +834,16 @@ describe("appointment email delivery", () => {
 
   it("skips linked queued rebook email events when a nudge is cancelled", async () => {
     const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
       rebook_nudges: [
         {
           id: "33333333-3333-4333-8333-333333333333",
@@ -940,6 +954,16 @@ describe("appointment email delivery", () => {
       }
     };
     const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
       birthday_reminders: [
         {
           id: "44444444-4444-4444-8444-444444444444",
@@ -1331,7 +1355,13 @@ describe("appointment email delivery", () => {
     mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
     const supabase = installMockSupabase({
       users: [
-        { id: TEST_USER_ID, timezone: "UTC", business_name: "Maya Johnson Hair" }
+        {
+          id: TEST_USER_ID,
+          timezone: "UTC",
+          business_name: "Maya Johnson Hair",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
       ],
       clients: [
         {
@@ -1371,7 +1401,13 @@ describe("appointment email delivery", () => {
         }
       ],
       users: [
-        { id: TEST_USER_ID, timezone: "UTC", business_name: "Maya Johnson Hair" }
+        {
+          id: TEST_USER_ID,
+          timezone: "UTC",
+          business_name: "Maya Johnson Hair",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
       ],
       clients: [
         {
@@ -1404,6 +1440,15 @@ describe("appointment email delivery", () => {
 
   it("paginates birthday reminders with a database-backed cursor", async () => {
     const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          timezone: "UTC",
+          business_name: "Maya Johnson Hair",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
       birthday_reminders: [
         {
           id: "44444444-4444-4444-8444-444444444444",
@@ -1463,6 +1508,15 @@ describe("appointment email delivery", () => {
 
   it("paginates rebook nudges with a cursor beyond the first page", async () => {
     const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          timezone: "UTC",
+          business_name: "Maya Johnson Hair",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
       rebook_nudges: [
         {
           id: "33333333-3333-4333-8333-333333333333",

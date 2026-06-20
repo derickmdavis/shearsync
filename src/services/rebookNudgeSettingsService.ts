@@ -2,6 +2,7 @@ import { ApiError, requireFound } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
+import { entitlementsService } from "./entitlementsService";
 
 export interface RebookNudgeSettingsPayload {
   approvalRequired?: boolean;
@@ -139,6 +140,8 @@ export const rebookNudgeSettingsService = {
   validateSettingsPayload,
 
   async getForUser(userId: string) {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const { data, error } = await supabaseAdmin
       .from("rebook_nudge_settings")
       .select("*")
@@ -166,6 +169,8 @@ export const rebookNudgeSettingsService = {
   },
 
   async upsertForUser(userId: string, payload: RebookNudgeSettingsPayload) {
+    await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
+
     const normalized = validateSettingsPayload(payload);
     const updates: Row = {};
 

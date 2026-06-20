@@ -9,6 +9,16 @@ export const appointmentImagesController = {
     res.json({ data: result.appointments, meta: result.meta });
   },
 
+  async listClientVisualHistory(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const images = await appointmentImagesService.listClientVisualHistory(
+      userId,
+      getRequiredParam(req, "id"),
+      req.query
+    );
+    res.json({ data: images });
+  },
+
   async list(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const images = await appointmentImagesService.list(userId, getRequiredParam(req, "id"));

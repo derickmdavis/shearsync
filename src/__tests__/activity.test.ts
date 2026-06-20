@@ -1625,7 +1625,7 @@ describe("Activity handlers", () => {
     const duplicateAppointmentReminderId = "45454545-4545-4545-8545-454545454545";
     const supabase = installMockSupabase({
       users: [
-        { id: userId, timezone: "UTC" }
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
       ],
       clients: [
         { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" }
@@ -2001,6 +2001,89 @@ describe("Activity handlers", () => {
     } finally {
       supabase.restore();
       mock.timers.reset();
+    }
+  });
+
+  it("allows Basic users to toggle core automations but blocks Pro automation controls", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      automation_settings: [
+        { user_id: userId, key: "email_confirmations", enabled: true },
+        { user_id: userId, key: "appointment_reminders", enabled: true },
+        { user_id: userId, key: "rebook_nudges", enabled: true },
+        { user_id: userId, key: "birthday_reminders", enabled: true },
+        { user_id: userId, key: "waitlist_match", enabled: true },
+        { user_id: userId, key: "no_show_follow_up", enabled: true }
+      ],
+      clients: [],
+      appointments: [],
+      reminders: [],
+      waitlist_entries: [],
+      activity_events: [],
+      appointment_email_events: [],
+      rebook_nudges: [],
+      birthday_reminders: []
+    });
+
+    try {
+      const dashboardResponse = await runWithErrorHandler(
+        (request, res) => activityController.dashboard(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      const controls = (dashboardResponse.body as {
+        data: {
+          automation_controls: Array<{
+            key: string;
+            enabled: boolean;
+            feature_available: boolean;
+            status_label: string;
+          }>;
+        };
+      }).data.automation_controls;
+
+      assert.equal(controls.find((control) => control.key === "email_confirmations")?.feature_available, true);
+      assert.equal(controls.find((control) => control.key === "email_confirmations")?.enabled, true);
+      assert.equal(controls.find((control) => control.key === "appointment_reminders")?.feature_available, true);
+      assert.equal(controls.find((control) => control.key === "appointment_reminders")?.enabled, true);
+
+      for (const key of ["rebook_nudges", "birthday_reminders", "waitlist_match", "no_show_follow_up"]) {
+        const control = controls.find((item) => item.key === key);
+        assert.equal(control?.feature_available, false);
+        assert.equal(control?.enabled, false);
+        assert.equal(control?.status_label, "Upgrade required");
+
+        const response = await runWithErrorHandler(
+          (request, res) => activityController.updateAutomationSetting(request, res),
+          createMockRequest({
+            user: { id: userId } as Request["user"],
+            params: { key },
+            body: { enabled: true }
+          })
+        );
+        assert.equal(response.statusCode, 403);
+      }
+
+      for (const key of ["email_confirmations", "appointment_reminders"]) {
+        const response = await runWithErrorHandler(
+          (request, res) => activityController.updateAutomationSetting(request, res),
+          createMockRequest({
+            user: { id: userId } as Request["user"],
+            params: { key },
+            body: { enabled: false }
+          })
+        );
+        assert.equal(response.statusCode, 200);
+        assert.equal(supabase.state.automation_settings.find((setting) => setting.key === key)?.enabled, false);
+      }
+    } finally {
+      supabase.restore();
     }
   });
 

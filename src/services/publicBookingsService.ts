@@ -15,6 +15,7 @@ import { usersService } from "./usersService";
 import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
+import { referralLinksService, type ReferralAttribution } from "./referralLinksService";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 import {
   createPublicAppointmentImageUploadToken,
@@ -178,6 +179,27 @@ const getAppointmentEnd = (appointmentDate: string, durationMinutes: number): st
 
 const conflictDiagnosticsVersion = "slot-conflicts-v1";
 
+const toAppointmentReferralFields = (attribution: ReferralAttribution | null): Row => attribution
+  ? {
+      referral_link_id: attribution.referralLinkId,
+      referred_by_client_id: attribution.referredByClientId,
+      referral_code_used: attribution.referralCodeUsed,
+      referral_attributed_at: attribution.referralAttributedAt,
+      acquisition_source: attribution.acquisitionSource
+    }
+  : {};
+
+const toNewClientReferralFields = (attribution: ReferralAttribution | null): Row => attribution
+  ? {
+      source: "referral",
+      original_referral_link_id: attribution.referralLinkId,
+      original_referred_by_client_id: attribution.referredByClientId,
+      original_referral_code: attribution.referralCodeUsed,
+      original_acquisition_source: attribution.acquisitionSource,
+      original_referral_attributed_at: attribution.referralAttributedAt
+    }
+  : {};
+
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
@@ -201,7 +223,17 @@ export const publicBookingsService = {
     const matchedClient = await clientsService.findMatchingForBooking(userId, {
       email: normalizedGuestEmail,
       phone: normalizedGuestPhone
+    }, {
+      includeEmail: true
     });
+    const referralAttributionResult = await referralLinksService.resolveAttributionForBooking({
+      stylistId: userId,
+      referralCode: typeof payload.referral_code === "string" ? payload.referral_code : null,
+      matchedClientId: typeof matchedClient?.id === "string" ? matchedClient.id : null,
+      guestPhone: normalizedGuestPhone,
+      guestEmail: normalizedGuestEmail
+    });
+    const referralAttribution = referralAttributionResult.attribution;
     const bookingContext = resolvePublicBookingContextToken(
       typeof payload.booking_context_token === "string" ? payload.booking_context_token : undefined,
       stylist.slug as string
@@ -259,7 +291,7 @@ export const publicBookingsService = {
       }
 
       if (slotEvaluation.reason === "appointment_conflict" && !matchedClient) {
-        const latestMatchedClients = await clientsService.findBookingMatches(userId, {
+        const latestMatchedClients = await clientsService.findBookingMatchesIncludingEmail(userId, {
           email: normalizedGuestEmail,
           phone: normalizedGuestPhone
         });
@@ -287,11 +319,12 @@ export const publicBookingsService = {
       });
     }
 
-    const resolvedClient = matchedClient ?? await clientsService.findOrCreateForBooking(userId, {
+    const resolvedClient = matchedClient ?? await clientsService.create(userId, {
       first_name: payload.guest_first_name,
       last_name: payload.guest_last_name,
       email: normalizedGuestEmail,
-      phone: payload.guest_phone
+      phone: payload.guest_phone,
+      ...toNewClientReferralFields(referralAttribution)
     });
     const client = await persistGuestEmailIfMissing(userId, resolvedClient, normalizedGuestEmail);
 
@@ -305,8 +338,16 @@ export const publicBookingsService = {
         price: service.price,
         notes: payload.notes,
         status: slotEvaluation.status,
-        booking_source: "public"
+        booking_source: "public",
+        ...toAppointmentReferralFields(referralAttribution)
       });
+
+      if (referralAttribution) {
+        await referralLinksService.recordBookingAttributed(referralAttribution.referralCodeUsed, appointment.id as string, {
+          booked_client_id: client.id,
+          is_existing_client: Boolean(matchedClient)
+        });
+      }
 
       await queuePublicBookingEmail(userId, appointment, normalizedGuestEmail);
 
@@ -322,7 +363,7 @@ export const publicBookingsService = {
         throw error;
       }
 
-      const latestMatchedClients = await clientsService.findBookingMatches(userId, {
+      const latestMatchedClients = await clientsService.findBookingMatchesIncludingEmail(userId, {
         email: normalizedGuestEmail,
         phone: normalizedGuestPhone
       });

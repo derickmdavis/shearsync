@@ -100,6 +100,11 @@ export const entitlementsService = {
     }
   },
 
+  async isFeatureAllowed(userId: string, featureKey: PlanFeatureKey): Promise<boolean> {
+    const entitlements = await this.getEntitlementsForUser(userId);
+    return entitlements.status !== "cancelled" && entitlements.features[featureKey];
+  },
+
   async assertSmsAvailable(userId: string, quantity = 1): Promise<void> {
     const entitlements = await this.getEntitlementsForUser(userId);
 

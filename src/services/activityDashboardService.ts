@@ -8,6 +8,8 @@ import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
+import { entitlementsService } from "./entitlementsService";
+import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
 
 const AUTOMATION_KEYS = [
   "rebook_nudges",
@@ -27,6 +29,13 @@ const AUTOMATION_LABELS: Record<AutomationControlKey, string> = {
   no_show_follow_up: "No Show Follow-up",
   waitlist_match: "Waitlist Match",
   birthday_reminders: "Birthday Reminders"
+};
+
+const AUTOMATION_FEATURES: Partial<Record<AutomationControlKey, PlanFeatureKey>> = {
+  rebook_nudges: "rebookNudges",
+  birthday_reminders: "birthdayReminders",
+  waitlist_match: "waitlistMatch",
+  no_show_follow_up: "noShowFollowUp"
 };
 
 const APPOINTMENT_SELECT = `
@@ -153,6 +162,17 @@ const loadAutomationSettings = async (userId: string): Promise<Map<AutomationCon
 
 const getEnabled = (settings: Map<AutomationControlKey, boolean>, key: AutomationControlKey): boolean =>
   settings.get(key) ?? false;
+
+const isAutomationAvailable = (entitlements: UserEntitlements, key: AutomationControlKey): boolean => {
+  const featureKey = AUTOMATION_FEATURES[key];
+  return !featureKey || (entitlements.status !== "cancelled" && entitlements.features[featureKey]);
+};
+
+const getEffectiveEnabled = (
+  settings: Map<AutomationControlKey, boolean>,
+  entitlements: UserEntitlements,
+  key: AutomationControlKey
+): boolean => isAutomationAvailable(entitlements, key) && getEnabled(settings, key);
 
 const loadRecentActivity = async (userId: string): Promise<ActivityEventItem[]> => {
   const feed = await activityEventsService.getFeed(userId, { limit: 10 });
@@ -548,7 +568,9 @@ export const activityDashboardService = {
 
   async getDashboard(userId: string): Promise<Row> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
+    const entitlementsPromise = entitlementsService.getEntitlementsForUser(userId);
     const [
+      entitlements,
       settings,
       recentActivity,
       cancellationReviewItems,
@@ -562,13 +584,18 @@ export const activityDashboardService = {
       birthdayReminderCounts,
       birthdayReminderQueue
     ] = await Promise.all([
+      entitlementsPromise,
       loadAutomationSettings(userId),
       loadRecentActivity(userId),
       loadCancellationReviewItems(userId, timeZone),
       loadReminderQueue(userId),
       loadAppointmentEmailReminderQueue(userId),
       loadReviewRequestQueue(userId),
-      loadWaitlistMatches(userId, timeZone),
+      entitlementsPromise.then((entitlements) =>
+        isAutomationAvailable(entitlements, "waitlist_match")
+          ? loadWaitlistMatches(userId, timeZone)
+          : []
+      ),
       activityEventsService.getCategoryCounts(userId, {}, timeZone),
       rebookNudgesService.getCountsForUser(userId),
       rebookNudgesService.getOutstandingForUser(userId, 50),
@@ -587,8 +614,11 @@ export const activityDashboardService = {
       {
         key: "rebook_nudges",
         label: AUTOMATION_LABELS.rebook_nudges,
-        enabled: getEnabled(settings, "rebook_nudges"),
-        status_label: rebookNudgeCounts.pending_approval > 0
+        enabled: getEffectiveEnabled(settings, entitlements, "rebook_nudges"),
+        feature_available: isAutomationAvailable(entitlements, "rebook_nudges"),
+        status_label: !isAutomationAvailable(entitlements, "rebook_nudges")
+          ? "Upgrade required"
+          : rebookNudgeCounts.pending_approval > 0
           ? `${rebookNudgeCounts.pending_approval} need approval`
           : `${rebookNudgeCounts.queued} queued`,
         due_count: feedCounts.rebook,
@@ -598,35 +628,46 @@ export const activityDashboardService = {
       {
         key: "appointment_reminders",
         label: AUTOMATION_LABELS.appointment_reminders,
-        enabled: getEnabled(settings, "appointment_reminders"),
+        enabled: getEffectiveEnabled(settings, entitlements, "appointment_reminders"),
+        feature_available: isAutomationAvailable(entitlements, "appointment_reminders"),
         status_label: `${appointmentReminderQueue.length} scheduled`,
         scheduled_count: appointmentReminderQueue.length
       },
       {
         key: "email_confirmations",
         label: AUTOMATION_LABELS.email_confirmations,
-        enabled: getEnabled(settings, "email_confirmations"),
-        status_label: getEnabled(settings, "email_confirmations") ? "On for bookings" : "Paused"
+        enabled: getEffectiveEnabled(settings, entitlements, "email_confirmations"),
+        feature_available: isAutomationAvailable(entitlements, "email_confirmations"),
+        status_label: getEffectiveEnabled(settings, entitlements, "email_confirmations") ? "On for bookings" : "Paused"
       },
       {
         key: "no_show_follow_up",
         label: AUTOMATION_LABELS.no_show_follow_up,
-        enabled: getEnabled(settings, "no_show_follow_up"),
-        status_label: `${noShowTodayCount} needed today`,
+        enabled: getEffectiveEnabled(settings, entitlements, "no_show_follow_up"),
+        feature_available: isAutomationAvailable(entitlements, "no_show_follow_up"),
+        status_label: isAutomationAvailable(entitlements, "no_show_follow_up")
+          ? `${noShowTodayCount} needed today`
+          : "Upgrade required",
         due_count: noShowTodayCount
       },
       {
         key: "waitlist_match",
         label: AUTOMATION_LABELS.waitlist_match,
-        enabled: getEnabled(settings, "waitlist_match"),
-        status_label: `${waitlistMatches.length} ${waitlistMatches.length === 1 ? "match" : "matches"} found`,
+        enabled: getEffectiveEnabled(settings, entitlements, "waitlist_match"),
+        feature_available: isAutomationAvailable(entitlements, "waitlist_match"),
+        status_label: isAutomationAvailable(entitlements, "waitlist_match")
+          ? `${waitlistMatches.length} ${waitlistMatches.length === 1 ? "match" : "matches"} found`
+          : "Upgrade required",
         match_count: waitlistMatches.length
       },
       {
         key: "birthday_reminders",
         label: AUTOMATION_LABELS.birthday_reminders,
-        enabled: getEnabled(settings, "birthday_reminders"),
-        status_label: `${birthdayReminderCounts.queued} queued`,
+        enabled: getEffectiveEnabled(settings, entitlements, "birthday_reminders"),
+        feature_available: isAutomationAvailable(entitlements, "birthday_reminders"),
+        status_label: isAutomationAvailable(entitlements, "birthday_reminders")
+          ? `${birthdayReminderCounts.queued} queued`
+          : "Upgrade required",
         queued_count: birthdayReminderCounts.queued
       }
     ];
@@ -672,6 +713,11 @@ export const activityDashboardService = {
   async updateAutomationSetting(userId: string, key: string, enabled: boolean): Promise<Row> {
     if (!isAutomationControlKey(key)) {
       throw new ApiError(400, "Unsupported automation setting key");
+    }
+
+    const featureKey = AUTOMATION_FEATURES[key];
+    if (enabled && featureKey) {
+      await entitlementsService.assertFeatureAllowed(userId, featureKey);
     }
 
     const { data: existing, error: existingError } = await supabaseAdmin

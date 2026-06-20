@@ -17,6 +17,8 @@ create table if not exists public.appointment_images (
   thumbnail_size_bytes bigint,
   width integer,
   height integer,
+  thumbnail_width integer,
+  thumbnail_height integer,
   image_role text not null default 'general',
   image_source text not null default 'stylist',
   captured_at timestamptz,
@@ -37,13 +39,21 @@ create table if not exists public.appointment_images (
   constraint appointment_images_content_type_check
     check (content_type in ('image/jpeg', 'image/png', 'image/webp')),
   constraint appointment_images_file_size_check
-    check (file_size_bytes > 0 and file_size_bytes <= 5242880),
+    check (file_size_bytes > 0 and file_size_bytes <= 2097152),
   constraint appointment_images_thumbnail_size_check
-    check (thumbnail_size_bytes is null or thumbnail_size_bytes > 0),
+    check (thumbnail_size_bytes is null or (thumbnail_size_bytes > 0 and thumbnail_size_bytes <= 307200)),
   constraint appointment_images_width_check
-    check (width is null or width > 0),
+    check (width is null or (width > 0 and width <= 1600)),
   constraint appointment_images_height_check
-    check (height is null or height > 0),
+    check (height is null or (height > 0 and height <= 1600)),
+  constraint appointment_images_thumbnail_width_check
+    check (thumbnail_width is null or (thumbnail_width > 0 and thumbnail_width <= 400)),
+  constraint appointment_images_thumbnail_height_check
+    check (thumbnail_height is null or (thumbnail_height > 0 and thumbnail_height <= 400)),
+  constraint appointment_images_ready_display_dimensions_check
+    check (upload_status <> 'ready' or (width is not null and height is not null)),
+  constraint appointment_images_ready_thumbnail_dimensions_check
+    check (upload_status <> 'ready' or (thumbnail_width is not null and thumbnail_height is not null)),
   constraint appointment_images_role_check
     check (image_role in ('before', 'after', 'inspiration', 'reference', 'formula', 'progress', 'general')),
   constraint appointment_images_source_check

@@ -80,6 +80,8 @@ Fields:
 - `thumbnail_size_bytes bigint null`
 - `width integer null`
 - `height integer null`
+- `thumbnail_width integer null`
+- `thumbnail_height integer null`
 - `image_role text not null default 'general'`
 - `image_source text not null default 'stylist'`
 - `captured_at timestamptz null`
@@ -153,8 +155,11 @@ Constraints:
 - `image_role` check constraint.
 - `file_size_bytes > 0`.
 - `thumbnail_size_bytes is null or thumbnail_size_bytes > 0`.
-- `width is null or width > 0`.
-- `height is null or height > 0`.
+- `width is null or 1 to 1600`.
+- `height is null or 1 to 1600`.
+- `thumbnail_width is null or 1 to 400`.
+- `thumbnail_height is null or 1 to 400`.
+- Ready rows require display and thumbnail dimensions.
 - `upload_status` check constraint.
 - `image_source` check constraint.
 - `captured_at is null or captured_at <= now() + interval '1 day'` if the team wants to block accidental far-future capture dates.
@@ -355,7 +360,8 @@ Validation:
 
 - Appointment belongs to authenticated user.
 - Current non-expired pending plus ready image count is less than 10.
-- Input file size <= 5 MB.
+- Display input file size <= 2 MB.
+- Thumbnail input file size <= 300 KB.
 - MIME is one of JPEG/PNG/WebP.
 - Path is backend-generated only.
 - Existing expired pending rows for the same appointment may be marked `expired` or cleaned up before counting.
@@ -375,6 +381,8 @@ Request:
 - `thumbnail_size_bytes`
 - `width`
 - `height`
+- `thumbnail_width`
+- `thumbnail_height`
 - `image_role`
 - `captured_at`
 - `label`
@@ -829,8 +837,11 @@ MVP controls:
 - Prefetch only thumbnails for today's/upcoming appointments, not display-size images.
 - Use a bounded batch prefetch endpoint to avoid N+1 image-list calls.
 - Max 10 images per appointment.
-- Max upload input size 5 MB before compression.
-- Target display image under 1 MB.
+- Max display upload size 2 MB after compression.
+- Max thumbnail upload size 300 KB after thumbnail generation.
+- Max display longest edge 1600 px after compression.
+- Max thumbnail longest edge 400 px after thumbnail generation.
+- Target display image under 1 MB when quality allows.
 - Target thumbnail 100 to 150 KB.
 - Track stored display and thumbnail byte sizes.
 - Avoid runtime transformations.
@@ -1032,7 +1043,7 @@ Frontend, in the mobile repo:
 - Images are stored in a private Supabase bucket.
 - Appointment detail initially loads thumbnails only.
 - Full display image is loaded only when viewing an image.
-- DB rows track display size, thumbnail size, dimensions, role, caption, bucket, paths, `updated_at`, and required `cache_version`.
+- DB rows track display size, thumbnail size, display dimensions, thumbnail dimensions, role, caption, bucket, paths, `updated_at`, and required `cache_version`.
 - DB rows include required `cache_version` and pending upload lifecycle fields.
 - DB rows distinguish `image_source = 'stylist'` from `image_source = 'client'`.
 - DB rows capture basic metadata: role/category, source, date via `captured_at`, optional label, and optional tags.
@@ -1266,6 +1277,8 @@ Stop when:
 ### Chunk 12: Final Hardening And Product Review
 
 Goal: Review the feature as a whole before broad release.
+
+Release review artifact: `docs/appointment-images-release-review.md`
 
 Steps:
 
