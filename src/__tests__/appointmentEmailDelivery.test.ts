@@ -19,10 +19,14 @@ const { communicationPreferencesService } =
   require("../services/communicationPreferences") as typeof import("../services/communicationPreferences");
 const { appointmentEmailEventsService } =
   require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
+const { appointmentEmailTemplatesService } =
+  require("../services/appointmentEmailTemplatesService") as typeof import("../services/appointmentEmailTemplatesService");
 const { rebookNudgesService } =
   require("../services/rebookNudgesService") as typeof import("../services/rebookNudgesService");
 const { birthdayRemindersService } =
   require("../services/birthdayRemindersService") as typeof import("../services/birthdayRemindersService");
+const { thankYouEmailsService } =
+  require("../services/thankYouEmailsService") as typeof import("../services/thankYouEmailsService");
 const { appointmentRemindersService } =
   require("../services/appointmentRemindersService") as typeof import("../services/appointmentRemindersService");
 const { communicationPreferenceTokensService } =
@@ -43,6 +47,25 @@ import type { EmailMessage, EmailProvider } from "../services/appointmentEmailDe
 
 const TEST_USER_ID = "11111111-1111-1111-1111-111111111111";
 const TEST_CLIENT_ID = "22222222-2222-2222-2222-222222222222";
+const allEmailTypes = [
+  "appointment_scheduled",
+  "appointment_pending",
+  "appointment_confirmed",
+  "appointment_cancelled",
+  "appointment_rescheduled",
+  "appointment_reminder",
+  "rebooking_prompt",
+  "birthday_reminder",
+  "thank_you_email"
+] as const;
+const appointmentEventEmailTypes = [
+  "appointment_scheduled",
+  "appointment_pending",
+  "appointment_confirmed",
+  "appointment_cancelled",
+  "appointment_rescheduled",
+  "appointment_reminder"
+] as const;
 
 interface MockResponse {
   statusCode: number;
@@ -113,7 +136,387 @@ const withInternalApiSecret = async <T>(secret: string | undefined, callback: ()
   }
 };
 
+const createRenderTemplateData = (emailType: typeof allEmailTypes[number], emailTemplate?: Record<string, string>) => ({
+  recipient_name: "Jane Doe",
+  service_name: "Silk Press",
+  appointment_start_time: "2099-05-12T16:00:00.000Z",
+  appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 11:00 AM MDT",
+  duration_minutes: 60,
+  business_timezone: "America/Denver",
+  business_display_name: "Maya Johnson Hair",
+  business_phone: "(720) 555-0100",
+  business_email: "maya@example.com",
+  management_token: "manage-token",
+  management_url: "https://example.com/appointments/manage/manage-token",
+  last_service_name: "Silk Press",
+  last_appointment_display: "February 12, 2099",
+  rebook_url: "https://example.com/book/maya",
+  birthday_display: "June 15",
+  appointment_date_display: "June 1, 2026",
+  referral_url: "https://dripdesk.example/r/rf_abc123",
+  referral_code: "rf_abc123",
+  qr_code_url: "data:image/png;base64,abc123",
+  ...(emailType === "appointment_cancelled" ? { cancelled_by: "stylist" as const } : {}),
+  ...(emailType === "appointment_rescheduled" ? { status: "scheduled" } : {}),
+  ...(emailType === "rebooking_prompt" ? { message_type: "rebooking_prompt" } : {}),
+  ...(emailType === "birthday_reminder" ? { message_type: "birthday_reminder" } : {}),
+  ...(emailType === "thank_you_email" ? { message_type: "marketing" } : {}),
+  ...(emailTemplate ? { email_template: emailTemplate } : {})
+});
+
 describe("appointment email delivery", () => {
+  it("saves custom subject and body templates for every automated email type", async () => {
+    const supabase = installMockSupabase({
+      appointment_email_templates: []
+    });
+
+    try {
+      for (const emailType of allEmailTypes) {
+        const saved = await appointmentEmailTemplatesService.upsertForUser(TEST_USER_ID, emailType, {
+          subjectTemplate: `Subject for ${emailType} and {{client_name}}`,
+          customMessageBlock: `Body for ${emailType} and {{business_name}}`
+        });
+
+        assert.equal(saved.emailType, emailType);
+        assert.equal(saved.subjectTemplate, `Subject for ${emailType} and {{client_name}}`);
+        assert.equal(saved.customMessageBlock, `Body for ${emailType} and {{business_name}}`);
+      }
+
+      const templates = await appointmentEmailTemplatesService.getForUser(TEST_USER_ID);
+      assert.equal(supabase.state.appointment_email_templates.length, allEmailTypes.length);
+      assert.deepEqual(
+        templates.map((template) => template.emailType),
+        [...allEmailTypes]
+      );
+      assert.equal(templates.every((template) => template.configured), true);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("renders custom body text and html for every automated email type", () => {
+    for (const emailType of allEmailTypes) {
+      const message = renderAppointmentEmail({
+        id: `${emailType}-email-event`,
+        email_type: emailType,
+        recipient_email: "jane@example.com",
+        template_data: createRenderTemplateData(emailType, {
+          subject_template: `Custom {{client_name}} ${emailType}`,
+          custom_message_block: `Custom body for {{client_name}} in ${emailType}.`
+        })
+      });
+
+      assert.equal(message.subject, `Custom Jane Doe ${emailType}`);
+      assert.match(message.text, new RegExp(`Custom body for Jane Doe in ${emailType}\\.`));
+      assert.match(message.html, new RegExp(`<p>Custom body for Jane Doe in ${emailType}\\.</p>`));
+    }
+  });
+
+  it("falls back to default subjects and omits custom body text when templates are unset", () => {
+    for (const emailType of allEmailTypes) {
+      const message = renderAppointmentEmail({
+        id: `${emailType}-email-event`,
+        email_type: emailType,
+        recipient_email: "jane@example.com",
+        template_data: createRenderTemplateData(emailType)
+      });
+
+      assert.notEqual(message.subject, `Custom Jane Doe ${emailType}`);
+      assert.doesNotMatch(message.text, /Custom body for Jane Doe/);
+      assert.doesNotMatch(message.html, /Custom body for Jane Doe/);
+      assert.match(message.text, /Hi Jane Doe/);
+    }
+  });
+
+  it("rejects invalid template tokens and overlong subject/body values", () => {
+    assert.throws(
+      () => appointmentEmailTemplatesService.validateTemplatePayload({ subjectTemplate: "Hello {{unknown_token}}" }),
+      /Unsupported email template token: unknown_token/
+    );
+    assert.throws(
+      () => appointmentEmailTemplatesService.validateTemplatePayload({ subjectTemplate: "x".repeat(161) }),
+      /Subject template must be 160 characters or fewer/
+    );
+    assert.throws(
+      () => appointmentEmailTemplatesService.validateTemplatePayload({ customMessageBlock: "x".repeat(4001) }),
+      /Custom message block must be 4000 characters or fewer/
+    );
+  });
+
+  it("snapshots custom subject and body when queued for every automated email type", async () => {
+    const appointmentSupabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: TEST_USER_ID,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointment_email_templates: appointmentEventEmailTypes.map((emailType) => ({
+        id: `${emailType}-template`,
+        user_id: TEST_USER_ID,
+        email_type: emailType,
+        subject_template: `Subject snapshot ${emailType}`,
+        custom_message_block: `Body snapshot ${emailType}`
+      })),
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      for (const [index, emailType] of appointmentEventEmailTypes.entries()) {
+        await appointmentEmailEventsService.queueAppointmentEmail(
+          TEST_USER_ID,
+          {
+            id: `appointment-${index + 1}`,
+            user_id: TEST_USER_ID,
+            client_id: TEST_CLIENT_ID,
+            service_name: "Silk Press",
+            appointment_date: `2099-05-${String(index + 12).padStart(2, "0")}T16:00:00.000Z`,
+            duration_minutes: 60,
+            status: emailType === "appointment_pending" ? "pending" : "scheduled"
+          },
+          emailType
+        );
+      }
+
+      for (const emailType of appointmentEventEmailTypes) {
+        const event = appointmentSupabase.state.appointment_email_events.find((row) => row.email_type === emailType);
+        assert.deepEqual(event?.template_data && (event.template_data as Record<string, unknown>).email_template, {
+          subject_template: `Subject snapshot ${emailType}`,
+          custom_message_block: `Body snapshot ${emailType}`
+        });
+      }
+    } finally {
+      appointmentSupabase.restore();
+    }
+
+    const rebookSupabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      stylists: [
+        {
+          user_id: TEST_USER_ID,
+          slug: "maya"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "rebook-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-01-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      rebook_nudge_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false,
+          default_rebook_interval_days: 90
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "rebook-template",
+          user_id: TEST_USER_ID,
+          email_type: "rebooking_prompt",
+          subject_template: "Subject snapshot rebooking_prompt",
+          custom_message_block: "Body snapshot rebooking_prompt"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "rebook_nudges",
+          enabled: true
+        }
+      ],
+      rebook_nudges: [],
+      appointment_email_events: []
+    });
+
+    try {
+      await rebookNudgesService.queueDueNudgesForUser(TEST_USER_ID, new Date("2026-06-10T12:00:00.000Z"));
+      await rebookNudgesService.processQueuedNudgeEmails(new Date("2026-06-10T12:00:00.000Z"));
+
+      const event = rebookSupabase.state.appointment_email_events.find((row) => row.email_type === "rebooking_prompt");
+      assert.deepEqual(event?.template_data && (event.template_data as Record<string, unknown>).email_template, {
+        subject_template: "Subject snapshot rebooking_prompt",
+        custom_message_block: "Body snapshot rebooking_prompt"
+      });
+    } finally {
+      rebookSupabase.restore();
+    }
+
+    const thankYouSupabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "thank-you-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      client_referral_links: [],
+      thank_you_email_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false,
+          send_delay_hours: 0
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "thank-you-template",
+          user_id: TEST_USER_ID,
+          email_type: "thank_you_email",
+          subject_template: "Subject snapshot thank_you_email",
+          custom_message_block: "Body snapshot thank_you_email"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: true
+        }
+      ],
+      thank_you_emails: [],
+      appointment_email_events: []
+    });
+
+    try {
+      await thankYouEmailsService.queueDueForUser(TEST_USER_ID, new Date("2026-06-03T12:00:00.000Z"));
+      await thankYouEmailsService.processQueuedThankYouEmails(new Date("2026-06-03T12:00:00.000Z"));
+
+      const event = thankYouSupabase.state.appointment_email_events.find((row) => row.email_type === "thank_you_email");
+      assert.deepEqual(event?.template_data && (event.template_data as Record<string, unknown>).email_template, {
+        subject_template: "Subject snapshot thank_you_email",
+        custom_message_block: "Body snapshot thank_you_email"
+      });
+    } finally {
+      thankYouSupabase.restore();
+    }
+
+    const birthdaySupabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com",
+          birthday: "1990-06-10"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "birthday-template",
+          user_id: TEST_USER_ID,
+          email_type: "birthday_reminder",
+          subject_template: "Subject snapshot birthday_reminder",
+          custom_message_block: "Body snapshot birthday_reminder"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "birthday_reminders",
+          enabled: true
+        }
+      ],
+      birthday_reminders: [],
+      appointment_email_events: []
+    });
+
+    try {
+      await birthdayRemindersService.queueUpcomingForUser(TEST_USER_ID, new Date("2026-06-01T12:00:00.000Z"));
+      await birthdayRemindersService.processQueuedBirthdayEmails(new Date("2026-06-10T09:01:00.000Z"));
+
+      const event = birthdaySupabase.state.appointment_email_events.find((row) => row.email_type === "birthday_reminder");
+      assert.deepEqual(event?.template_data && (event.template_data as Record<string, unknown>).email_template, {
+        subject_template: "Subject snapshot birthday_reminder",
+        custom_message_block: "Body snapshot birthday_reminder"
+      });
+    } finally {
+      birthdaySupabase.restore();
+    }
+  });
+
   it("renders appointment email content without a provider-specific dependency", () => {
     const message = renderAppointmentEmail(
       {
@@ -245,6 +648,83 @@ describe("appointment email delivery", () => {
     assert.match(message.text, /Hi Jane Doe/);
     assert.match(message.text, /Wishing you a very happy birthday from Maya Johnson Hair\./);
     assert.match(message.text, /Birthday: June 15/);
+  });
+
+  it("renders custom subjects and message blocks for non-confirmation email types", () => {
+    const cancelled = renderAppointmentEmail({
+      id: "cancelled-email-event",
+      email_type: "appointment_cancelled",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        service_name: "Color",
+        appointment_time_display: "June 12 at 10:00 AM",
+        business_display_name: "Maya Johnson Hair",
+        email_template: {
+          subject_template: "{{business_name}} cancellation note",
+          custom_message_block: "We will help you find a new {{appointment_time}}."
+        }
+      }
+    });
+    const birthday = renderAppointmentEmail({
+      id: "birthday-email-event",
+      email_type: "birthday_reminder",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        birthday_display: "June 15",
+        business_display_name: "Maya Johnson Hair",
+        message_type: "birthday_reminder",
+        email_template: {
+          subject_template: "Happy birthday, {{client_name}}",
+          custom_message_block: "Here is a birthday note for {{birthday}}."
+        }
+      }
+    });
+
+    assert.equal(cancelled.subject, "Maya Johnson Hair cancellation note");
+    assert.match(cancelled.text, /Maya Johnson Hair cancelled this appointment\.\n\nWe will help you find a new June 12 at 10:00 AM\./);
+    assert.equal(birthday.subject, "Happy birthday, Jane Doe");
+    assert.match(birthday.text, /Wishing you a very happy birthday from Maya Johnson Hair\.\n\nHere is a birthday note for June 15\./);
+  });
+
+  it("renders a thank you email with referral link, QR image, and custom tokens", () => {
+    const message = renderAppointmentEmail({
+      id: "thank-you-email-event",
+      email_type: "thank_you_email",
+      recipient_email: "jane@example.com",
+      template_data: {
+        recipient_name: "Jane Doe",
+        service_name: "Silk Press",
+        appointment_date_display: "June 1, 2026",
+        business_display_name: "Maya Johnson Hair",
+        business_phone: "(720) 555-0100",
+        business_email: "maya@example.com",
+        referral_url: "https://dripdesk.example/r/rf_abc123",
+        referral_code: "rf_abc123",
+        qr_code_url: "data:image/png;base64,abc123",
+        message_type: "marketing",
+        email_template: {
+          subject_template: "Thanks for visiting, {{client_name}}",
+          custom_message_block: "Share {{referral_url}} or code {{referral_code}} with a friend."
+        }
+      }
+    });
+
+    assert.equal(message.subject, "Thanks for visiting, Jane Doe");
+    assert.match(message.text, /Thank you for visiting Maya Johnson Hair\./);
+    assert.match(message.text, /Share https:\/\/dripdesk\.example\/r\/rf_abc123 or code rf_abc123 with a friend\./);
+    assert.match(message.text, /Referral link: https:\/\/dripdesk\.example\/r\/rf_abc123/);
+    assert.match(message.text, /Referral code: rf_abc123/);
+    assert.match(message.html, /<img src="cid:referral-qr-code" alt="Referral QR code"/);
+    assert.deepEqual(message.attachments, [
+      {
+        filename: "referral-qr-code.png",
+        content: "abc123",
+        contentType: "image/png",
+        contentId: "referral-qr-code"
+      }
+    ]);
   });
 
   it("processes queued events with an injected provider and marks them sent", async () => {
@@ -689,6 +1169,116 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("keeps existing queued email template snapshots when settings change", async () => {
+    const sentMessages: EmailMessage[] = [];
+    const provider: EmailProvider = {
+      async send(message) {
+        sentMessages.push(message);
+        return {
+          status: "sent",
+          provider: "test-provider",
+          providerMessageId: "provider-message-1"
+        };
+      }
+    };
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "template-1",
+          user_id: TEST_USER_ID,
+          email_type: "appointment_scheduled",
+          subject_template: "New subject for {{service_name}}",
+          custom_message_block: "New body copy."
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "email_confirmations",
+          enabled: true
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "email-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          email_type: "appointment_scheduled",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          idempotency_key: "appointment_scheduled:appointment-1",
+          created_at: "2026-05-10T10:00:00.000Z",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Silk Press",
+            appointment_start_time: "2099-05-12T16:00:00.000Z",
+            appointment_time_display: "Tuesday, May 12, 2099 at 10:00 AM MDT - 11:00 AM MDT",
+            business_display_name: "Maya Johnson Hair",
+            duration_minutes: 60,
+            email_template: {
+              subject_template: "Old subject for {{service_name}}",
+              custom_message_block: "Old body copy."
+            }
+          }
+        }
+      ]
+    });
+
+    try {
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-05-10T12:00:00.000Z")
+      });
+      const newlyQueued = await appointmentEmailEventsService.queueAppointmentEmail(
+        TEST_USER_ID,
+        {
+          id: "appointment-2",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          service_name: "Gloss",
+          appointment_date: "2099-05-13T16:00:00.000Z",
+          duration_minutes: 45,
+          status: "scheduled"
+        },
+        "appointment_scheduled"
+      );
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 1,
+        skipped: 0,
+        failed: 0
+      });
+      assert.equal(sentMessages[0]?.subject, "Old subject for Silk Press");
+      assert.match(sentMessages[0]?.text ?? "", /Old body copy\./);
+      assert.doesNotMatch(sentMessages[0]?.text ?? "", /New body copy\./);
+      assert.deepEqual(newlyQueued?.template_data && (newlyQueued.template_data as Record<string, unknown>).email_template, {
+        subject_template: "New subject for {{service_name}}",
+        custom_message_block: "New body copy."
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("queues approval-required rebook nudges and creates a rebooking email after approval", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -731,8 +1321,17 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           approval_required: true,
           default_rebook_interval_days: 90,
-          subject_template: "{{client_name}}, ready for your next visit?",
-          custom_message_block: "Book here: {{rebook_url}}"
+          subject_template: "Legacy {{client_name}}",
+          custom_message_block: "Legacy book here: {{rebook_url}}"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "rebook-template-1",
+          user_id: TEST_USER_ID,
+          email_type: "rebooking_prompt",
+          subject_template: "{{client_name}}, ready for your next {{last_service_name}}?",
+          custom_message_block: "Unified book here: {{rebook_url}}"
         }
       ],
       automation_settings: [
@@ -757,6 +1356,8 @@ describe("appointment email delivery", () => {
       assert.equal(supabase.state.rebook_nudges[0]?.status, "pending_approval");
       assert.equal(supabase.state.rebook_nudges[0]?.recipient_email, "jane@example.com");
       assert.equal(supabase.state.rebook_nudges[0]?.send_after, "2026-04-01T12:00:00.000Z");
+      assert.equal(supabase.state.rebook_nudges[0]?.subject_snapshot, "{{client_name}}, ready for your next {{last_service_name}}?");
+      assert.equal(supabase.state.rebook_nudges[0]?.custom_message_block_snapshot, "Unified book here: {{rebook_url}}");
 
       const nudgeId = String(supabase.state.rebook_nudges[0]?.id);
       await rebookNudgesService.approveForUser(TEST_USER_ID, nudgeId);
@@ -773,7 +1374,666 @@ describe("appointment email delivery", () => {
         (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).message_type,
         "rebooking_prompt"
       );
+      assert.deepEqual(
+        (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).email_template,
+        {
+          subject_template: "{{client_name}}, ready for your next {{last_service_name}}?",
+          custom_message_block: "Unified book here: {{rebook_url}}"
+        }
+      );
     } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues completed appointment thank you emails with referral QR snapshots and processes approved emails", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "Jane@Example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      client_referral_links: [],
+      thank_you_email_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: true,
+          send_delay_hours: 24,
+          subject_template: "Legacy thanks, {{client_name}}",
+          custom_message_block: "Legacy code: {{referral_code}}"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "thank-you-template-1",
+          user_id: TEST_USER_ID,
+          email_type: "thank_you_email",
+          subject_template: "Unified thanks, {{client_name}}",
+          custom_message_block: "Unified code: {{referral_code}}"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: true
+        }
+      ],
+      thank_you_emails: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const queueResult = await thankYouEmailsService.queueDueForUser(
+        TEST_USER_ID,
+        new Date("2026-06-03T12:00:00.000Z")
+      );
+
+      assert.deepEqual(queueResult, { queued: 1, skipped: 0 });
+      assert.equal(supabase.state.client_referral_links.length, 1);
+      assert.equal(supabase.state.thank_you_emails.length, 1);
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "pending_approval");
+      assert.equal(supabase.state.thank_you_emails[0]?.recipient_email, "jane@example.com");
+      assert.equal(supabase.state.thank_you_emails[0]?.send_after, "2026-06-02T12:00:00.000Z");
+      assert.equal(
+        supabase.state.thank_you_emails[0]?.referral_url_snapshot,
+        `https://dripdesk.example/r/${supabase.state.client_referral_links[0]?.referral_code}`
+      );
+      assert.match(String(supabase.state.thank_you_emails[0]?.qr_code_url_snapshot), /^data:image\/png;base64,/);
+      assert.equal(supabase.state.thank_you_emails[0]?.subject_snapshot, "Unified thanks, {{client_name}}");
+      assert.equal(supabase.state.thank_you_emails[0]?.custom_message_block_snapshot, "Unified code: {{referral_code}}");
+
+      const thankYouEmailId = String(supabase.state.thank_you_emails[0]?.id);
+      await thankYouEmailsService.approveForUser(TEST_USER_ID, thankYouEmailId);
+      const processResult = await thankYouEmailsService.processQueuedThankYouEmails(
+        new Date("2026-06-03T12:00:00.000Z")
+      );
+
+      assert.deepEqual(processResult, { processed: 1, queued_emails: 1 });
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "sending");
+      assert.equal(supabase.state.appointment_email_events.length, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "thank_you_email");
+      assert.equal(supabase.state.appointment_email_events[0]?.thank_you_email_id, thankYouEmailId);
+      assert.equal(
+        (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).message_type,
+        "marketing"
+      );
+      assert.deepEqual(
+        (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).email_template,
+        {
+          subject_template: "Unified thanks, {{client_name}}",
+          custom_message_block: "Unified code: {{referral_code}}"
+        }
+      );
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
+      supabase.restore();
+    }
+  });
+
+  it("does not count existing thank you emails as newly queued", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: true
+        }
+      ],
+      thank_you_email_settings: [],
+      thank_you_emails: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          send_after: "2026-06-01T12:00:00.000Z",
+          created_at: "2026-06-01T12:00:00.000Z"
+        }
+      ],
+      client_referral_links: []
+    });
+
+    try {
+      const result = await thankYouEmailsService.queueDueForUser(
+        TEST_USER_ID,
+        new Date("2026-06-03T12:00:00.000Z")
+      );
+
+      assert.deepEqual(result, { queued: 0, skipped: 1 });
+      assert.equal(supabase.state.thank_you_emails.length, 1);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not queue thank you emails when automation is disabled", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: false
+        }
+      ],
+      thank_you_email_settings: [],
+      thank_you_emails: [],
+      client_referral_links: []
+    });
+
+    try {
+      const result = await thankYouEmailsService.queueDueForUser(
+        TEST_USER_ID,
+        new Date("2026-06-03T12:00:00.000Z")
+      );
+
+      assert.deepEqual(result, { queued: 0, skipped: 0 });
+      assert.equal(supabase.state.thank_you_emails.length, 0);
+      assert.equal(supabase.state.client_referral_links.length, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not overwrite a cancelled thank you email when delivery finishes late", async () => {
+    const supabase = installMockSupabase({
+      thank_you_emails: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          recipient_email: "jane@example.com",
+          status: "cancelled",
+          send_after: "2026-06-02T12:00:00.000Z",
+          cancelled_at: "2026-06-03T12:00:00.000Z",
+          cancelled_reason: "Client requested no email"
+        }
+      ]
+    });
+
+    try {
+      await thankYouEmailsService.markForEmailEvent(
+        {
+          id: "thank-you-event-1",
+          thank_you_email_id: "44444444-4444-4444-8444-444444444444"
+        },
+        "sent",
+        null
+      );
+
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "cancelled");
+      assert.equal(supabase.state.thank_you_emails[0]?.sent_at, undefined);
+      assert.equal(supabase.state.thank_you_emails[0]?.cancelled_reason, "Client requested no email");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("skips thank you email delivery when marketing email is opted out", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          send_after: "2026-06-02T12:00:00.000Z"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "thank-you-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          thank_you_email_id: "44444444-4444-4444-8444-444444444444",
+          email_type: "thank_you_email",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          idempotency_key: "thank_you_email:44444444-4444-4444-8444-444444444444",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Silk Press",
+            business_display_name: "Maya Johnson Hair",
+            referral_url: "https://dripdesk.example/r/rf_abc123",
+            referral_code: "rf_abc123",
+            message_type: "marketing"
+          }
+        }
+      ],
+      client_communication_preferences: [
+        {
+          id: "preference-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          email: "jane@example.com",
+          email_normalized: "jane@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: true,
+          email_marketing_enabled: false,
+          email_rebooking_enabled: true,
+          opted_out_all_email: false
+        }
+      ],
+      communication_events: [],
+      communication_preference_tokens: [],
+      global_email_unsubscribes: []
+    });
+
+    try {
+      const provider: EmailProvider = {
+        async send() {
+          throw new Error("Provider should not be called");
+        }
+      };
+
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-06-03T12:00:00.000Z")
+      });
+
+      assert.deepEqual(result, {
+        processed: 1,
+        sent: 0,
+        skipped: 1,
+        failed: 0
+      });
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "skipped");
+      assert.equal(supabase.state.appointment_email_events[0]?.error, "opted_out");
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "skipped");
+      assert.equal(supabase.state.thank_you_emails[0]?.error, "opted_out");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("updates thank you email rows after delivery succeeds", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          send_after: "2026-06-02T12:00:00.000Z"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "thank-you-event-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "appointment-1",
+          thank_you_email_id: "44444444-4444-4444-8444-444444444444",
+          email_type: "thank_you_email",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          idempotency_key: "thank_you_email:44444444-4444-4444-8444-444444444444",
+          template_data: {
+            recipient_name: "Jane Doe",
+            service_name: "Silk Press",
+            business_display_name: "Maya Johnson Hair",
+            appointment_date_display: "June 1, 2026",
+            referral_url: "https://dripdesk.example/r/rf_abc123",
+            referral_code: "rf_abc123",
+            message_type: "marketing"
+          }
+        }
+      ],
+      communication_events: [],
+      communication_preference_tokens: [],
+      global_email_unsubscribes: [],
+      client_communication_preferences: []
+    });
+
+    try {
+      const provider: EmailProvider = {
+        async send(message: EmailMessage) {
+          assert.equal(message.to, "jane@example.com");
+          assert.match(message.text, /Referral link: https:\/\/dripdesk\.example\/r\/rf_abc123/);
+          return {
+            status: "sent",
+            provider: "test",
+            providerMessageId: "provider-message-1"
+          };
+        }
+      };
+
+      const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
+        provider,
+        now: new Date("2026-06-03T12:00:00.000Z")
+      });
+
+      assert.equal(result.sent, 1);
+      assert.equal(supabase.state.appointment_email_events[0]?.status, "sent");
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "sent");
+      assert.equal(typeof supabase.state.thank_you_emails[0]?.sent_at, "string");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("queues and processes thank you emails through internal job handlers", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      client_referral_links: [],
+      thank_you_email_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false,
+          send_delay_hours: 0
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: true
+        }
+      ],
+      thank_you_emails: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const queueResponse = await runWithErrorHandler(
+        (request, res) => internalController.queueThankYouEmails(request, res),
+        createMockRequest()
+      );
+      assert.deepEqual(queueResponse.body, {
+        data: {
+          processed_users: 1,
+          queued: 1,
+          skipped: 0
+        }
+      });
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "queued");
+
+      const processResponse = await runWithErrorHandler(
+        (request, res) => internalController.processThankYouEmails(request, res),
+        createMockRequest()
+      );
+      assert.deepEqual(processResponse.body, {
+        data: {
+          processed: 1,
+          queued_emails: 1
+        }
+      });
+      assert.equal(supabase.state.thank_you_emails[0]?.status, "sending");
+      assert.equal(supabase.state.appointment_email_events[0]?.email_type, "thank_you_email");
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
+      supabase.restore();
+    }
+  });
+
+  it("applies separate user and per-user limits when queueing thank you emails", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
+    const secondUserId = "55555555-5555-4555-8555-555555555555";
+    const secondClientId = "66666666-6666-4666-8666-666666666666";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        },
+        {
+          id: secondUserId,
+          email: "taylor@example.com",
+          business_name: "Taylor Studio",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        },
+        {
+          id: secondClientId,
+          user_id: secondUserId,
+          first_name: "Alex",
+          last_name: "Rivera",
+          email: "alex@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: "first-user-first-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        },
+        {
+          id: "first-user-second-appointment",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_date: "2026-06-02T12:00:00.000Z",
+          service_name: "Gloss",
+          status: "completed"
+        },
+        {
+          id: "second-user-appointment",
+          user_id: secondUserId,
+          client_id: secondClientId,
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Color",
+          status: "completed"
+        }
+      ],
+      thank_you_email_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false,
+          send_delay_hours: 0
+        },
+        {
+          user_id: secondUserId,
+          approval_required: false,
+          send_delay_hours: 0
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "thank_you_emails",
+          enabled: true
+        },
+        {
+          user_id: secondUserId,
+          key: "thank_you_emails",
+          enabled: true
+        }
+      ],
+      client_referral_links: [],
+      thank_you_emails: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => internalController.queueThankYouEmails(request, res),
+        createMockRequest({
+          query: {
+            user_limit: 1,
+            per_user_limit: 1
+          } as unknown as Request["query"]
+        })
+      );
+
+      assert.deepEqual(response.body, {
+        data: {
+          processed_users: 1,
+          queued: 1,
+          skipped: 0
+        }
+      });
+      assert.equal(supabase.state.thank_you_emails.length, 1);
+      assert.equal(supabase.state.thank_you_emails[0]?.user_id, TEST_USER_ID);
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
       supabase.restore();
     }
   });
@@ -1015,6 +2275,75 @@ describe("appointment email delivery", () => {
       assert.match(sentMessages[0]?.subject ?? "", /Happy birthday from Maya Johnson Hair/);
       assert.equal(supabase.state.appointment_email_events[0]?.status, "sent");
       assert.equal(supabase.state.birthday_reminders[0]?.status, "sent");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("snapshots configured birthday reminder templates when queueing birthday reminders", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: TEST_CLIENT_ID,
+          user_id: TEST_USER_ID,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "Jane@Example.com",
+          birthday: "1990-06-10"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "birthday-template-1",
+          user_id: TEST_USER_ID,
+          email_type: "birthday_reminder",
+          subject_template: "Happy birthday, {{client_name}}",
+          custom_message_block: "Birthday note for {{birthday}}"
+        }
+      ],
+      automation_settings: [
+        {
+          user_id: TEST_USER_ID,
+          key: "birthday_reminders",
+          enabled: true
+        }
+      ],
+      birthday_reminders: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const queueResult = await birthdayRemindersService.queueUpcomingForUser(
+        TEST_USER_ID,
+        new Date("2026-06-01T12:00:00.000Z")
+      );
+
+      assert.deepEqual(queueResult, { queued: 1, skipped: 0 });
+      assert.equal(supabase.state.birthday_reminders[0]?.subject_snapshot, "Happy birthday, {{client_name}}");
+      assert.equal(supabase.state.birthday_reminders[0]?.custom_message_block_snapshot, "Birthday note for {{birthday}}");
+
+      const processResult = await birthdayRemindersService.processQueuedBirthdayEmails(
+        new Date("2026-06-10T09:01:00.000Z")
+      );
+
+      assert.deepEqual(processResult, { processed: 1, queued_emails: 1 });
+      assert.deepEqual(
+        (supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>).email_template,
+        {
+          subject_template: "Happy birthday, {{client_name}}",
+          custom_message_block: "Birthday note for {{birthday}}"
+        }
+      );
     } finally {
       supabase.restore();
     }

@@ -5,6 +5,7 @@ import { appointmentRemindersService } from "../services/appointmentRemindersSer
 import { birthdayRemindersService } from "../services/birthdayRemindersService";
 import { clientPurgeService } from "../services/clientPurgeService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
+import { thankYouEmailsService } from "../services/thankYouEmailsService";
 
 export const internalController = {
   async processAppointmentEmails(req: Request, res: Response) {
@@ -56,6 +57,25 @@ export const internalController = {
   async processBirthdayReminders(req: Request, res: Response) {
     const query = req.query as { limit?: number };
     const result = await birthdayRemindersService.processQueuedBirthdayEmails(new Date(), query.limit);
+    res.json({ data: result });
+  },
+
+  async queueThankYouEmails(req: Request, res: Response) {
+    const query = req.query as {
+      limit?: number;
+      user_limit?: number;
+      per_user_limit?: number;
+    };
+    const result = await thankYouEmailsService.queueDue(new Date(), {
+      userLimit: query.user_limit,
+      perUserLimit: query.per_user_limit ?? query.limit
+    });
+    res.json({ data: result });
+  },
+
+  async processThankYouEmails(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await thankYouEmailsService.processQueuedThankYouEmails(new Date(), query.limit);
     res.json({ data: result });
   },
 

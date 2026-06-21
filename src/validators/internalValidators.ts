@@ -33,6 +33,16 @@ export const processBirthdayRemindersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
+export const queueThankYouEmailsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  user_limit: z.coerce.number().int().min(1).max(100).optional(),
+  per_user_limit: z.coerce.number().int().min(1).max(100).optional()
+});
+
+export const processThankYouEmailsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional()
+});
+
 export const purgeDeletedClientsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });

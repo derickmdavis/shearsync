@@ -247,7 +247,7 @@ create table if not exists public.appointment_email_events (
   sent_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
-  check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled', 'appointment_reminder', 'rebooking_prompt', 'birthday_reminder')),
+  check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled', 'appointment_reminder', 'rebooking_prompt', 'birthday_reminder', 'thank_you_email')),
   check (status in ('queued', 'sending', 'sent', 'failed', 'skipped'))
 );
 
@@ -260,7 +260,7 @@ create table if not exists public.appointment_email_templates (
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   constraint appointment_email_templates_email_type_check
-    check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed')),
+    check (email_type in ('appointment_scheduled', 'appointment_pending', 'appointment_confirmed', 'appointment_cancelled', 'appointment_rescheduled', 'appointment_reminder', 'rebooking_prompt', 'birthday_reminder', 'thank_you_email')),
   constraint appointment_email_templates_subject_length_check
     check (subject_template is null or (char_length(trim(subject_template)) between 1 and 160)),
   constraint appointment_email_templates_custom_block_length_check
@@ -278,6 +278,8 @@ create table if not exists public.birthday_reminders (
   birthday_occurrence_date date not null,
   scheduled_send_at timestamptz not null,
   status text not null default 'queued',
+  subject_snapshot text,
+  custom_message_block_snapshot text,
   template_data jsonb not null default '{}'::jsonb,
   cancelled_at timestamptz,
   cancelled_reason text,
@@ -287,6 +289,10 @@ create table if not exists public.birthday_reminders (
   updated_at timestamptz not null default now(),
   constraint birthday_reminders_recipient_email_check
     check (char_length(trim(recipient_email)) > 0),
+  constraint birthday_reminders_subject_length_check
+    check (subject_snapshot is null or char_length(subject_snapshot) <= 160),
+  constraint birthday_reminders_message_length_check
+    check (custom_message_block_snapshot is null or char_length(custom_message_block_snapshot) <= 4000),
   constraint birthday_reminders_status_check
     check (status in ('queued', 'sending', 'sent', 'cancelled', 'skipped', 'failed'))
 );

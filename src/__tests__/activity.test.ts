@@ -1805,6 +1805,11 @@ describe("Activity handlers", () => {
           user_id: userId,
           key: "birthday_reminders",
           enabled: true
+        },
+        {
+          user_id: userId,
+          key: "thank_you_emails",
+          enabled: true
         }
       ]
     });
@@ -1827,6 +1832,7 @@ describe("Activity handlers", () => {
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
             birthday_reminder_count: number;
+            pending_thank_you_email_count: number;
           };
           cancellation_review_items: Array<{ appointment_id: string; review_status: string }>;
           waitlist_matches: Array<{ waitlist_entry_id: string; matched_opening_start_time: string }>;
@@ -1845,7 +1851,8 @@ describe("Activity handlers", () => {
         pending_reminder_count: 3,
         queued_review_request_count: 1,
         pending_rebook_nudge_count: 0,
-        birthday_reminder_count: 0
+        birthday_reminder_count: 0,
+        pending_thank_you_email_count: 0
       });
       assert.deepEqual(payload.cancellation_review_items.map((item) => [item.appointment_id, item.review_status]), [
         [appointmentId, "pending"]
@@ -1931,6 +1938,7 @@ describe("Activity handlers", () => {
             queued_review_request_count: number;
             pending_rebook_nudge_count: number;
             birthday_reminder_count: number;
+            pending_thank_you_email_count: number;
           };
           cancellation_review_count: number;
           cancellation_review_items: unknown[];
@@ -1960,7 +1968,8 @@ describe("Activity handlers", () => {
         pending_reminder_count: 0,
         queued_review_request_count: 0,
         pending_rebook_nudge_count: 0,
-        birthday_reminder_count: 0
+        birthday_reminder_count: 0,
+        pending_thank_you_email_count: 0
       });
       assert.equal(payload.cancellation_review_count, 0);
       assert.deepEqual(payload.cancellation_review_items, []);
@@ -1972,17 +1981,17 @@ describe("Activity handlers", () => {
       assert.equal(payload.queued_review_request_count, 0);
       assert.deepEqual(payload.review_request_queue, []);
       assert.deepEqual(payload.automation_health, {
-        score: 40,
+        score: 30,
         status: "issue",
         failed_count: 0,
         delayed_count: 0,
-        reasons: ["6 automation controls are disabled"]
+        reasons: ["7 automation controls are disabled"]
       });
-      assert.equal(payload.automation_health_score, 40);
+      assert.equal(payload.automation_health_score, 30);
       assert.equal(payload.automation_health_status, "issue");
       assert.equal(payload.failed_automation_count, 0);
       assert.equal(payload.delayed_automation_count, 0);
-      assert.deepEqual(payload.health_reasons, ["6 automation controls are disabled"]);
+      assert.deepEqual(payload.health_reasons, ["7 automation controls are disabled"]);
       assert.deepEqual(payload.automation_impact_this_week, {
         booked_count: 0,
         total_booking_activity_count: 0,
@@ -1991,7 +2000,7 @@ describe("Activity handlers", () => {
         openings_filled_count: 0
       });
       assert.deepEqual(payload.recent_activity, []);
-      assert.equal(payload.automation_controls.length, 6);
+      assert.equal(payload.automation_controls.length, 7);
       assert.equal(
         (payload.automation_controls as Array<{ key?: string; enabled?: boolean }>)
           .find((control) => control.key === "email_confirmations")?.enabled,
@@ -2019,6 +2028,7 @@ describe("Activity handlers", () => {
         { user_id: userId, key: "appointment_reminders", enabled: true },
         { user_id: userId, key: "rebook_nudges", enabled: true },
         { user_id: userId, key: "birthday_reminders", enabled: true },
+        { user_id: userId, key: "thank_you_emails", enabled: true },
         { user_id: userId, key: "waitlist_match", enabled: true },
         { user_id: userId, key: "no_show_follow_up", enabled: true }
       ],
@@ -2053,7 +2063,7 @@ describe("Activity handlers", () => {
       assert.equal(controls.find((control) => control.key === "appointment_reminders")?.feature_available, true);
       assert.equal(controls.find((control) => control.key === "appointment_reminders")?.enabled, true);
 
-      for (const key of ["rebook_nudges", "birthday_reminders", "waitlist_match", "no_show_follow_up"]) {
+      for (const key of ["rebook_nudges", "birthday_reminders", "thank_you_emails", "waitlist_match", "no_show_follow_up"]) {
         const control = controls.find((item) => item.key === key);
         assert.equal(control?.feature_available, false);
         assert.equal(control?.enabled, false);
@@ -2082,6 +2092,45 @@ describe("Activity handlers", () => {
         assert.equal(response.statusCode, 200);
         assert.equal(supabase.state.automation_settings.find((setting) => setting.key === key)?.enabled, false);
       }
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows Premium users to enable thank you email automation", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC",
+          plan_tier: "premium",
+          plan_status: "active"
+        }
+      ],
+      automation_settings: [],
+      clients: [],
+      appointments: [],
+      reminders: [],
+      waitlist_entries: [],
+      activity_events: [],
+      appointment_email_events: [],
+      rebook_nudges: [],
+      birthday_reminders: [],
+      thank_you_emails: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => activityController.updateAutomationSetting(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { key: "thank_you_emails" },
+          body: { enabled: true }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(supabase.state.automation_settings.find((setting) => setting.key === "thank_you_emails")?.enabled, true);
     } finally {
       supabase.restore();
     }

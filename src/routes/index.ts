@@ -22,6 +22,7 @@ import { rebookNudgeRouter } from "./rebookNudgeRoutes";
 import { reminderRouter } from "./reminderRoutes";
 import { serviceRouter } from "./serviceRoutes";
 import { settingsRouter } from "./settingsRoutes";
+import { thankYouEmailRouter } from "./thankYouEmailRoutes";
 import { waitlistRouter } from "./waitlistRoutes";
 
 export const apiRouter = Router();
@@ -48,4 +49,5 @@ apiRouter.use("/api/profile", profileRouter);
 apiRouter.use("/api/rebook-nudges", rebookNudgeRouter);
 apiRouter.use("/api/services", serviceRouter);
 apiRouter.use("/api/settings", settingsRouter);
+apiRouter.use("/api/thank-you-emails", thankYouEmailRouter);
 apiRouter.use("/api/waitlist", waitlistRouter);

@@ -4,6 +4,7 @@ import { addDays, formatDateInTimeZone, getCurrentLocalDate, zonedDateTimeToUtc 
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
+import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
 import { entitlementsService } from "./entitlementsService";
@@ -139,7 +140,10 @@ const createTemplateData = async ({
   timeZone: string;
   today: string;
 }): Promise<Row> => {
-  const user = await usersService.getById(userId);
+  const [user, emailTemplate] = await Promise.all([
+    usersService.getById(userId),
+    appointmentEmailTemplatesService.getSnapshotForUser(userId, "birthday_reminder")
+  ]);
   const clientName = getClientDisplayName(client);
   const businessDisplayName = getBusinessDisplayName(user);
   const birthdayLabel = formatDateInTimeZone(zonedDateTimeToUtc(occurrenceDate, timeZone, 12), timeZone, {
@@ -161,7 +165,8 @@ const createTemplateData = async ({
     business_phone: getString(user, "phone_number"),
     business_email: normalizeEmail(user?.email),
     days_until: daysBetweenDates(today, occurrenceDate),
-    message_type: "birthday_reminder"
+    message_type: "birthday_reminder",
+    ...(emailTemplate ? { email_template: emailTemplate } : {})
   };
 };
 
@@ -202,6 +207,12 @@ const queueEmailForReminder = async (reminder: Row): Promise<Row | null> => {
     return existing as Row;
   }
 
+  const templateData = (reminder.template_data ?? {}) as Row;
+  const existingEmailTemplate = (templateData.email_template ?? {}) as Row;
+  const emailTemplate = {
+    subject_template: getString(reminder, "subject_snapshot") ?? getString(existingEmailTemplate, "subject_template"),
+    custom_message_block: getString(reminder, "custom_message_block_snapshot") ?? getString(existingEmailTemplate, "custom_message_block")
+  };
   const { data, error } = await supabaseAdmin
     .from("appointment_email_events")
     .insert({
@@ -214,8 +225,9 @@ const queueEmailForReminder = async (reminder: Row): Promise<Row | null> => {
       status: "queued",
       idempotency_key: idempotencyKey,
       template_data: {
-        ...((reminder.template_data ?? {}) as Row),
-        message_type: "birthday_reminder"
+        ...templateData,
+        message_type: "birthday_reminder",
+        email_template: emailTemplate
       }
     })
     .select("*")
@@ -320,6 +332,7 @@ export const birthdayRemindersService = {
         timeZone,
         today
       });
+      const emailTemplate = (templateData.email_template ?? {}) as Row;
 
       const { error } = await supabaseAdmin
         .from("birthday_reminders")
@@ -331,6 +344,8 @@ export const birthdayRemindersService = {
           birthday_occurrence_date: candidate.occurrenceDate,
           scheduled_send_at: scheduledSendAt,
           status: "queued",
+          subject_snapshot: getString(emailTemplate, "subject_template"),
+          custom_message_block_snapshot: getString(emailTemplate, "custom_message_block"),
           template_data: templateData
         });
 

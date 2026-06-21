@@ -6,8 +6,10 @@ import {
   appointmentEmailTemplateParamSchema,
   previewAppointmentEmailTemplateSchema,
   previewRebookNudgeSettingsSchema,
+  previewThankYouEmailSettingsSchema,
   replaceAvailabilitySchema,
   updateRebookNudgeSettingsSchema,
+  updateThankYouEmailSettingsSchema,
   updateAppointmentEmailTemplateSchema,
   updateBookingRulesSchema,
   updateBookingSettingsSchema,
@@ -23,8 +25,14 @@ settingsRouter.patch(
   asyncHandler(settingsController.updateProfile)
 );
 settingsRouter.get("/email-confirmations", asyncHandler(settingsController.getAppointmentEmailTemplates));
+settingsRouter.get("/email-templates", asyncHandler(settingsController.getAppointmentEmailTemplates));
 settingsRouter.patch(
   "/email-confirmations/:emailType",
+  validate({ params: appointmentEmailTemplateParamSchema, body: updateAppointmentEmailTemplateSchema }),
+  asyncHandler(settingsController.updateAppointmentEmailTemplate)
+);
+settingsRouter.patch(
+  "/email-templates/:emailType",
   validate({ params: appointmentEmailTemplateParamSchema, body: updateAppointmentEmailTemplateSchema }),
   asyncHandler(settingsController.updateAppointmentEmailTemplate)
 );
@@ -33,8 +41,18 @@ settingsRouter.delete(
   validate({ params: appointmentEmailTemplateParamSchema }),
   asyncHandler(settingsController.resetAppointmentEmailTemplate)
 );
+settingsRouter.delete(
+  "/email-templates/:emailType",
+  validate({ params: appointmentEmailTemplateParamSchema }),
+  asyncHandler(settingsController.resetAppointmentEmailTemplate)
+);
 settingsRouter.post(
   "/email-confirmations/:emailType/preview",
+  validate({ params: appointmentEmailTemplateParamSchema, body: previewAppointmentEmailTemplateSchema }),
+  asyncHandler(settingsController.previewAppointmentEmailTemplate)
+);
+settingsRouter.post(
+  "/email-templates/:emailType/preview",
   validate({ params: appointmentEmailTemplateParamSchema, body: previewAppointmentEmailTemplateSchema }),
   asyncHandler(settingsController.previewAppointmentEmailTemplate)
 );
@@ -48,6 +66,17 @@ settingsRouter.post(
   "/rebook-nudges/preview",
   validate({ body: previewRebookNudgeSettingsSchema }),
   asyncHandler(settingsController.previewRebookNudgeSettings)
+);
+settingsRouter.get("/thank-you-emails", asyncHandler(settingsController.getThankYouEmailSettings));
+settingsRouter.patch(
+  "/thank-you-emails",
+  validate({ body: updateThankYouEmailSettingsSchema }),
+  asyncHandler(settingsController.updateThankYouEmailSettings)
+);
+settingsRouter.post(
+  "/thank-you-emails/preview",
+  validate({ body: previewThankYouEmailSettingsSchema }),
+  asyncHandler(settingsController.previewThankYouEmailSettings)
 );
 settingsRouter.get("/booking", asyncHandler(settingsController.getBooking));
 settingsRouter.get("/availability", asyncHandler(settingsController.getAvailability));

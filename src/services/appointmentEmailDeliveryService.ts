@@ -13,14 +13,22 @@ import { communicationPreferencesService } from "./communicationPreferences";
 import { appointmentEmailTemplatesService, renderEmailTemplateString } from "./appointmentEmailTemplatesService";
 import { activityEventsService } from "./activityEventsService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
-import { rebookNudgeSettingsService, renderRebookNudgeTemplateString } from "./rebookNudgeSettingsService";
 import { rebookNudgesService } from "./rebookNudgesService";
+import { thankYouEmailsService } from "./thankYouEmailsService";
 
 export interface EmailMessage {
   to: string;
   subject: string;
   text: string;
   html: string;
+  attachments?: EmailAttachment[];
+}
+
+export interface EmailAttachment {
+  filename: string;
+  content: string;
+  contentType: string;
+  contentId?: string;
 }
 
 export interface EmailProviderResult {
@@ -82,6 +90,11 @@ interface AppointmentEmailTemplateData {
   birthday_label?: string;
   birthday_display?: string;
   birthday_occurrence_date?: string;
+  appointment_date?: string;
+  appointment_date_display?: string;
+  referral_url?: string | null;
+  referral_code?: string | null;
+  qr_code_url?: string | null;
   email_template?: {
     subject_template?: string | null;
     custom_message_block?: string | null;
@@ -127,6 +140,16 @@ const createResendEmailProvider = (): EmailProvider | null => {
         subject: message.subject,
         text: message.text,
         html: message.html,
+        ...(message.attachments?.length
+          ? {
+            attachments: message.attachments.map((attachment) => ({
+              filename: attachment.filename,
+              content: attachment.content,
+              contentType: attachment.contentType,
+              ...(attachment.contentId ? { contentId: attachment.contentId } : {})
+            }))
+          }
+          : {}),
         ...(replyTo ? { replyTo } : {})
       });
 
@@ -156,6 +179,40 @@ const normalizeTemplateData = (value: unknown): AppointmentEmailTemplateData =>
 
 const getString = (value: unknown, fallback: string): string =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+
+const referralQrCodeContentId = "referral-qr-code";
+
+const parseBase64DataUrl = (value: string): { contentType: string; content: string } | null => {
+  const match = /^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i.exec(value.trim());
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    contentType: match[1],
+    content: match[2].replace(/\s/g, "")
+  };
+};
+
+const createReferralQrCodeAttachment = (qrCodeUrl?: string | null): EmailAttachment | null => {
+  if (!qrCodeUrl) {
+    return null;
+  }
+
+  const parsed = parseBase64DataUrl(qrCodeUrl);
+
+  if (!parsed) {
+    return null;
+  }
+
+  return {
+    filename: "referral-qr-code.png",
+    content: parsed.content,
+    contentType: parsed.contentType,
+    contentId: referralQrCodeContentId
+  };
+};
 
 const getAppointmentManagementUrl = (
   templateData: AppointmentEmailTemplateData,
@@ -195,6 +252,8 @@ const getAppointmentMessageType = (emailType: AppointmentEmailType): MessageType
       return "rebooking_prompt";
     case "birthday_reminder":
       return "birthday_reminder";
+    case "thank_you_email":
+      return "marketing";
   }
 };
 
@@ -279,6 +338,8 @@ const getSubject = (emailType: AppointmentEmailType, serviceName: string, busine
       return `Time to book your next visit with ${businessName}`;
     case "birthday_reminder":
       return `Happy birthday from ${businessName}`;
+    case "thank_you_email":
+      return `Thank you for visiting ${businessName}`;
   }
 };
 
@@ -308,7 +369,10 @@ const getTemplateVariables = (
   last_service_name: getString(templateData.last_service_name, serviceName),
   last_appointment_date: getString(templateData.last_appointment_display, getString(templateData.last_appointment_time, "")),
   rebook_url: getString(templateData.rebook_url, ""),
-  birthday: getString(templateData.birthday_display, getString(templateData.birthday_label, getString(templateData.birthday, "")))
+  birthday: getString(templateData.birthday_display, getString(templateData.birthday_label, getString(templateData.birthday, ""))),
+  appointment_date: getString(templateData.appointment_date_display, getString(templateData.appointment_date, appointmentTime)),
+  referral_url: getString(templateData.referral_url, ""),
+  referral_code: getString(templateData.referral_code, "")
 });
 
 const renderConfiguredText = (
@@ -322,11 +386,6 @@ const renderConfiguredText = (
   }
 
   try {
-    if (emailType === "rebooking_prompt") {
-      rebookNudgeSettingsService.validateSettingsPayload({ customMessageBlock: trimmed });
-      return renderRebookNudgeTemplateString(trimmed, variables as Parameters<typeof renderRebookNudgeTemplateString>[1]);
-    }
-
     appointmentEmailTemplatesService.validateTemplatePayload({ customMessageBlock: trimmed });
     return renderEmailTemplateString(trimmed, variables as Parameters<typeof renderEmailTemplateString>[1]);
   } catch {
@@ -340,21 +399,12 @@ const renderConfiguredSubject = (
   value: string | null | undefined,
   variables: ReturnType<typeof getTemplateVariables>
 ): string => {
-  if (!appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType) && emailType !== "rebooking_prompt") {
-    return defaultSubject;
-  }
-
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (!trimmed) {
     return defaultSubject;
   }
 
   try {
-    if (emailType === "rebooking_prompt") {
-      rebookNudgeSettingsService.validateSettingsPayload({ subjectTemplate: trimmed });
-      return renderRebookNudgeTemplateString(trimmed, variables as Parameters<typeof renderRebookNudgeTemplateString>[1]) || defaultSubject;
-    }
-
     appointmentEmailTemplatesService.validateTemplatePayload({ subjectTemplate: trimmed });
     return renderEmailTemplateString(trimmed, variables as Parameters<typeof renderEmailTemplateString>[1]) || defaultSubject;
   } catch {
@@ -392,6 +442,8 @@ const getIntro = (emailType: AppointmentEmailType, templateData: AppointmentEmai
       return `It has been a little while since your last visit with ${businessName}.`;
     case "birthday_reminder":
       return `Wishing you a very happy birthday from ${businessName}.`;
+    case "thank_you_email":
+      return `Thank you for visiting ${businessName}. Share your referral link with a friend when you are ready.`;
   }
 };
 
@@ -448,10 +500,11 @@ export const renderAppointmentEmail = (
     templateData.email_template?.subject_template,
     templateVariables
   );
-  const customMessageBlock = appointmentEmailTemplatesService.isCustomizableAppointmentEmailType(emailType)
-    || emailType === "rebooking_prompt"
-    ? renderConfiguredText(emailType, templateData.email_template?.custom_message_block, templateVariables)
-    : null;
+  const customMessageBlock = renderConfiguredText(
+    emailType,
+    templateData.email_template?.custom_message_block,
+    templateVariables
+  );
   const unsubscribeUrl = templateData.unsubscribe_url ?? null;
   const unsubscribeLabel = getString(templateData.unsubscribe_label, "Manage communication preferences");
   const details = emailType === "rebooking_prompt"
@@ -465,6 +518,13 @@ export const renderAppointmentEmail = (
         `Birthday: ${getString(templateData.birthday_display, getString(templateData.birthday_label, getString(templateData.birthday, "today")))}`
       ]
     .filter(Boolean) as string[]
+    : emailType === "thank_you_email"
+      ? [
+        `Service: ${serviceName}`,
+        `Visit: ${getString(templateData.appointment_date_display, getString(templateData.appointment_date, appointmentTime))}`,
+        templateData.referral_url ? `Referral link: ${templateData.referral_url}` : null,
+        templateData.referral_code ? `Referral code: ${templateData.referral_code}` : null
+      ].filter(Boolean) as string[]
     : [
       `Service: ${serviceName}`,
       `Time: ${appointmentTime}`,
@@ -488,6 +548,15 @@ export const renderAppointmentEmail = (
   const detailItems = details
     .map((detail) => `<li>${escapeHtml(detail)}</li>`)
     .join("");
+  const qrCodeAttachment = emailType === "thank_you_email"
+    ? createReferralQrCodeAttachment(templateData.qr_code_url)
+    : null;
+  const qrCodeImageSrc = qrCodeAttachment
+    ? `cid:${referralQrCodeContentId}`
+    : templateData.qr_code_url;
+  const qrCodeImage = emailType === "thank_you_email" && templateData.qr_code_url
+    ? `<p><img src="${escapeHtml(qrCodeImageSrc ?? "")}" alt="Referral QR code" width="160" height="160"></p>`
+    : "";
 
   return {
     to: recipientEmail,
@@ -499,10 +568,12 @@ export const renderAppointmentEmail = (
       `<p>${escapeHtml(intro)}</p>`,
       ...renderHtmlBlock(customMessageBlock),
       `<ul>${detailItems}</ul>`,
+      qrCodeImage,
       ...(contactLine ? [`<p>${escapeHtml(contactLine)}</p>`] : []),
       ...(unsubscribeUrl ? [`<p><a href="${escapeHtml(unsubscribeUrl)}">${escapeHtml(unsubscribeLabel)}</a></p>`] : []),
       `<p>Thank you,<br>${escapeHtml(businessName)}</p>`
-    ].join("")
+    ].join(""),
+    ...(qrCodeAttachment ? { attachments: [qrCodeAttachment] } : {})
   };
 };
 
@@ -771,6 +842,7 @@ export const appointmentEmailDeliveryService = {
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           await birthdayRemindersService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
+          await thankYouEmailsService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           result.skipped += 1;
           continue;
         }
@@ -810,6 +882,11 @@ export const appointmentEmailDeliveryService = {
             canSend.reason ?? "Communication preference blocked send"
           );
           await birthdayRemindersService.markForEmailEvent(
+            claimedEvent,
+            "skipped",
+            canSend.reason ?? "Communication preference blocked send"
+          );
+          await thankYouEmailsService.markForEmailEvent(
             claimedEvent,
             "skipped",
             canSend.reason ?? "Communication preference blocked send"
@@ -855,6 +932,7 @@ export const appointmentEmailDeliveryService = {
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "sent", null);
           await birthdayRemindersService.markForEmailEvent(claimedEvent, "sent", null);
+          await thankYouEmailsService.markForEmailEvent(claimedEvent, "sent", null);
           try {
             await activityEventsService.recordAppointmentReminderEmailSent(userId, {
               ...claimedEvent,
@@ -907,6 +985,11 @@ export const appointmentEmailDeliveryService = {
           "skipped",
           providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
         );
+        await thankYouEmailsService.markForEmailEvent(
+          claimedEvent,
+          "skipped",
+          providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
+        );
         result.skipped += 1;
         await communicationEventsService.logCommunicationEvent({
           userId,
@@ -929,6 +1012,7 @@ export const appointmentEmailDeliveryService = {
         });
         await rebookNudgesService.markForEmailEvent(claimedEvent, "failed", message);
         await birthdayRemindersService.markForEmailEvent(claimedEvent, "failed", message);
+        await thankYouEmailsService.markForEmailEvent(claimedEvent, "failed", message);
         await communicationEventsService.logCommunicationEvent({
           userId: typeof claimedEvent.user_id === "string" ? claimedEvent.user_id : "unknown",
           clientId: typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null,

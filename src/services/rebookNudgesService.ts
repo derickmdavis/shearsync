@@ -6,6 +6,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
 import { rebookNudgeSettingsService } from "./rebookNudgeSettingsService";
 import { usersService } from "./usersService";
 import { entitlementsService } from "./entitlementsService";
@@ -100,6 +101,7 @@ const createTemplateData = async ({
     businessTimeZoneService.getForUser(userId),
     rebookNudgeSettingsService.getRawForUser(userId)
   ]);
+  const emailTemplate = await appointmentEmailTemplatesService.getSnapshotForUser(userId, "rebooking_prompt");
   const clientName = getClientDisplayName(client);
   const businessDisplayName = getBusinessDisplayName(user);
   const lastAppointmentDate = getString(lastAppointment, "appointment_date") ?? "";
@@ -127,8 +129,8 @@ const createTemplateData = async ({
     rebook_url: rebookUrl,
     message_type: "rebooking_prompt",
     email_template: {
-      subject_template: getString(settings, "subject_template"),
-      custom_message_block: getString(settings, "custom_message_block")
+      subject_template: emailTemplate?.subject_template ?? getString(settings, "subject_template"),
+      custom_message_block: emailTemplate?.custom_message_block ?? getString(settings, "custom_message_block")
     }
   };
 };

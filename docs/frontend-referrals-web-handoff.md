@@ -44,6 +44,21 @@ referral_code?: string;
 
 Invalid, inactive, wrong-stylist, or self-referral codes do not block booking. The confirmation response shape is unchanged.
 
+### Automated Thank You Emails
+
+Authenticated Pro and Premium stylists can also enable thank-you emails that include the client's referral link and QR code after completed appointments.
+
+This is a separate authenticated automation surface from public referral attribution. The web app should treat it like an approved automation pipeline:
+
+- Settings and preview live at `GET/PATCH/POST /api/settings/thank-you-emails`.
+- The approval queue lives at `GET /api/thank-you-emails`.
+- Pending rows are approved with `POST /api/thank-you-emails/:id/approve`.
+- Rows can be cancelled with `POST /api/thank-you-emails/:id/cancel`.
+- The Activity automation toggle key is `thank_you_emails`.
+- The backend generates referral links and QR snapshots; the frontend should not generate either for sent emails.
+
+See `docs/frontend-thank-you-email-automation-controls-handoff.md` for the Automations Controls screen handoff, and `docs/frontend-thank-you-emails-contract.md` for the full API contract.
+
 ## Required Web Changes
 
 ### 1. Client Detail Referral UI
@@ -201,5 +216,7 @@ type ReferralStats = {
 ## Backend References
 
 - Main contract: `docs/frontend-referrals-contract.md`
+- Thank-you automation controls handoff: `docs/frontend-thank-you-email-automation-controls-handoff.md`
+- Thank-you email automation contract: `docs/frontend-thank-you-emails-contract.md`
 - Full backend spec: `docs/backend-api-and-booking-logic-spec.md`
 - Public booking endpoint: `POST /api/public/bookings`

@@ -7,7 +7,13 @@ import type { AppointmentEmailType } from "./appointmentEmailEventsService";
 export const customizableAppointmentEmailTypes = [
   "appointment_scheduled",
   "appointment_pending",
-  "appointment_confirmed"
+  "appointment_confirmed",
+  "appointment_cancelled",
+  "appointment_rescheduled",
+  "appointment_reminder",
+  "rebooking_prompt",
+  "birthday_reminder",
+  "thank_you_email"
 ] as const;
 
 export type CustomizableAppointmentEmailType = (typeof customizableAppointmentEmailTypes)[number];
@@ -29,7 +35,14 @@ const availableTemplateTokens = [
   "business_name",
   "business_phone",
   "business_email",
-  "manage_appointment_url"
+  "manage_appointment_url",
+  "last_service_name",
+  "last_appointment_date",
+  "rebook_url",
+  "birthday",
+  "appointment_date",
+  "referral_url",
+  "referral_code"
 ] as const;
 
 type TemplateToken = (typeof availableTemplateTokens)[number];

@@ -96,6 +96,7 @@ Current feature matrix from `PLAN_CONFIG`:
 | `appointmentPhotos` | false | true | true |
 | `rebookNudges` | false | true | true |
 | `birthdayReminders` | false | true | true |
+| `thankYouEmails` | false | true | true |
 | `waitlistMatch` | false | true | true |
 | `noShowFollowUp` | false | true | true |
 | `customCoverPhoto` | false | true | true |
@@ -115,6 +116,7 @@ Recommended gating examples:
 - Hide or upsell appointment photos, before/after galleries, and public reference photo upload when `data.features.appointmentPhotos === false`
 - Hide or upsell rebook nudge automation when `data.features.rebookNudges === false`
 - Hide or upsell birthday reminder automation when `data.features.birthdayReminders === false`
+- Hide or upsell thank-you email automation when `data.features.thankYouEmails === false`
 - Hide or upsell waitlist match automation when `data.features.waitlistMatch === false`
 - Hide or upsell no-show follow-up automation when `data.features.noShowFollowUp === false`
 - Show the stylist waitlist on/off toggle from `data.settings.waitlistEnabled` when `data.features.waitlist === true`
@@ -170,6 +172,7 @@ Known enforcement details:
 - Updating booking cover photo is blocked unless `customCoverPhoto` is allowed
 - Updating stylist slug is blocked unless `customSlug` is allowed
 - Public waitlist creation and authenticated waitlist mutations are blocked unless `waitlist` is allowed, the account is not cancelled, and `users.waitlist_enabled=true`
+- Thank-you email settings, approval/list/create actions, and automation toggle updates are blocked unless `thankYouEmails` is allowed and the account is not cancelled
 - `GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` when the effective waitlist feature is not available
 - SMS usage is blocked when the plan does not allow SMS or the monthly cap is exceeded
 - Any `cancelled` plan fails feature-gated checks with `403`
@@ -283,6 +286,7 @@ type AccountPlan = {
     appointmentPhotos: boolean;
     rebookNudges: boolean;
     birthdayReminders: boolean;
+    thankYouEmails: boolean;
     waitlistMatch: boolean;
     noShowFollowUp: boolean;
     customCoverPhoto: boolean;
@@ -310,6 +314,7 @@ const canShowWaitlistToggle = plan.features.waitlist;
 const canUseWaitlist = plan.effectiveFeatures.waitlistEnabled;
 const canUseRebookNudges = plan.features.rebookNudges;
 const canUseBirthdayReminders = plan.features.birthdayReminders;
+const canUseThankYouEmails = plan.features.thankYouEmails;
 const canEditCoverPhoto = plan.features.customCoverPhoto;
 const canEditBookingSlug = plan.features.customSlug;
 const canExportClients = plan.features.clientExport;

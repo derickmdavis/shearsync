@@ -10,7 +10,8 @@ export const automationControlKeySchema = z.enum([
   "email_confirmations",
   "no_show_follow_up",
   "waitlist_match",
-  "birthday_reminders"
+  "birthday_reminders",
+  "thank_you_emails"
 ]);
 
 const isValidDateString = (value: string): boolean => {

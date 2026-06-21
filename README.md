@@ -106,10 +106,10 @@ Authenticated routes:
 - `PUT /api/settings/availability`
 - `GET /api/settings/booking-rules`
 - `PATCH /api/settings/booking-rules`
-- `GET /api/settings/email-confirmations`
-- `PATCH /api/settings/email-confirmations/:emailType`
-- `DELETE /api/settings/email-confirmations/:emailType`
-- `POST /api/settings/email-confirmations/:emailType/preview`
+- `GET /api/settings/email-templates`
+- `PATCH /api/settings/email-templates/:emailType`
+- `DELETE /api/settings/email-templates/:emailType`
+- `POST /api/settings/email-templates/:emailType/preview`
 - `GET /api/settings/rebook-nudges`
 - `PATCH /api/settings/rebook-nudges`
 - `POST /api/settings/rebook-nudges/preview`
@@ -117,12 +117,20 @@ Authenticated routes:
 - `POST /api/rebook-nudges`
 - `POST /api/rebook-nudges/:id/approve`
 - `POST /api/rebook-nudges/:id/cancel`
+- `GET /api/settings/thank-you-emails`
+- `PATCH /api/settings/thank-you-emails`
+- `POST /api/settings/thank-you-emails/preview`
+- `GET /api/thank-you-emails`
+- `POST /api/thank-you-emails`
+- `POST /api/thank-you-emails/:id/approve`
+- `POST /api/thank-you-emails/:id/cancel`
 
 Client contract notes:
 
 - `GET /api/settings/booking` and `PATCH /api/settings/booking` include the stylist's business booking settings. The booking settings payload accepts optional `instagram`; the backend stores the handle without leading `@`.
-- Email confirmation settings support custom subject lines and one custom plain-text message block for `appointment_scheduled`, `appointment_pending`, and `appointment_confirmed`. The custom block is inserted after the standard intro and before appointment details; the rest of the email remains system-controlled.
-- Rebook nudge settings are separate from confirmation settings. They support an approval-required mode, a default rebook interval in days, a custom subject, and one custom plain-text message block for `rebooking_prompt` emails. Approval-required nudges are persisted as `pending_approval` until individually approved or cancelled.
+- Email template settings support custom subject lines and one custom plain-text message block for `appointment_scheduled`, `appointment_pending`, `appointment_confirmed`, `appointment_cancelled`, `appointment_rescheduled`, `appointment_reminder`, `rebooking_prompt`, `birthday_reminder`, and `thank_you_email`. The custom block is inserted after the standard intro and before email details; the rest of the email remains system-controlled. Legacy `/api/settings/email-confirmations` routes remain available as aliases.
+- Rebook nudge settings are separate from email templates for approval-required mode and default rebook interval. Approval-required nudges are persisted as `pending_approval` until individually approved or cancelled.
+- Thank-you email settings are separate from email templates for approval-required mode, send delay, referral URL/code snapshots, and inline QR generation.
 - `GET /api/clients` supports backend search, pagination, sorting, and supported filters. It returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`. See `docs/frontend-clients-list-contract.md`.
 - `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as the `rebook` category in `GET /api/activity`.
 - `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
@@ -243,6 +251,18 @@ Final public bookings accept optional `referral_code`. Invalid, wrong-stylist, o
 
 Frontend handoff details are documented in [docs/frontend-referrals-contract.md](docs/frontend-referrals-contract.md).
 
+Authenticated Pro and Premium stylists can enable thank-you emails that include the client's referral link and an inline QR code after completed appointments. The authenticated API surface is:
+
+- `GET /api/settings/thank-you-emails`
+- `PATCH /api/settings/thank-you-emails`
+- `POST /api/settings/thank-you-emails/preview`
+- `GET /api/thank-you-emails`
+- `POST /api/thank-you-emails`
+- `POST /api/thank-you-emails/:id/approve`
+- `POST /api/thank-you-emails/:id/cancel`
+
+Thank-you email automation details are documented in [docs/frontend-thank-you-emails-contract.md](docs/frontend-thank-you-emails-contract.md).
+
 The public read endpoints also enforce booking availability now:
 
 - `GET /api/public/services/:slug` returns `400` when `booking_enabled=false`.
@@ -330,8 +350,9 @@ Current limitations:
 - No automatic cancellation matching.
 - No automatic booking from the waitlist.
 - Appointment emails are implemented through the queued email processor; reminder delivery and outbound SMS delivery are not yet implemented.
-- Appointment confirmation email customizations are snapshotted when an email event is queued, so edits apply to future queued emails.
+- Email template customizations are snapshotted when an email/nudge/reminder record is queued, so edits apply to future queued emails and do not rewrite already queued messages.
 - Rebook nudges use `/internal/rebook-nudges/queue` to create due nudge records, `/internal/rebook-nudges/process` to enqueue approved/automatic rebook emails, and `/internal/appointment-emails/process` to deliver the resulting email events.
+- Thank-you emails use `/internal/thank-you-emails/queue` to create completed-appointment records, `/internal/thank-you-emails/process` to enqueue approved/automatic thank-you email events, and `/internal/appointment-emails/process` to deliver the resulting email events.
 - SMS preference/consent checks and STOP/START/HELP inbound handling exist for future SMS provider integration.
 - No Stripe enforcement beyond the existing mocked/backend plan fields.
 - No automated expiration or cleanup.

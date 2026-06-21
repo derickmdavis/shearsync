@@ -8,10 +8,12 @@ import {
   processAppointmentEmailsQuerySchema,
   processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
+  processThankYouEmailsQuerySchema,
   purgeDeletedClientsQuerySchema,
   queueAppointmentRemindersQuerySchema,
   queueBirthdayRemindersQuerySchema,
-  queueRebookNudgesQuerySchema
+  queueRebookNudgesQuerySchema,
+  queueThankYouEmailsQuerySchema
 } from "../validators/internalValidators";
 
 export const internalRouter = Router();
@@ -51,6 +53,18 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processBirthdayRemindersQuerySchema }),
   asyncHandler(internalController.processBirthdayReminders)
+);
+internalRouter.post(
+  "/thank-you-emails/queue",
+  requireInternalApiSecret,
+  validate({ query: queueThankYouEmailsQuerySchema }),
+  asyncHandler(internalController.queueThankYouEmails)
+);
+internalRouter.post(
+  "/thank-you-emails/process",
+  requireInternalApiSecret,
+  validate({ query: processThankYouEmailsQuerySchema }),
+  asyncHandler(internalController.processThankYouEmails)
 );
 internalRouter.post(
   "/clients/purge",

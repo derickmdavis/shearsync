@@ -15,7 +15,8 @@ export type AppointmentEmailType =
   | "appointment_rescheduled"
   | "appointment_reminder"
   | "rebooking_prompt"
-  | "birthday_reminder";
+  | "birthday_reminder"
+  | "thank_you_email";
 
 interface QueueAppointmentEmailOptions {
   cancelledBy?: "client" | "stylist";

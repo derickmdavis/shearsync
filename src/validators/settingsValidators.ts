@@ -15,7 +15,13 @@ export const appointmentEmailTemplateParamSchema = z.object({
   emailType: z.enum([
     "appointment_scheduled",
     "appointment_pending",
-    "appointment_confirmed"
+    "appointment_confirmed",
+    "appointment_cancelled",
+    "appointment_rescheduled",
+    "appointment_reminder",
+    "rebooking_prompt",
+    "birthday_reminder",
+    "thank_you_email"
   ])
 });
 
@@ -34,6 +40,18 @@ export const updateRebookNudgeSettingsSchema = z.object({
 });
 
 export const previewRebookNudgeSettingsSchema = updateRebookNudgeSettingsSchema.pick({
+  subjectTemplate: true,
+  customMessageBlock: true
+});
+
+export const updateThankYouEmailSettingsSchema = z.object({
+  approvalRequired: z.boolean().optional(),
+  sendDelayHours: z.number().int().min(0).max(720).optional(),
+  subjectTemplate: z.string().max(160).nullable().optional(),
+  customMessageBlock: z.string().max(4000).nullable().optional()
+});
+
+export const previewThankYouEmailSettingsSchema = updateThankYouEmailSettingsSchema.pick({
   subjectTemplate: true,
   customMessageBlock: true
 });

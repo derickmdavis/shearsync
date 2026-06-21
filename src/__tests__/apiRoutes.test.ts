@@ -26,6 +26,7 @@ const { profileController } = require("../controllers/profileController") as typ
 const { accountController } = require("../controllers/accountController") as typeof import("../controllers/accountController");
 const { authController } = require("../controllers/authController") as typeof import("../controllers/authController");
 const { settingsController } = require("../controllers/settingsController") as typeof import("../controllers/settingsController");
+const { thankYouEmailsController } = require("../controllers/thankYouEmailsController") as typeof import("../controllers/thankYouEmailsController");
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
 const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
 const { remindersController } = require("../controllers/remindersController") as typeof import("../controllers/remindersController");
@@ -61,7 +62,15 @@ const { createClientSchema, updateClientSchema } =
   require("../validators/clientValidators") as typeof import("../validators/clientValidators");
 const { birthdayRemindersQuerySchema } =
   require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
-const { replaceAvailabilitySchema, updateBookingRulesSchema, updateProfileSchema, updateBookingSettingsSchema } =
+const {
+  appointmentEmailTemplateParamSchema,
+  previewAppointmentEmailTemplateSchema,
+  replaceAvailabilitySchema,
+  updateAppointmentEmailTemplateSchema,
+  updateBookingRulesSchema,
+  updateProfileSchema,
+  updateBookingSettingsSchema
+} =
   require("../validators/settingsValidators") as typeof import("../validators/settingsValidators");
 const { updateAccountPlanSchema } =
   require("../validators/accountValidators") as typeof import("../validators/accountValidators");
@@ -7410,6 +7419,7 @@ describe("API handlers", () => {
         appointmentPhotos: false,
         rebookNudges: false,
         birthdayReminders: false,
+        thankYouEmails: false,
         waitlistMatch: false,
         noShowFollowUp: false,
         customCoverPhoto: false,
@@ -7454,6 +7464,7 @@ describe("API handlers", () => {
         appointmentPhotos: true,
         rebookNudges: true,
         birthdayReminders: true,
+        thankYouEmails: true,
         waitlistMatch: true,
         noShowFollowUp: true,
         customCoverPhoto: true,
@@ -7499,6 +7510,7 @@ describe("API handlers", () => {
         appointmentPhotos: true,
         rebookNudges: true,
         birthdayReminders: true,
+        thankYouEmails: true,
         waitlistMatch: true,
         noShowFollowUp: true,
         customCoverPhoto: true,
@@ -7583,6 +7595,403 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 403);
       assert.equal((response.body as { error: { message: string } }).error.message, "This feature is not available for the current plan.");
     } finally {
+      supabase.restore();
+    }
+  });
+
+  it("blocks Basic from using thank you email settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      thank_you_email_settings: []
+    });
+
+    try {
+      const req = createMockRequest({ user: { id: userId } as Request["user"] });
+      const response = await runWithErrorHandler((request, res) => settingsController.getThankYouEmailSettings(request, res), req);
+      assert.equal(response.statusCode, 403);
+      assert.equal((response.body as { error: { message: string } }).error.message, "This feature is not available for the current plan.");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("supports generic email template settings for all automated email types", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      appointment_email_templates: [
+        {
+          id: "template-1",
+          user_id: userId,
+          email_type: "appointment_scheduled",
+          subject_template: "Existing {{service_name}}",
+          custom_message_block: "Existing body"
+        }
+      ]
+    });
+
+    try {
+      const getResponse = await runWithErrorHandler(
+        (request, res) => settingsController.getAppointmentEmailTemplates(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      const templates = (getResponse.body as { data: Array<{ emailType: string; configured: boolean }> }).data;
+
+      assert.equal(getResponse.statusCode, 200);
+      assert.ok(templates.some((template) => template.emailType === "birthday_reminder" && !template.configured));
+      assert.ok(templates.some((template) => template.emailType === "thank_you_email" && !template.configured));
+
+      const updateReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: appointmentEmailTemplateParamSchema.parse({ emailType: "birthday_reminder" }),
+        body: updateAppointmentEmailTemplateSchema.parse({
+          subjectTemplate: "Happy birthday, {{client_name}}",
+          customMessageBlock: "Birthday note for {{birthday}}."
+        })
+      });
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => settingsController.updateAppointmentEmailTemplate(request, res),
+        updateReq
+      );
+      const update = (updateResponse.body as { data: { emailType: string; subjectTemplate: string; customMessageBlock: string } }).data;
+
+      assert.equal(updateResponse.statusCode, 200);
+      assert.equal(update.emailType, "birthday_reminder");
+      assert.equal(update.subjectTemplate, "Happy birthday, {{client_name}}");
+      assert.equal(supabase.state.appointment_email_templates.length, 2);
+      assert.equal(
+        supabase.state.appointment_email_templates.find((template) => template.email_type === "birthday_reminder")?.custom_message_block,
+        "Birthday note for {{birthday}}."
+      );
+
+      const previewReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: appointmentEmailTemplateParamSchema.parse({ emailType: "birthday_reminder" }),
+        body: previewAppointmentEmailTemplateSchema.parse({
+          subjectTemplate: "Happy birthday, {{client_name}}",
+          customMessageBlock: "Birthday note for {{birthday}}."
+        })
+      });
+      const previewResponse = await runWithErrorHandler(
+        (request, res) => settingsController.previewAppointmentEmailTemplate(request, res),
+        previewReq
+      );
+      const preview = (previewResponse.body as { data: { subject: string; text: string } }).data;
+
+      assert.equal(previewResponse.statusCode, 200);
+      assert.equal(preview.subject, "Happy birthday, Jane Doe");
+      assert.match(preview.text, /Birthday note for June 15\./);
+
+      const resetReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: appointmentEmailTemplateParamSchema.parse({ emailType: "birthday_reminder" })
+      });
+      const resetResponse = await runWithErrorHandler(
+        (request, res) => settingsController.resetAppointmentEmailTemplate(request, res),
+        resetReq
+      );
+      const reset = (resetResponse.body as { data: { emailType: string; configured: boolean; subjectTemplate: string | null } }).data;
+
+      assert.equal(resetResponse.statusCode, 200);
+      assert.equal(reset.emailType, "birthday_reminder");
+      assert.equal(reset.configured, false);
+      assert.equal(reset.subjectTemplate, null);
+      assert.equal(
+        supabase.state.appointment_email_templates.some((template) => template.email_type === "birthday_reminder"),
+        false
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("blocks Basic from thank you email workflow APIs", async () => {
+    const thankYouEmailId = "44444444-4444-4444-8444-444444444444";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: thankYouEmailId,
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          send_after: "2026-06-01T12:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const listResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { limit: "25" }
+        })
+      );
+      assert.equal(listResponse.statusCode, 403);
+
+      const createResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.create(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: {
+            appointment_id: "99999999-9999-4999-8999-999999999999"
+          }
+        })
+      );
+      assert.equal(createResponse.statusCode, 403);
+
+      const approveResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.approve(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: thankYouEmailId }
+        })
+      );
+      assert.equal(approveResponse.statusCode, 403);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows Pro users to update and preview thank you email settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      thank_you_email_settings: []
+    });
+
+    try {
+      const updateReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: {
+          approvalRequired: true,
+          sendDelayHours: 2,
+          subjectTemplate: "Thanks for visiting {{business_name}}",
+          customMessageBlock: "Share this with a friend: {{referral_url}}"
+        }
+      });
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => settingsController.updateThankYouEmailSettings(request, res),
+        updateReq
+      );
+      assert.equal(updateResponse.statusCode, 200);
+      assert.equal(supabase.state.thank_you_email_settings.length, 1);
+      assert.equal(supabase.state.thank_you_email_settings[0]?.send_delay_hours, 2);
+      assert.deepEqual((updateResponse.body as { data: Record<string, unknown> }).data.availableTokens, [
+        "client_name",
+        "business_name",
+        "business_phone",
+        "business_email",
+        "service_name",
+        "appointment_date",
+        "referral_url",
+        "referral_code"
+      ]);
+
+      const previewReq = createMockRequest({
+        user: { id: userId } as Request["user"],
+        body: {
+          subjectTemplate: "Thanks, {{client_name}}",
+          customMessageBlock: "Your referral code is {{referral_code}}."
+        }
+      });
+      const previewResponse = await runWithErrorHandler(
+        (request, res) => settingsController.previewThankYouEmailSettings(request, res),
+        previewReq
+      );
+      const preview = (previewResponse.body as { data: { subject: string; text: string; html: string } }).data;
+
+      assert.equal(previewResponse.statusCode, 200);
+      assert.equal(preview.subject, "Thanks, Jane Doe");
+      assert.match(preview.text, /Your referral code is rf_preview01\./);
+      assert.match(preview.text, /Referral link: https:\/\/example\.com\/r\/rf_preview01/);
+      assert.match(preview.html, /Referral QR code/);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows Premium users to create thank you emails", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
+    const appointmentId = "99999999-9999-4999-8999-999999999999";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "premium",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      client_referral_links: [],
+      thank_you_email_settings: [],
+      thank_you_emails: []
+    });
+
+    try {
+      const createResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.create(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: {
+            appointment_id: appointmentId,
+            approval_required: true
+          }
+        })
+      );
+
+      assert.equal(createResponse.statusCode, 201);
+      assert.equal((createResponse.body as { data: Record<string, unknown> }).data.status, "pending_approval");
+      assert.equal(supabase.state.thank_you_emails.length, 1);
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
+      supabase.restore();
+    }
+  });
+
+  it("supports thank you email create, list, approve, and cancel APIs", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
+    const appointmentId = "99999999-9999-4999-8999-999999999999";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_date: "2026-06-01T12:00:00.000Z",
+          service_name: "Silk Press",
+          status: "completed"
+        }
+      ],
+      client_referral_links: [],
+      thank_you_email_settings: [],
+      thank_you_emails: [],
+      appointment_email_events: []
+    });
+
+    try {
+      const createResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.create(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: {
+            appointment_id: appointmentId,
+            approval_required: true
+          }
+        })
+      );
+      const created = (createResponse.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(createResponse.statusCode, 201);
+      assert.equal(created.status, "pending_approval");
+      assert.equal(created.appointment_id, appointmentId);
+      assert.equal(supabase.state.thank_you_emails.length, 1);
+
+      const listResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { limit: "25" }
+        })
+      );
+      assert.equal(listResponse.statusCode, 200);
+      assert.equal((listResponse.body as { data: unknown[] }).data.length, 1);
+
+      const thankYouEmailId = String(created.id);
+      const approveResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.approve(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: thankYouEmailId }
+        })
+      );
+      assert.equal(approveResponse.statusCode, 200);
+      assert.equal((approveResponse.body as { data: Record<string, unknown> }).data.status, "queued");
+
+      const cancelResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.cancel(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: thankYouEmailId },
+          body: { reason: "Client requested no email" }
+        })
+      );
+      assert.equal(cancelResponse.statusCode, 200);
+      assert.equal((cancelResponse.body as { data: Record<string, unknown> }).data.status, "cancelled");
+      assert.equal(supabase.state.thank_you_emails[0]?.cancelled_reason, "Client requested no email");
+    } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
       supabase.restore();
     }
   });

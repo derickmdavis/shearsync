@@ -8,6 +8,7 @@ import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
+import { thankYouEmailsService } from "./thankYouEmailsService";
 import { entitlementsService } from "./entitlementsService";
 import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
 
@@ -17,7 +18,8 @@ const AUTOMATION_KEYS = [
   "email_confirmations",
   "no_show_follow_up",
   "waitlist_match",
-  "birthday_reminders"
+  "birthday_reminders",
+  "thank_you_emails"
 ] as const;
 
 export type AutomationControlKey = (typeof AUTOMATION_KEYS)[number];
@@ -28,12 +30,14 @@ const AUTOMATION_LABELS: Record<AutomationControlKey, string> = {
   email_confirmations: "Email Confirmations",
   no_show_follow_up: "No Show Follow-up",
   waitlist_match: "Waitlist Match",
-  birthday_reminders: "Birthday Reminders"
+  birthday_reminders: "Birthday Reminders",
+  thank_you_emails: "Thank You Emails"
 };
 
 const AUTOMATION_FEATURES: Partial<Record<AutomationControlKey, PlanFeatureKey>> = {
   rebook_nudges: "rebookNudges",
   birthday_reminders: "birthdayReminders",
+  thank_you_emails: "thankYouEmails",
   waitlist_match: "waitlistMatch",
   no_show_follow_up: "noShowFollowUp"
 };
@@ -582,7 +586,8 @@ export const activityDashboardService = {
       rebookNudgeCounts,
       outstandingRebookNudges,
       birthdayReminderCounts,
-      birthdayReminderQueue
+      birthdayReminderQueue,
+      thankYouEmailCounts
     ] = await Promise.all([
       entitlementsPromise,
       loadAutomationSettings(userId),
@@ -600,7 +605,8 @@ export const activityDashboardService = {
       rebookNudgesService.getCountsForUser(userId),
       rebookNudgesService.getOutstandingForUser(userId, 50),
       birthdayRemindersService.getCountsForUser(userId),
-      birthdayRemindersService.getQueuedForUser(userId, 50)
+      birthdayRemindersService.getQueuedForUser(userId, 50),
+      thankYouEmailsService.getCountsForUser(userId)
     ]);
 
     const [automationHealth, automationImpactThisWeek] = await Promise.all([
@@ -669,6 +675,19 @@ export const activityDashboardService = {
           ? `${birthdayReminderCounts.queued} queued`
           : "Upgrade required",
         queued_count: birthdayReminderCounts.queued
+      },
+      {
+        key: "thank_you_emails",
+        label: AUTOMATION_LABELS.thank_you_emails,
+        enabled: getEffectiveEnabled(settings, entitlements, "thank_you_emails"),
+        feature_available: isAutomationAvailable(entitlements, "thank_you_emails"),
+        status_label: !isAutomationAvailable(entitlements, "thank_you_emails")
+          ? "Upgrade required"
+          : thankYouEmailCounts.pending_approval > 0
+          ? `${thankYouEmailCounts.pending_approval} need approval`
+          : `${thankYouEmailCounts.queued} queued`,
+        pending_approval_count: thankYouEmailCounts.pending_approval,
+        queued_count: thankYouEmailCounts.queued
       }
     ];
 
@@ -680,7 +699,8 @@ export const activityDashboardService = {
         pending_reminder_count: appointmentReminderQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
         pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
-        birthday_reminder_count: birthdayReminderCounts.queued
+        birthday_reminder_count: birthdayReminderCounts.queued,
+        pending_thank_you_email_count: thankYouEmailCounts.pending_approval
       },
       pending_approval_count: feedCounts.approvals,
       pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
@@ -689,6 +709,8 @@ export const activityDashboardService = {
       birthday_reminder_count: birthdayReminderCounts.queued,
       queued_birthday_reminder_count: birthdayReminderCounts.queued,
       birthday_reminder_queue: birthdayReminderQueue,
+      pending_thank_you_email_count: thankYouEmailCounts.pending_approval,
+      queued_thank_you_email_count: thankYouEmailCounts.queued,
       cancellation_review_count: cancellationReviewItems.length,
       cancellation_review_items: cancellationReviewItems,
       waitlist_match_count: waitlistMatches.length,
