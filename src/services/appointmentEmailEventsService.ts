@@ -6,6 +6,7 @@ import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
 import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
+import { appointmentActionLinksService } from "./appointmentActionLinksService";
 
 export type AppointmentEmailType =
   | "appointment_scheduled"
@@ -162,6 +163,7 @@ const buildTemplateData = async ({
   client,
   appointment,
   managementToken,
+  managementUrl,
   emailType,
   options
 }: {
@@ -169,6 +171,7 @@ const buildTemplateData = async ({
   client: Row;
   appointment: Row;
   managementToken: string;
+  managementUrl: string | null;
   emailType: AppointmentEmailType;
   options: QueueAppointmentEmailOptions;
 }): Promise<AppointmentEmailTemplateData> => {
@@ -209,7 +212,7 @@ const buildTemplateData = async ({
     business_phone: getStringOrNull(user?.phone_number),
     business_email: businessEmail,
     management_token: managementToken,
-    management_url: getAppointmentManagementUrl(managementToken),
+    management_url: managementUrl ?? getAppointmentManagementUrl(managementToken),
     ...(emailType === "appointment_cancelled"
       ? { cancelled_by: options.cancelledBy ?? "stylist" }
       : {}),
@@ -263,11 +266,22 @@ export const appointmentEmailEventsService = {
       stylistId,
       appointmentStartTime
     });
+    let managementUrl = getAppointmentManagementUrl(managementToken);
+
+    try {
+      const manageLink = await appointmentActionLinksService.getOrCreateAppointmentManageLink(appointment);
+      const shortManagementUrl = appointmentActionLinksService.buildManageAppointmentUrl(String(manageLink.short_code ?? ""));
+      managementUrl = shortManagementUrl ?? managementUrl;
+    } catch {
+      managementUrl = getAppointmentManagementUrl(managementToken);
+    }
+
     const templateData = await buildTemplateData({
       stylistId,
       client,
       appointment,
       managementToken,
+      managementUrl,
       emailType,
       options
     });

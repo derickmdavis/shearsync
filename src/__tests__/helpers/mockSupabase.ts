@@ -16,6 +16,7 @@ type Filter =
   | { type: "neq"; column: string; value: unknown }
   | { type: "in"; column: string; values: unknown[] }
   | { type: "gte"; column: string; value: unknown }
+  | { type: "gt"; column: string; value: unknown }
   | { type: "lte"; column: string; value: unknown }
   | { type: "lt"; column: string; value: unknown }
   | { type: "or"; conditions: OrFilter[] };
@@ -168,6 +169,11 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
     return this;
   }
 
+  gt(column: string, value: unknown) {
+    this.filters.push({ type: "gt", column, value });
+    return this;
+  }
+
   lte(column: string, value: unknown) {
     this.filters.push({ type: "lte", column, value });
     return this;
@@ -267,6 +273,8 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
             return filter.values.includes(row[filter.column]);
           case "gte":
             return String(row[filter.column] ?? "") >= String(filter.value ?? "");
+          case "gt":
+            return String(row[filter.column] ?? "") > String(filter.value ?? "");
           case "lte":
             return String(row[filter.column] ?? "") <= String(filter.value ?? "");
           case "lt":

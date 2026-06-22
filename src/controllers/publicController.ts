@@ -2,7 +2,9 @@ import type { Request, Response } from "express";
 import { env } from "../config/env";
 import { ApiError } from "../lib/errors";
 import { getRequiredParam } from "../lib/request";
+import { createEarlyAccessRequestSchema } from "../validators/earlyAccessValidators";
 import { availabilityService } from "../services/availabilityService";
+import { earlyAccessService } from "../services/earlyAccessService";
 import { publicBookingIntakeService } from "../services/publicBookingIntakeService";
 import { publicAppointmentManagementService } from "../services/publicAppointmentManagementService";
 import { publicAppointmentImagesService } from "../services/publicAppointmentImagesService";
@@ -16,6 +18,18 @@ const setLiveInventoryHeaders = (res: Response) => {
   if (typeof res.set === "function") {
     res.set("Cache-Control", "no-store");
   }
+};
+
+const getEarlyAccessValidationMessage = (path: string | undefined): string => {
+  if (path === "email") {
+    return "Please enter a valid email address.";
+  }
+
+  if (path === "full_name") {
+    return "Please enter your full name.";
+  }
+
+  return "Please check your waitlist details and try again.";
 };
 
 export const publicController = {
@@ -98,6 +112,21 @@ export const publicController = {
     res.status(201).json({ data: entry });
   },
 
+  async createEarlyAccessRequest(req: Request, res: Response) {
+    const parsed = createEarlyAccessRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      res.status(400).json({
+        success: false,
+        message: getEarlyAccessValidationMessage(issue?.path[0]?.toString())
+      });
+      return;
+    }
+
+    const result = await earlyAccessService.create(parsed.data);
+    res.status(201).json(result);
+  },
+
   async getManagedAppointment(req: Request, res: Response) {
     const appointment = await publicAppointmentManagementService.getManagedAppointment(getRequiredParam(req, "token"));
     res.json({ data: appointment });
@@ -114,5 +143,27 @@ export const publicController = {
       req.body
     );
     res.json({ data: appointment });
+  },
+
+  async getAppointmentActionLink(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.getAppointmentActionLink(
+      getRequiredParam(req, "shortCode")
+    );
+    res.json(appointment);
+  },
+
+  async cancelAppointmentActionLink(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.cancelAppointmentActionLink(
+      getRequiredParam(req, "shortCode")
+    );
+    res.json(appointment);
+  },
+
+  async rescheduleAppointmentActionLink(req: Request, res: Response) {
+    const appointment = await publicAppointmentManagementService.rescheduleAppointmentActionLink(
+      getRequiredParam(req, "shortCode"),
+      req.body
+    );
+    res.json(appointment);
   }
 };

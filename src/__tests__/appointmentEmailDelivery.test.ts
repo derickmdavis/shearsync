@@ -575,7 +575,10 @@ describe("appointment email delivery", () => {
     assert.equal(message.subject, "Maya Johnson Hair saved your Silk Press spot");
     assert.match(message.text, /Your appointment with Maya Johnson Hair is confirmed\.\n\nPlease arrive 10 minutes early, Jane Doe\./);
     assert.match(message.text, /Bring inspiration photos if you have them\.\n\nService: Silk Press/);
-    assert.match(message.html, /<p>Please arrive 10 minutes early, Jane Doe\.<br>Bring inspiration photos if you have them\.<\/p><ul>/);
+    assert.match(
+      message.html,
+      /<p>Please arrive 10 minutes early, Jane Doe\.<br>Bring inspiration photos if you have them\.<\/p><p><a href="https:\/\/book\.example\.com\/appointments\/manage\/manage-token"[^>]*>Manage Appointment<\/a><\/p><ul>/
+    );
   });
 
   it("escapes custom confirmation blocks in html output", () => {
@@ -1099,6 +1102,8 @@ describe("appointment email delivery", () => {
   });
 
   it("snapshots configured confirmation templates when queueing appointment emails", async () => {
+    const previousWebAppUrl = env.WEB_APP_URL;
+    env.WEB_APP_URL = "https://dripdesk.example";
     const supabase = installMockSupabase({
       users: [
         {
@@ -1125,6 +1130,7 @@ describe("appointment email delivery", () => {
           email: "jane@example.com"
         }
       ],
+      appointment_action_links: [],
       appointment_email_templates: [
         {
           id: "template-1",
@@ -1160,11 +1166,15 @@ describe("appointment email delivery", () => {
       );
 
       assert.ok(queued);
-      assert.deepEqual(supabase.state.appointment_email_events[0]?.template_data && (supabase.state.appointment_email_events[0].template_data as Record<string, unknown>).email_template, {
+      const templateData = supabase.state.appointment_email_events[0]?.template_data as Record<string, unknown>;
+      assert.deepEqual(templateData.email_template, {
         subject_template: "{{business_name}} saved your {{service_name}} spot",
         custom_message_block: "Please arrive 10 minutes early."
       });
+      assert.equal(supabase.state.appointment_action_links.length, 1);
+      assert.match(String(templateData.management_url), /^https:\/\/dripdesk\.example\/manage\/[A-Za-z0-9_-]{8,32}$/);
     } finally {
+      env.WEB_APP_URL = previousWebAppUrl;
       supabase.restore();
     }
   });

@@ -13,6 +13,10 @@ export const publicAppointmentManagementTokenParamSchema = z.object({
   token: z.string().min(1).max(4000)
 });
 
+export const appointmentActionShortCodeParamSchema = z.object({
+  shortCode: z.string().min(8).max(32).regex(/^[A-Za-z0-9_-]+$/)
+});
+
 export const referralCodeParamSchema = z.object({
   referralCode: z.string().regex(/^rf_[A-Za-z0-9]{8,24}$/)
 });

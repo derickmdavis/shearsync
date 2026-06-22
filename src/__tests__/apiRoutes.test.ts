@@ -5881,6 +5881,146 @@ describe("API handlers", () => {
     }
   });
 
+  it("returns a sanitized public appointment from a short manage link", async () => {
+    const appointmentId = "88888888-8888-4888-8888-888888888888";
+    const clientId = "77777777-7777-4777-8777-777777777777";
+    const appointmentStartTime = "2099-05-11T15:00:00.000Z";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "maya@example.com",
+          business_name: "Maya Johnson Hair",
+          timezone: "UTC"
+        }
+      ],
+      stylists: [
+        {
+          id: "stylist-1",
+          user_id: userId,
+          slug: "maya-johnson",
+          display_name: "Maya Johnson",
+          booking_enabled: true
+        }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Jane",
+          last_name: "Doe",
+          email: "jane@example.com",
+          phone: "7205550100",
+          notes: "private"
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_date: appointmentStartTime,
+          duration_minutes: 60,
+          service_name: "Silk Press",
+          price: 95,
+          status: "scheduled"
+        }
+      ],
+      appointment_action_links: [
+        {
+          id: "link-1",
+          user_id: userId,
+          appointment_id: appointmentId,
+          client_id: clientId,
+          short_code: "abc123XYZ9",
+          purpose: "manage_appointment",
+          allowed_actions: ["cancel", "reschedule"],
+          expires_at: "2099-06-11T15:00:00.000Z",
+          revoked_at: null
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.getAppointmentActionLink(request, res),
+        createMockRequest({ params: { shortCode: "abc123XYZ9" } })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        valid: true,
+        appointment: {
+          id: appointmentId,
+          serviceName: "Silk Press",
+          appointmentDate: appointmentStartTime,
+          durationMinutes: 60,
+          status: "scheduled",
+          price: 95
+        },
+        stylist: {
+          displayName: "Maya Johnson",
+          slug: "maya-johnson",
+          timezone: "UTC"
+        },
+        client: {
+          firstName: "Jane"
+        },
+        allowedActions: {
+          canCancel: true,
+          canReschedule: true,
+          cancelDisabledReason: null,
+          rescheduleDisabledReason: null
+        },
+        policy: {
+          cancellationPolicyText: null,
+          reschedulePolicyText: null
+        }
+      });
+      assert.equal(supabase.state.appointment_action_links[0]?.last_accessed_at !== undefined, true);
+      assert.equal(JSON.stringify(response.body).includes("jane@example.com"), false);
+      assert.equal(JSON.stringify(response.body).includes("7205550100"), false);
+      assert.equal(JSON.stringify(response.body).includes("private"), false);
+      assert.equal(JSON.stringify(response.body).includes(userId), false);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns an invalid envelope for expired short manage links", async () => {
+    const supabase = installMockSupabase({
+      appointment_action_links: [
+        {
+          id: "link-1",
+          user_id: userId,
+          appointment_id: "88888888-8888-4888-8888-888888888888",
+          client_id: "77777777-7777-4777-8777-777777777777",
+          short_code: "expired999",
+          purpose: "manage_appointment",
+          allowed_actions: ["cancel", "reschedule"],
+          expires_at: "2020-06-11T15:00:00.000Z",
+          revoked_at: null
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.getAppointmentActionLink(request, res),
+        createMockRequest({ params: { shortCode: "expired999" } })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.body, {
+        valid: false,
+        reason: "expired",
+        message: "This appointment link has expired. Please contact your stylist."
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("cancels a public managed appointment from a valid management token", async () => {
     const appointmentId = "88888888-8888-4888-8888-888888888888";
     const clientId = "77777777-7777-4777-8777-777777777777";

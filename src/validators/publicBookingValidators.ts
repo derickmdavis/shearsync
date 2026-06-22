@@ -48,3 +48,11 @@ export const getPublicAvailabilitySlotsSchema = getCalendarDaySchema.extend({
 export const reschedulePublicAppointmentSchema = z.object({
   requested_datetime: isoDateTimeSchema
 });
+
+export const reschedulePublicAppointmentActionLinkSchema = z.object({
+  requested_datetime: isoDateTimeSchema.optional(),
+  newAppointmentDate: isoDateTimeSchema.optional(),
+  service_id: z.string().uuid().optional()
+}).refine((value) => value.requested_datetime || value.newAppointmentDate, {
+  message: "requested_datetime or newAppointmentDate is required"
+});

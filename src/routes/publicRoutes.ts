@@ -2,7 +2,12 @@ import { Router } from "express";
 import { publicController } from "../controllers/publicController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
-import { publicAppointmentManagementTokenParamSchema, referralCodeParamSchema, slugParamSchema } from "../validators/common";
+import {
+  appointmentActionShortCodeParamSchema,
+  publicAppointmentManagementTokenParamSchema,
+  referralCodeParamSchema,
+  slugParamSchema
+} from "../validators/common";
 import {
   finalizePublicReferencePhotoSchema,
   publicReferencePhotoUploadIntentSchema
@@ -13,6 +18,7 @@ import {
   createPublicBookingSchema,
   getPublicServicesSchema,
   getPublicAvailabilitySlotsSchema,
+  reschedulePublicAppointmentActionLinkSchema,
   reschedulePublicAppointmentSchema
 } from "../validators/publicBookingValidators";
 import { createPublicWaitlistEntrySchema } from "../validators/waitlistValidators";
@@ -45,6 +51,7 @@ publicRouter.post(
   validate({ body: createPublicBookingIntakeSchema }),
   asyncHandler(publicController.createBookingIntake)
 );
+publicRouter.post("/early-access", asyncHandler(publicController.createEarlyAccessRequest));
 publicRouter.post("/bookings", validate({ body: createPublicBookingSchema }), asyncHandler(publicController.createBooking));
 publicRouter.post(
   "/appointment-reference-photos/upload-intent",
@@ -60,6 +67,21 @@ publicRouter.post(
   "/stylists/:slug/waitlist",
   validate({ params: slugParamSchema, body: createPublicWaitlistEntrySchema }),
   asyncHandler(publicController.createWaitlistEntry)
+);
+publicRouter.get(
+  "/appointment-links/:shortCode",
+  validate({ params: appointmentActionShortCodeParamSchema }),
+  asyncHandler(publicController.getAppointmentActionLink)
+);
+publicRouter.post(
+  "/appointment-links/:shortCode/cancel",
+  validate({ params: appointmentActionShortCodeParamSchema }),
+  asyncHandler(publicController.cancelAppointmentActionLink)
+);
+publicRouter.post(
+  "/appointment-links/:shortCode/reschedule",
+  validate({ params: appointmentActionShortCodeParamSchema, body: reschedulePublicAppointmentActionLinkSchema }),
+  asyncHandler(publicController.rescheduleAppointmentActionLink)
 );
 publicRouter.get(
   "/appointments/manage/:token",

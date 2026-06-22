@@ -548,6 +548,9 @@ export const renderAppointmentEmail = (
   const detailItems = details
     .map((detail) => `<li>${escapeHtml(detail)}</li>`)
     .join("");
+  const manageAppointmentButton = managementUrl && !["rebooking_prompt", "birthday_reminder", "thank_you_email"].includes(emailType)
+    ? `<p><a href="${escapeHtml(managementUrl)}" style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px;">Manage Appointment</a></p>`
+    : "";
   const qrCodeAttachment = emailType === "thank_you_email"
     ? createReferralQrCodeAttachment(templateData.qr_code_url)
     : null;
@@ -567,6 +570,7 @@ export const renderAppointmentEmail = (
       `<p>Hi ${escapeHtml(recipientName)},</p>`,
       `<p>${escapeHtml(intro)}</p>`,
       ...renderHtmlBlock(customMessageBlock),
+      manageAppointmentButton,
       `<ul>${detailItems}</ul>`,
       qrCodeImage,
       ...(contactLine ? [`<p>${escapeHtml(contactLine)}</p>`] : []),
