@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "202606160001_client_soft_delete_retention";
+const REQUIRED_SCHEMA_VERSION = "202606220001_external_payment_shortcuts";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -41,6 +41,41 @@ const REQUIRED_TABLE_COLUMNS = {
     "deleted_at",
     "deleted_reason",
     "purge_after"
+  ],
+  payment_methods: [
+    "id",
+    "user_id",
+    "provider",
+    "display_name",
+    "payment_url",
+    "qr_image_url",
+    "qr_image_path",
+    "instructions",
+    "is_default",
+    "is_active",
+    "sort_order",
+    "created_at",
+    "updated_at"
+  ],
+  appointment_payments: [
+    "id",
+    "user_id",
+    "appointment_id",
+    "payment_method_id",
+    "status",
+    "amount",
+    "tip_amount",
+    "total_recorded",
+    "external_provider",
+    "external_provider_label",
+    "external_reference",
+    "notes",
+    "marked_paid_at",
+    "marked_unpaid_at",
+    "voided_at",
+    "is_current",
+    "created_at",
+    "updated_at"
   ]
 } as const;
 
@@ -76,6 +111,21 @@ export const schemaReadinessService = {
       if (error) {
         throw toSchemaError(table, error);
       }
+    }
+
+    const { error: paymentQrBucketError } = await supabaseAdmin.storage.getBucket("payment-method-qrs");
+
+    if (paymentQrBucketError) {
+      throw new ApiError(
+        503,
+        "Database schema is out of date; apply the required Supabase migrations.",
+        {
+          requiredSchemaVersion: REQUIRED_SCHEMA_VERSION,
+          bucket: "payment-method-qrs",
+          message: paymentQrBucketError.message
+        },
+        { exposeDetails: true }
+      );
     }
   }
 };

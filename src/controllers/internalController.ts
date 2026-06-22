@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { logger } from "../lib/logger";
 import { appointmentEmailDeliveryService } from "../services/appointmentEmailDeliveryService";
 import { appointmentImageCleanupService } from "../services/appointmentImageCleanupService";
 import { appointmentRemindersService } from "../services/appointmentRemindersService";
@@ -13,9 +14,22 @@ export const internalController = {
       limit?: number;
       allow_noop?: boolean;
     };
+    const beforeMetrics = await appointmentEmailDeliveryService.getEmailQueueMetrics();
+    logger.info("appointment_email_queue_metrics_before_processing", {
+      requestId: req.requestId,
+      ...beforeMetrics
+    });
+
     const result = await appointmentEmailDeliveryService.processQueuedAppointmentEmails({
       limit: typeof query.limit === "number" ? query.limit : undefined,
       allowNoopProvider: query.allow_noop === true
+    });
+    const afterMetrics = await appointmentEmailDeliveryService.getEmailQueueMetrics();
+
+    logger.info("appointment_email_processing_completed", {
+      requestId: req.requestId,
+      ...result,
+      queue: afterMetrics
     });
 
     res.json({ data: result });

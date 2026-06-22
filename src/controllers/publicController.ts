@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { env } from "../config/env";
 import { ApiError } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { getRequiredParam } from "../lib/request";
 import { createEarlyAccessRequestSchema } from "../validators/earlyAccessValidators";
 import { availabilityService } from "../services/availabilityService";
@@ -19,6 +20,9 @@ const setLiveInventoryHeaders = (res: Response) => {
     res.set("Cache-Control", "no-store");
   }
 };
+
+const getElapsedMs = (startedAt: bigint): number =>
+  Math.round((Number(process.hrtime.bigint() - startedAt) / 1_000_000) * 100) / 100;
 
 const getEarlyAccessValidationMessage = (path: string | undefined): string => {
   if (path === "email") {
@@ -76,15 +80,42 @@ export const publicController = {
 
   async getAvailabilitySlots(req: Request, res: Response) {
     setLiveInventoryHeaders(res);
-    const availability = await availabilityService.getBookableSlotsByStylistSlug(
-      getRequiredParam(req, "slug"),
-      req.query.service_id as string,
-      req.query.date as string,
-      typeof req.query.booking_context_token === "string"
-        ? req.query.booking_context_token
-        : undefined
-    );
-    res.json({ data: availability });
+    const startedAt = process.hrtime.bigint();
+    const slug = getRequiredParam(req, "slug");
+    const serviceId = req.query.service_id as string;
+    const date = req.query.date as string;
+
+    try {
+      const availability = await availabilityService.getBookableSlotsByStylistSlug(
+        slug,
+        serviceId,
+        date,
+        typeof req.query.booking_context_token === "string"
+          ? req.query.booking_context_token
+          : undefined
+      );
+      logger.info("public_availability_slots_generated", {
+        requestId: req.requestId,
+        publicStylistSlug: slug,
+        serviceId,
+        date,
+        latencyMs: getElapsedMs(startedAt),
+        initialSlotCount: availability.slots.length,
+        moreSlotCount: availability.moreSlots.length,
+        hasMore: availability.hasMore
+      });
+      res.json({ data: availability });
+    } catch (error) {
+      logger.warn("public_availability_slots_failed", {
+        requestId: req.requestId,
+        publicStylistSlug: slug,
+        serviceId,
+        date,
+        latencyMs: getElapsedMs(startedAt),
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   },
 
   async createBookingIntake(req: Request, res: Response) {
@@ -93,8 +124,32 @@ export const publicController = {
   },
 
   async createBooking(req: Request, res: Response) {
-    const confirmation = await publicBookingsService.create(req.body);
-    res.status(201).json({ data: confirmation });
+    const startedAt = process.hrtime.bigint();
+    const stylistSlug = typeof req.body.stylist_slug === "string" ? req.body.stylist_slug : undefined;
+    const serviceId = typeof req.body.service_id === "string" ? req.body.service_id : undefined;
+
+    try {
+      const confirmation = await publicBookingsService.create(req.body);
+      logger.info("public_booking_created", {
+        requestId: req.requestId,
+        publicStylistSlug: stylistSlug,
+        serviceId,
+        appointmentId: confirmation.appointment_id,
+        clientId: confirmation.client_id,
+        status: confirmation.status,
+        latencyMs: getElapsedMs(startedAt)
+      });
+      res.status(201).json({ data: confirmation });
+    } catch (error) {
+      logger.warn("public_booking_failed", {
+        requestId: req.requestId,
+        publicStylistSlug: stylistSlug,
+        serviceId,
+        latencyMs: getElapsedMs(startedAt),
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   },
 
   async createReferencePhotoUploadIntent(req: Request, res: Response) {

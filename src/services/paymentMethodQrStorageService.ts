@@ -1,0 +1,77 @@
+import { randomUUID } from "crypto";
+import { ApiError } from "../lib/errors";
+import { supabaseAdmin } from "../lib/supabase";
+
+export const PAYMENT_METHOD_QRS_BUCKET = "payment-method-qrs";
+export const PAYMENT_METHOD_QR_ALLOWED_CONTENT_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export const PAYMENT_METHOD_QR_MAX_BYTES = 5 * 1024 * 1024;
+export const PAYMENT_METHOD_QR_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
+
+type PaymentMethodQrContentType = (typeof PAYMENT_METHOD_QR_ALLOWED_CONTENT_TYPES)[number];
+
+const EXTENSIONS_BY_CONTENT_TYPE: Record<PaymentMethodQrContentType, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp"
+};
+
+type StorageErrorShape = {
+  message?: string;
+  statusCode?: string | number;
+  error?: string;
+};
+
+const toStorageApiErrorDetails = (error: StorageErrorShape | null) =>
+  error
+    ? {
+        message: error.message,
+        statusCode: error.statusCode,
+        error: error.error
+      }
+    : undefined;
+
+const getExtensionForContentType = (contentType: string): string => {
+  if (!PAYMENT_METHOD_QR_ALLOWED_CONTENT_TYPES.includes(contentType as PaymentMethodQrContentType)) {
+    throw new ApiError(400, "Unsupported payment shortcut QR content type");
+  }
+
+  return EXTENSIONS_BY_CONTENT_TYPE[contentType as PaymentMethodQrContentType];
+};
+
+export const paymentMethodQrStorageService = {
+  bucket: PAYMENT_METHOD_QRS_BUCKET,
+
+  generateStoragePath(userId: string, contentType: string): string {
+    const extension = getExtensionForContentType(contentType);
+    return `${PAYMENT_METHOD_QRS_BUCKET}/${userId}/${randomUUID()}.${extension}`;
+  },
+
+  async createUploadIntent(userId: string, payload: {
+    content_type: string;
+    size_bytes: number;
+  }): Promise<{
+    upload_url: string;
+    storage_path: string;
+    expires_in: number;
+  }> {
+    if (payload.size_bytes > PAYMENT_METHOD_QR_MAX_BYTES) {
+      throw new ApiError(400, "Payment shortcut QR image exceeds maximum size");
+    }
+
+    const storagePath = this.generateStoragePath(userId, payload.content_type);
+    const { data, error } = await supabaseAdmin
+      .storage
+      .from(PAYMENT_METHOD_QRS_BUCKET)
+      .createSignedUploadUrl(storagePath);
+
+    if (error) {
+      throw new ApiError(500, "Unable to create payment shortcut QR upload URL", toStorageApiErrorDetails(error));
+    }
+
+    return {
+      upload_url: data.signedUrl,
+      storage_path: storagePath,
+      expires_in: PAYMENT_METHOD_QR_UPLOAD_EXPIRES_IN_SECONDS
+    };
+  }
+};

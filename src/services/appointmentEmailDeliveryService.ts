@@ -59,6 +59,13 @@ export interface AppointmentEmailProcessingResult {
   failed: number;
 }
 
+export interface AppointmentEmailQueueMetrics {
+  pendingCount: number;
+  failedCount: number;
+  lagSeconds: number | null;
+  oldestQueuedAt: string | null;
+}
+
 interface AppointmentEmailTemplateData {
   recipient_name?: string;
   service_name?: string;
@@ -693,6 +700,45 @@ const getRetryableEmailEvents = async ({
     .slice(0, limit);
 };
 
+const getEmailQueueMetrics = async (now = new Date()): Promise<AppointmentEmailQueueMetrics> => {
+  const [pendingResult, failedResult, oldestQueuedResult] = await Promise.all([
+    supabaseAdmin
+      .from("appointment_email_events")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["queued", "sending"]),
+    supabaseAdmin
+      .from("appointment_email_events")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "failed"),
+    supabaseAdmin
+      .from("appointment_email_events")
+      .select("created_at")
+      .eq("status", "queued")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+  ]);
+
+  handleSupabaseError(pendingResult.error, "Unable to load pending appointment email count");
+  handleSupabaseError(failedResult.error, "Unable to load failed appointment email count");
+  handleSupabaseError(oldestQueuedResult.error, "Unable to load appointment email queue lag");
+
+  const oldestQueuedAt = typeof oldestQueuedResult.data?.created_at === "string"
+    ? oldestQueuedResult.data.created_at
+    : null;
+  const oldestQueuedTime = oldestQueuedAt ? new Date(oldestQueuedAt).getTime() : NaN;
+  const lagSeconds = Number.isFinite(oldestQueuedTime)
+    ? Math.max(0, Math.floor((now.getTime() - oldestQueuedTime) / 1000))
+    : null;
+
+  return {
+    pendingCount: pendingResult.count ?? 0,
+    failedCount: failedResult.count ?? 0,
+    lagSeconds,
+    oldestQueuedAt
+  };
+};
+
 const markEmailEvent = async (
   emailEventId: string,
   updates: Row
@@ -783,6 +829,7 @@ const claimEmailEvent = async (emailEvent: Row, now: Date): Promise<Row | null> 
 export const appointmentEmailDeliveryService = {
   noopEmailProvider,
   createResendEmailProvider,
+  getEmailQueueMetrics,
   renderAppointmentEmail,
 
   async processQueuedAppointmentEmails(
