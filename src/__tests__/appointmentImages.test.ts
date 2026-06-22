@@ -37,6 +37,7 @@ const THUMB_PATH =
 
 type StorageMockOptions = {
   info?: Record<string, { data: Record<string, unknown> | null; error: unknown | null }>;
+  signedReadError?: unknown | null;
 };
 
 const installStorageMock = (options: StorageMockOptions = {}) => {
@@ -60,6 +61,10 @@ const installStorageMock = (options: StorageMockOptions = {}) => {
     },
     createSignedUrl: async (path: string) => {
       calls.createSignedUrl.push(path);
+      if (options.signedReadError) {
+        return { data: null, error: options.signedReadError };
+      }
+
       return {
         data: {
           signedUrl: `https://example.supabase.co/read/${path}?token=test`
@@ -605,6 +610,51 @@ describe("appointment images service", () => {
       assert.equal(reordered[0]?.id, IMAGE_ID);
       assert.deepEqual(storage.calls.remove, [[DISPLAY_PATH, THUMB_PATH]]);
       assert.equal(supabase.state.appointment_images.length, 0);
+    } finally {
+      storage.restore();
+      supabase.restore();
+    }
+  });
+
+  it("lists ready images with a null thumbnail URL when Storage signing is unavailable", async () => {
+    const supabase = installMockSupabase({
+      ...baseState(),
+      appointment_images: [
+        {
+          id: IMAGE_ID,
+          user_id: USER_ID,
+          client_id: CLIENT_ID,
+          appointment_id: APPOINTMENT_ID,
+          bucket: "appointment-images",
+          storage_path: DISPLAY_PATH,
+          thumbnail_path: THUMB_PATH,
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "ready",
+          finalized_at: "2026-06-16T18:05:00.000Z",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-06-16T18:05:00.000Z"
+        }
+      ]
+    });
+    const storage = installStorageMock({
+      signedReadError: {
+        message: "Bucket not found",
+        statusCode: "404",
+        error: "not_found"
+      }
+    });
+
+    try {
+      const listed = await appointmentImagesService.list(USER_ID, APPOINTMENT_ID);
+
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0]?.id, IMAGE_ID);
+      assert.equal(listed[0]?.thumbnail_url, null);
+      assert.equal("storage_path" in (listed[0] ?? {}), false);
+      assert.equal("thumbnail_path" in (listed[0] ?? {}), false);
+      assert.deepEqual(storage.calls.createSignedUrl, [THUMB_PATH]);
     } finally {
       storage.restore();
       supabase.restore();

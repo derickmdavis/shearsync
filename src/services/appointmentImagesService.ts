@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { ApiError, requireFound } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { supabaseAdmin } from "../lib/supabase";
 import {
   APPOINTMENT_IMAGES_BUCKET,
@@ -224,17 +225,45 @@ const omitStoragePaths = (image: Row): Row => {
   return rest;
 };
 
+const createOptionalSignedReadUrl = async (
+  path: string,
+  expiresInSeconds: number,
+  context: Row = {}
+): Promise<string | null> => {
+  try {
+    return await appointmentImageStorageService.createSignedReadUrl(path, expiresInSeconds);
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode >= 500) {
+      logger.warn("appointment_image_signed_read_url_unavailable", {
+        imageId: context.id,
+        appointmentId: context.appointment_id,
+        userId: context.user_id,
+        statusCode: error.statusCode,
+        message: error.message
+      });
+      return null;
+    }
+
+    throw error;
+  }
+};
+
 const normalizeImage = async (
   image: Row,
   includeThumbnailUrl = false,
-  exposeStoragePaths = true
+  exposeStoragePaths = true,
+  tolerateThumbnailUrlFailure = false
 ): Promise<Row> => {
+  const createThumbnailUrl = tolerateThumbnailUrlFailure
+    ? createOptionalSignedReadUrl
+    : appointmentImageStorageService.createSignedReadUrl.bind(appointmentImageStorageService);
   const normalized = includeThumbnailUrl && typeof image.thumbnail_path === "string"
     ? {
         ...image,
-        thumbnail_url: await appointmentImageStorageService.createSignedReadUrl(
+        thumbnail_url: await createThumbnailUrl(
           image.thumbnail_path,
-          SIGNED_THUMBNAIL_URL_TTL_SECONDS
+          SIGNED_THUMBNAIL_URL_TTL_SECONDS,
+          image
         )
       }
     : image;
@@ -313,7 +342,7 @@ export const appointmentImagesService = {
 
     handleSupabaseError(error, "Unable to load appointment images");
     const images = (data ?? []) as unknown as RowList;
-    return Promise.all(images.map((image) => normalizeImage(image, true, false)));
+    return Promise.all(images.map((image) => normalizeImage(image, true, false, true)));
   },
 
   async prefetchThumbnails(
@@ -391,7 +420,7 @@ export const appointmentImagesService = {
         continue;
       }
 
-      appointmentImages.push(await normalizeImage(image, true, false));
+      appointmentImages.push(await normalizeImage(image, true, false, true));
       imagesByAppointment.set(appointmentId, appointmentImages);
       imageCount += 1;
     }
