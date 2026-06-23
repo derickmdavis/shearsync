@@ -1,5 +1,6 @@
 import { env } from "../config/env";
 import { ApiError, requireFound } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { normalizeEmail } from "../lib/communications";
 import { formatDateInTimeZone } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
@@ -31,6 +32,10 @@ interface QueueManualRebookNudgeOptions {
   clientId: string;
   rebookIntervalDays?: number;
   approvalRequired?: boolean;
+}
+
+interface ProcessQueuedNudgeEmailOptions {
+  requestId?: string;
 }
 
 interface CursorPayload {
@@ -376,6 +381,42 @@ const queueEmailForNudge = async (nudge: Row): Promise<Row | null> => {
   return data as Row;
 };
 
+const claimQueuedNudgeForEmail = async (nudge: Row, now: Date): Promise<Row | null> => {
+  const nudgeId = String(nudge.id ?? "");
+  if (!nudgeId) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("rebook_nudges")
+    .update({
+      status: "sending",
+      error: null
+    })
+    .eq("id", nudgeId)
+    .eq("status", "queued")
+    .lt("send_after", now.toISOString())
+    .select("*")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to claim rebook nudge for email");
+  return data as Row | null;
+};
+
+const markNudgeEmailQueueFailure = async (nudgeId: string, error: unknown): Promise<void> => {
+  const message = error instanceof Error ? error.message : "Unable to queue rebook nudge email";
+  const { error: updateError } = await supabaseAdmin
+    .from("rebook_nudges")
+    .update({
+      status: "failed",
+      error: message
+    })
+    .eq("id", nudgeId)
+    .eq("status", "sending");
+
+  handleSupabaseError(updateError, "Unable to mark rebook nudge email queue failure");
+};
+
 export const rebookNudgesService = {
   async listForUser(userId: string, filters: ListRebookNudgesFilters) {
     await entitlementsService.assertFeatureAllowed(userId, "rebookNudges");
@@ -629,7 +670,11 @@ export const rebookNudgesService = {
     };
   },
 
-  async processQueuedNudgeEmails(now = new Date(), limit = 50): Promise<{ processed: number; queued_emails: number }> {
+  async processQueuedNudgeEmails(
+    now = new Date(),
+    limit = 50,
+    options: ProcessQueuedNudgeEmailOptions = {}
+  ): Promise<{ processed: number; queued_emails: number }> {
     const { data, error } = await supabaseAdmin
       .from("rebook_nudges")
       .select("*")
@@ -639,34 +684,70 @@ export const rebookNudgesService = {
       .limit(limit);
 
     handleSupabaseError(error, "Unable to load queued rebook nudges");
+    const candidates = (data ?? []) as Row[];
+    const oldestDueAt = getString(candidates.find((nudge) => getString(nudge, "send_after")), "send_after");
+    const lagSeconds = oldestDueAt
+      ? Math.max(0, Math.floor((now.getTime() - new Date(oldestDueAt).getTime()) / 1000))
+      : null;
+    logger.info("rebook_nudge_email_processing_started", {
+      requestId: options.requestId,
+      candidateCount: candidates.length,
+      oldestDueAt,
+      lagSeconds
+    });
+
+    let processed = 0;
     let queuedEmails = 0;
 
-    for (const nudge of (data ?? []) as Row[]) {
+    for (const nudge of candidates) {
       const userId = String(nudge.user_id ?? "");
       if (!userId || !(await entitlementsService.isFeatureAllowed(userId, "rebookNudges"))) {
         continue;
       }
 
-      const emailEvent = await queueEmailForNudge(nudge);
-      if (!emailEvent) {
+      const claimedNudge = await claimQueuedNudgeForEmail(nudge, now);
+      if (!claimedNudge) {
         continue;
       }
 
-      queuedEmails += 1;
-      const { error: updateError } = await supabaseAdmin
-        .from("rebook_nudges")
-        .update({
-          status: "sending",
-          email_event_id: emailEvent.id,
-          error: null
-        })
-        .eq("id", nudge.id);
+      processed += 1;
+      const nudgeId = String(claimedNudge.id ?? "");
+      try {
+        const emailEvent = await queueEmailForNudge(claimedNudge);
+        if (!emailEvent) {
+          continue;
+        }
 
-      handleSupabaseError(updateError, "Unable to mark rebook nudge email queued");
+        queuedEmails += 1;
+        const { error: updateError } = await supabaseAdmin
+          .from("rebook_nudges")
+          .update({
+            email_event_id: emailEvent.id,
+            error: null
+          })
+          .eq("id", nudgeId)
+          .eq("status", "sending");
+
+        handleSupabaseError(updateError, "Unable to link queued rebook nudge email");
+      } catch (queueError) {
+        await markNudgeEmailQueueFailure(nudgeId, queueError);
+        logger.error("rebook_nudge_email_queue_failed", {
+          requestId: options.requestId,
+          rebookNudgeId: nudgeId,
+          userId,
+          errorMessage: queueError instanceof Error ? queueError.message : String(queueError)
+        });
+      }
     }
 
+    logger.info("rebook_nudge_email_processing_completed", {
+      requestId: options.requestId,
+      processed,
+      queuedEmails
+    });
+
     return {
-      processed: ((data ?? []) as Row[]).length,
+      processed,
       queued_emails: queuedEmails
     };
   },

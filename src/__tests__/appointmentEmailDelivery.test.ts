@@ -1391,6 +1391,12 @@ describe("appointment email delivery", () => {
           custom_message_block: "Unified book here: {{rebook_url}}"
         }
       );
+
+      const secondProcessResult = await rebookNudgesService.processQueuedNudgeEmails(
+        new Date("2026-06-10T12:01:00.000Z")
+      );
+      assert.deepEqual(secondProcessResult, { processed: 0, queued_emails: 0 });
+      assert.equal(supabase.state.appointment_email_events.length, 1);
     } finally {
       supabase.restore();
     }
@@ -1501,6 +1507,12 @@ describe("appointment email delivery", () => {
           custom_message_block: "Unified code: {{referral_code}}"
         }
       );
+
+      const secondProcessResult = await thankYouEmailsService.processQueuedThankYouEmails(
+        new Date("2026-06-03T12:01:00.000Z")
+      );
+      assert.deepEqual(secondProcessResult, { processed: 0, queued_emails: 0 });
+      assert.equal(supabase.state.appointment_email_events.length, 1);
     } finally {
       env.WEB_APP_URL = previousWebAppUrl;
       supabase.restore();
@@ -2285,6 +2297,15 @@ describe("appointment email delivery", () => {
       assert.match(sentMessages[0]?.subject ?? "", /Happy birthday from Maya Johnson Hair/);
       assert.equal(supabase.state.appointment_email_events[0]?.status, "sent");
       assert.equal(supabase.state.birthday_reminders[0]?.status, "sent");
+
+      const secondQueueResult = await birthdayRemindersService.processQueuedBirthdayEmails(
+        new Date("2026-06-10T09:03:00.000Z")
+      );
+      assert.deepEqual(secondQueueResult, {
+        processed: 0,
+        queued_emails: 0
+      });
+      assert.equal(supabase.state.appointment_email_events.length, 1);
     } finally {
       supabase.restore();
     }

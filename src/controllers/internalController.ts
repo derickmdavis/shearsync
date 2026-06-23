@@ -58,7 +58,9 @@ export const internalController = {
 
   async processRebookNudges(req: Request, res: Response) {
     const query = req.query as { limit?: number };
-    const result = await rebookNudgesService.processQueuedNudgeEmails(new Date(), query.limit);
+    const result = await rebookNudgesService.processQueuedNudgeEmails(new Date(), query.limit, {
+      requestId: req.requestId
+    });
     res.json({ data: result });
   },
 
@@ -70,7 +72,9 @@ export const internalController = {
 
   async processBirthdayReminders(req: Request, res: Response) {
     const query = req.query as { limit?: number };
-    const result = await birthdayRemindersService.processQueuedBirthdayEmails(new Date(), query.limit);
+    const result = await birthdayRemindersService.processQueuedBirthdayEmails(new Date(), query.limit, {
+      requestId: req.requestId
+    });
     res.json({ data: result });
   },
 
@@ -89,7 +93,9 @@ export const internalController = {
 
   async processThankYouEmails(req: Request, res: Response) {
     const query = req.query as { limit?: number };
-    const result = await thankYouEmailsService.processQueuedThankYouEmails(new Date(), query.limit);
+    const result = await thankYouEmailsService.processQueuedThankYouEmails(new Date(), query.limit, {
+      requestId: req.requestId
+    });
     res.json({ data: result });
   },
 

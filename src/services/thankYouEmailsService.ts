@@ -1,5 +1,6 @@
 import QRCode from "qrcode";
 import { ApiError, requireFound } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { normalizeEmail } from "../lib/communications";
 import { formatDateInTimeZone } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
@@ -31,6 +32,10 @@ interface ListThankYouEmailsFilters {
 interface QueueManualThankYouEmailOptions {
   appointmentId: string;
   approvalRequired?: boolean;
+}
+
+interface ProcessQueuedThankYouEmailOptions {
+  requestId?: string;
 }
 
 interface QueueDueOptions {
@@ -401,6 +406,42 @@ const queueEmailForThankYou = async (thankYouEmail: Row): Promise<Row | null> =>
   return data as Row;
 };
 
+const claimQueuedThankYouEmailForDelivery = async (thankYouEmail: Row, now: Date): Promise<Row | null> => {
+  const thankYouEmailId = String(thankYouEmail.id ?? "");
+  if (!thankYouEmailId) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("thank_you_emails")
+    .update({
+      status: "sending",
+      error: null
+    })
+    .eq("id", thankYouEmailId)
+    .eq("status", "queued")
+    .lt("send_after", now.toISOString())
+    .select("*")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to claim thank you email for delivery");
+  return data as Row | null;
+};
+
+const markThankYouEmailQueueFailure = async (thankYouEmailId: string, error: unknown): Promise<void> => {
+  const message = error instanceof Error ? error.message : "Unable to queue thank you email event";
+  const { error: updateError } = await supabaseAdmin
+    .from("thank_you_emails")
+    .update({
+      status: "failed",
+      error: message
+    })
+    .eq("id", thankYouEmailId)
+    .eq("status", "sending");
+
+  handleSupabaseError(updateError, "Unable to mark thank you email queue failure");
+};
+
 export const thankYouEmailsService = {
   async listForUser(userId: string, filters: ListThankYouEmailsFilters) {
     await entitlementsService.assertFeatureAllowed(userId, "thankYouEmails");
@@ -637,7 +678,11 @@ export const thankYouEmailsService = {
     };
   },
 
-  async processQueuedThankYouEmails(now = new Date(), limit = 50): Promise<{ processed: number; queued_emails: number }> {
+  async processQueuedThankYouEmails(
+    now = new Date(),
+    limit = 50,
+    options: ProcessQueuedThankYouEmailOptions = {}
+  ): Promise<{ processed: number; queued_emails: number }> {
     const { data, error } = await supabaseAdmin
       .from("thank_you_emails")
       .select("*")
@@ -647,34 +692,70 @@ export const thankYouEmailsService = {
       .limit(limit);
 
     handleSupabaseError(error, "Unable to load queued thank you emails");
+    const candidates = (data ?? []) as Row[];
+    const oldestDueAt = getString(candidates.find((thankYouEmail) => getString(thankYouEmail, "send_after")), "send_after");
+    const lagSeconds = oldestDueAt
+      ? Math.max(0, Math.floor((now.getTime() - new Date(oldestDueAt).getTime()) / 1000))
+      : null;
+    logger.info("thank_you_email_processing_started", {
+      requestId: options.requestId,
+      candidateCount: candidates.length,
+      oldestDueAt,
+      lagSeconds
+    });
+
+    let processed = 0;
     let queuedEmails = 0;
 
-    for (const thankYouEmail of (data ?? []) as Row[]) {
+    for (const thankYouEmail of candidates) {
       const userId = String(thankYouEmail.user_id ?? "");
       if (!userId || !(await entitlementsService.isFeatureAllowed(userId, "thankYouEmails"))) {
         continue;
       }
 
-      const emailEvent = await queueEmailForThankYou(thankYouEmail);
-      if (!emailEvent) {
+      const claimedThankYouEmail = await claimQueuedThankYouEmailForDelivery(thankYouEmail, now);
+      if (!claimedThankYouEmail) {
         continue;
       }
 
-      queuedEmails += 1;
-      const { error: updateError } = await supabaseAdmin
-        .from("thank_you_emails")
-        .update({
-          status: "sending",
-          email_event_id: emailEvent.id,
-          error: null
-        })
-        .eq("id", thankYouEmail.id);
+      processed += 1;
+      const thankYouEmailId = String(claimedThankYouEmail.id ?? "");
+      try {
+        const emailEvent = await queueEmailForThankYou(claimedThankYouEmail);
+        if (!emailEvent) {
+          continue;
+        }
 
-      handleSupabaseError(updateError, "Unable to mark thank you email event queued");
+        queuedEmails += 1;
+        const { error: updateError } = await supabaseAdmin
+          .from("thank_you_emails")
+          .update({
+            email_event_id: emailEvent.id,
+            error: null
+          })
+          .eq("id", thankYouEmailId)
+          .eq("status", "sending");
+
+        handleSupabaseError(updateError, "Unable to link queued thank you email event");
+      } catch (queueError) {
+        await markThankYouEmailQueueFailure(thankYouEmailId, queueError);
+        logger.error("thank_you_email_queue_failed", {
+          requestId: options.requestId,
+          thankYouEmailId,
+          userId,
+          errorMessage: queueError instanceof Error ? queueError.message : String(queueError)
+        });
+      }
     }
 
+    logger.info("thank_you_email_processing_completed", {
+      requestId: options.requestId,
+      processed,
+      queuedEmails
+    });
+
     return {
-      processed: ((data ?? []) as Row[]).length,
+      processed,
       queued_emails: queuedEmails
     };
   },

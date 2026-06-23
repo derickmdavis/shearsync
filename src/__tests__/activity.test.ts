@@ -153,7 +153,8 @@ describe("Activity handlers", () => {
         { id: userId, timezone: "UTC" }
       ],
       clients: [
-        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" }
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" },
+        { id: secondClientId, user_id: userId, first_name: "Amanda", last_name: "Lee", email: "amanda@example.com", phone: "+15557654321" }
       ],
       appointments: [],
       activity_events: []
@@ -1628,7 +1629,7 @@ describe("Activity handlers", () => {
         { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
       ],
       clients: [
-        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller" }
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" }
       ],
       appointments: [
         {
@@ -1774,6 +1775,21 @@ describe("Activity handlers", () => {
           }
         }
       ],
+      client_communication_preferences: [
+        {
+          id: "sms-consent-dashboard",
+          user_id: userId,
+          client_id: clientId,
+          phone: "+15551234567",
+          phone_normalized: "+15551234567",
+          sms_opted_in_at: "2026-06-01T12:00:00.000Z",
+          sms_reminders_enabled: true,
+          sms_transactional_enabled: true,
+          sms_marketing_enabled: false,
+          sms_rebooking_enabled: false,
+          opted_out_all_sms: false
+        }
+      ],
       automation_settings: [
         {
           id: "90909090-9090-4909-8909-909090909090",
@@ -1848,7 +1864,7 @@ describe("Activity handlers", () => {
         cancellations_need_review_count: 1,
         waitlist_match_count: 1,
         pending_approval_count: 1,
-        pending_reminder_count: 3,
+        pending_reminder_count: 2,
         queued_review_request_count: 1,
         pending_rebook_nudge_count: 0,
         birthday_reminder_count: 0,
@@ -1861,9 +1877,8 @@ describe("Activity handlers", () => {
         [waitlistEntryId, "2026-06-07T17:00:00.000Z"]
       ]);
       assert.deepEqual(payload.reminder_queue.map((item) => [item.reminder_id, item.status]), [
-        [appointmentReminderId, "scheduled"],
-        [followUpReminderId, "scheduled"],
-        ["67676767-6767-4676-8676-676767676767", "queued"]
+        ["67676767-6767-4676-8676-676767676767", "queued"],
+        [appointmentReminderId, "scheduled"]
       ]);
       assert.equal(payload.reminder_queue.some((item) => item.reminder_id === duplicateAppointmentReminderId), false);
       assert.equal(payload.reminder_queue.find((item) => item.reminder_id === "67676767-6767-4676-8676-676767676767")?.channel, "email");
@@ -1877,7 +1892,7 @@ describe("Activity handlers", () => {
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.enabled, true);
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.status_label, "On for bookings");
       assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
-      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "3 scheduled");
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.status_label, "2 scheduled");
 
       const updateReq = createMockRequest({
         user: { id: userId } as Request["user"],
@@ -1898,6 +1913,512 @@ describe("Activity handlers", () => {
       const emailUpdateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), emailUpdateReq);
       assert.equal(emailUpdateResponse.statusCode, 200);
       assert.equal(supabase.state.automation_settings.find((setting) => setting.key === "email_confirmations")?.enabled, false);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("returns only eligible upcoming automated sends in the activity dashboard queue", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const rebookNudgeId = "rebook-auto-send";
+    const birthdayReminderId = "birthday-auto-send";
+    const thankYouEmailId = "thank-you-auto-send";
+    const queuedAppointmentEmailId = "appointment-email-auto-send";
+    const smsAppointmentReminderId = "appointment-sms-auto-send";
+    const queryLog: Array<{ table: string; operation: "in"; column: string; values: unknown[] }> = [];
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active", sms_monthly_limit: 100, sms_used_this_month: 0 }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" },
+        { id: secondClientId, user_id: userId, first_name: "Amanda", last_name: "Lee", email: "amanda@example.com", phone: "+15557654321" },
+        { id: thirdClientId, user_id: userId, first_name: "Opted", last_name: "Out", email: "optout@example.com", phone: "+15550000000" },
+        { id: foreignClientId, user_id: userId, first_name: "No", last_name: "Phone", email: "nophone@example.com" }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: clientId,
+          service_id: null,
+          appointment_date: "2026-06-07T17:00:00.000Z",
+          service_name: "Haircut",
+          duration_minutes: 60,
+          price: 75,
+          status: "scheduled",
+          booking_source: "internal",
+          created_at: "2026-06-01T12:00:00.000Z",
+          updated_at: "2026-06-01T12:00:00.000Z"
+        }
+      ],
+      reminders: [
+        {
+          id: smsAppointmentReminderId,
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-06T16:30:00.000Z",
+          status: "open",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "follow-up-reminder",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Review request",
+          due_date: "2026-06-06T16:10:00.000Z",
+          status: "open",
+          channel: "email",
+          reminder_type: "follow_up",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "sms-without-phone",
+          user_id: userId,
+          client_id: foreignClientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-06T16:15:00.000Z",
+          status: "open",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "sent-reminder",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-06T16:25:00.000Z",
+          status: "sent",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "sms-missing-consent",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-06T16:40:00.000Z",
+          status: "open",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: queuedAppointmentEmailId,
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          email_type: "appointment_reminder",
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          created_at: "2026-06-06T16:20:00.000Z",
+          updated_at: "2026-06-06T16:20:00.000Z",
+          template_data: { appointment_start_time: "2026-06-07T17:00:00.000Z" }
+        },
+        {
+          id: "confirmation-email",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          email_type: "appointment_confirmed",
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          created_at: "2026-06-06T16:05:00.000Z",
+          updated_at: "2026-06-06T16:05:00.000Z",
+          template_data: {}
+        },
+        {
+          id: "failed-appointment-email",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          email_type: "appointment_reminder",
+          recipient_email: "amanda@example.com",
+          status: "failed",
+          created_at: "2026-06-06T16:12:00.000Z",
+          updated_at: "2026-06-06T16:12:00.000Z",
+          template_data: {}
+        }
+      ],
+      rebook_nudges: [
+        {
+          id: rebookNudgeId,
+          user_id: userId,
+          client_id: secondClientId,
+          last_appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T17:00:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "rebook-needs-approval",
+          user_id: userId,
+          client_id: secondClientId,
+          last_appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-06T17:05:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "rebook-approval-required",
+          user_id: userId,
+          client_id: secondClientId,
+          last_appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-06T17:10:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "rebook-failed",
+          user_id: userId,
+          client_id: secondClientId,
+          last_appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-06T17:15:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "rebook-global-unsubscribe",
+          user_id: userId,
+          client_id: foreignClientId,
+          last_appointment_id: appointmentId,
+          recipient_email: "nophone@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T17:30:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      birthday_reminders: [
+        {
+          id: birthdayReminderId,
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "1990-06-10",
+          scheduled_send_at: "2026-06-06T18:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "Sarah Miller" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "birthday-failed",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "1990-06-10",
+          scheduled_send_at: "2026-06-06T18:05:00.000Z",
+          status: "failed",
+          template_data: { client_name: "Sarah Miller" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "birthday-opted-out",
+          user_id: userId,
+          client_id: thirdClientId,
+          recipient_email: "optout@example.com",
+          birthday: "1990-06-10",
+          scheduled_send_at: "2026-06-06T18:30:00.000Z",
+          status: "queued",
+          template_data: { client_name: "Opted Out" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: thankYouEmailId,
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T19:00:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-needs-approval",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-06T19:05:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-approval-required",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-06T19:10:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-failed",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: appointmentId,
+          recipient_email: "amanda@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-06T19:15:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      waitlist_entries: [],
+      activity_events: [],
+      client_communication_preferences: [
+        {
+          id: "sms-consent-sarah",
+          user_id: userId,
+          client_id: clientId,
+          phone: "+15551234567",
+          phone_normalized: "+15551234567",
+          sms_opted_in_at: "2026-06-01T12:00:00.000Z",
+          sms_reminders_enabled: true,
+          sms_transactional_enabled: true,
+          sms_marketing_enabled: false,
+          sms_rebooking_enabled: false,
+          opted_out_all_sms: false
+        },
+        {
+          id: "email-optout-third",
+          user_id: userId,
+          client_id: thirdClientId,
+          email: "optout@example.com",
+          email_normalized: "optout@example.com",
+          email_transactional_enabled: true,
+          email_reminders_enabled: false,
+          email_marketing_enabled: false,
+          email_rebooking_enabled: false,
+          opted_out_all_email: true
+        }
+      ],
+      global_email_unsubscribes: [
+        {
+          id: "global-unsubscribe-nophone",
+          email_normalized: "nophone@example.com",
+          opted_out_at: "2026-06-01T12:00:00.000Z"
+        }
+      ],
+      automation_settings: [
+        { user_id: userId, key: "appointment_reminders", enabled: true },
+        { user_id: userId, key: "rebook_nudges", enabled: true },
+        { user_id: userId, key: "birthday_reminders", enabled: true },
+        { user_id: userId, key: "thank_you_emails", enabled: true },
+        { user_id: userId, key: "email_confirmations", enabled: true },
+        { user_id: userId, key: "waitlist_match", enabled: true },
+        { user_id: userId, key: "no_show_follow_up", enabled: true }
+      ]
+    }, { queryLog });
+
+    try {
+      const dashboardResponse = await runWithErrorHandler(
+        (request, res) => activityController.dashboard(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: {
+          scheduled_reminder_count: number;
+          pending_reminder_count: number;
+          queued_rebook_nudge_count: number;
+          queued_birthday_reminder_count: number;
+          queued_thank_you_email_count: number;
+          pending_rebook_nudge_count: number;
+          pending_thank_you_email_count: number;
+          reminder_queue: Array<{ reminder_id: string; reminder_type: string; send_at: string; channel: string }>;
+          automation_controls: Array<{ key: string; enabled: boolean; feature_available: boolean; queued_count?: number; scheduled_count?: number }>;
+        };
+      }).data;
+
+      assert.deepEqual(payload.reminder_queue.map((item) => [item.reminder_id, item.reminder_type, item.send_at]), [
+        [queuedAppointmentEmailId, "appointment_reminder", "2026-06-06T16:20:00.000Z"],
+        [smsAppointmentReminderId, "appointment_reminder", "2026-06-06T16:30:00.000Z"],
+        [rebookNudgeId, "rebook_nudge", "2026-06-06T17:00:00.000Z"],
+        [birthdayReminderId, "birthday_reminder", "2026-06-06T18:00:00.000Z"],
+        [thankYouEmailId, "thank_you_email", "2026-06-06T19:00:00.000Z"]
+      ]);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id === "confirmation-email"), false);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id.includes("approval")), false);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id.includes("failed")), false);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id === "sms-missing-consent"), false);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id === "rebook-global-unsubscribe"), false);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_id === "birthday-opted-out"), false);
+      assert.equal(payload.scheduled_reminder_count, 5);
+      assert.equal(payload.pending_reminder_count, 5);
+      assert.equal(payload.queued_rebook_nudge_count, 1);
+      assert.equal(payload.queued_birthday_reminder_count, 1);
+      assert.equal(payload.queued_thank_you_email_count, 1);
+      assert.equal(payload.pending_rebook_nudge_count, 1);
+      assert.equal(payload.pending_thank_you_email_count, 1);
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.scheduled_count, 2);
+      assert.equal(payload.automation_controls.find((control) => control.key === "rebook_nudges")?.queued_count, 1);
+      assert.equal(payload.automation_controls.find((control) => control.key === "birthday_reminders")?.queued_count, 1);
+      assert.equal(payload.automation_controls.find((control) => control.key === "thank_you_emails")?.queued_count, 1);
+      assert.equal(supabase.state.client_communication_preferences.length, 2);
+      const combinedAutomationClientLookups = queryLog.filter(
+        (entry) => entry.table === "clients" && entry.column === "id" && entry.values.length > 1
+      );
+      assert.equal(combinedAutomationClientLookups.length, 1);
+      assert.deepEqual([...combinedAutomationClientLookups[0].values].sort(), [
+        clientId,
+        foreignClientId,
+        secondClientId,
+        thirdClientId
+      ].sort());
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("excludes queue rows and scheduled counts for disabled automations", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active", sms_monthly_limit: 100, sms_used_this_month: 0 }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" }
+      ],
+      appointments: [],
+      reminders: [
+        {
+          id: "disabled-appointment-reminder",
+          user_id: userId,
+          client_id: clientId,
+          appointment_id: appointmentId,
+          title: "Appointment reminder",
+          due_date: "2026-06-06T16:30:00.000Z",
+          status: "open",
+          channel: "sms",
+          reminder_type: "appointment_reminder",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      appointment_email_events: [],
+      rebook_nudges: [
+        {
+          id: "disabled-rebook",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T17:00:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      birthday_reminders: [
+        {
+          id: "disabled-birthday",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "1990-06-10",
+          scheduled_send_at: "2026-06-06T18:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "Sarah Miller" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "disabled-thank-you",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T19:00:00.000Z",
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      waitlist_entries: [],
+      activity_events: [],
+      automation_settings: [
+        { user_id: userId, key: "appointment_reminders", enabled: false },
+        { user_id: userId, key: "rebook_nudges", enabled: false },
+        { user_id: userId, key: "birthday_reminders", enabled: false },
+        { user_id: userId, key: "thank_you_emails", enabled: false }
+      ]
+    });
+
+    try {
+      const dashboardResponse = await runWithErrorHandler(
+        (request, res) => activityController.dashboard(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      const payload = (dashboardResponse.body as {
+        data: {
+          reminder_queue: unknown[];
+          scheduled_reminder_count: number;
+          queued_rebook_nudge_count: number;
+          queued_birthday_reminder_count: number;
+          queued_thank_you_email_count: number;
+          automation_controls: Array<{ key: string; enabled: boolean; queued_count?: number; scheduled_count?: number }>;
+        };
+      }).data;
+
+      assert.deepEqual(payload.reminder_queue, []);
+      assert.equal(payload.scheduled_reminder_count, 0);
+      assert.equal(payload.queued_rebook_nudge_count, 0);
+      assert.equal(payload.queued_birthday_reminder_count, 0);
+      assert.equal(payload.queued_thank_you_email_count, 0);
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.enabled, false);
+      assert.equal(payload.automation_controls.find((control) => control.key === "appointment_reminders")?.scheduled_count, 0);
+      assert.equal(payload.automation_controls.find((control) => control.key === "rebook_nudges")?.queued_count, 0);
+      assert.equal(payload.automation_controls.find((control) => control.key === "birthday_reminders")?.queued_count, 0);
+      assert.equal(payload.automation_controls.find((control) => control.key === "thank_you_emails")?.queued_count, 0);
     } finally {
       supabase.restore();
       mock.timers.reset();
@@ -2032,14 +2553,48 @@ describe("Activity handlers", () => {
         { user_id: userId, key: "waitlist_match", enabled: true },
         { user_id: userId, key: "no_show_follow_up", enabled: true }
       ],
-      clients: [],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" }
+      ],
       appointments: [],
       reminders: [],
       waitlist_entries: [],
       activity_events: [],
       appointment_email_events: [],
-      rebook_nudges: [],
-      birthday_reminders: []
+      rebook_nudges: [
+        {
+          id: "basic-plan-rebook",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T17:00:00.000Z"
+        }
+      ],
+      birthday_reminders: [
+        {
+          id: "basic-plan-birthday",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "1990-06-10",
+          scheduled_send_at: "2026-06-06T18:00:00.000Z",
+          status: "queued",
+          template_data: { client_name: "Sarah Miller" }
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "basic-plan-thank-you",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-06T19:00:00.000Z"
+        }
+      ]
     });
 
     try {
@@ -2047,16 +2602,29 @@ describe("Activity handlers", () => {
         (request, res) => activityController.dashboard(request, res),
         createMockRequest({ user: { id: userId } as Request["user"] })
       );
-      const controls = (dashboardResponse.body as {
+      const dashboardPayload = (dashboardResponse.body as {
         data: {
+          reminder_queue: unknown[];
+          scheduled_reminder_count: number;
+          queued_rebook_nudge_count: number;
+          queued_birthday_reminder_count: number;
+          queued_thank_you_email_count: number;
           automation_controls: Array<{
             key: string;
             enabled: boolean;
             feature_available: boolean;
             status_label: string;
+            queued_count?: number;
           }>;
         };
-      }).data.automation_controls;
+      }).data;
+      const controls = dashboardPayload.automation_controls;
+
+      assert.deepEqual(dashboardPayload.reminder_queue, []);
+      assert.equal(dashboardPayload.scheduled_reminder_count, 0);
+      assert.equal(dashboardPayload.queued_rebook_nudge_count, 0);
+      assert.equal(dashboardPayload.queued_birthday_reminder_count, 0);
+      assert.equal(dashboardPayload.queued_thank_you_email_count, 0);
 
       assert.equal(controls.find((control) => control.key === "email_confirmations")?.feature_available, true);
       assert.equal(controls.find((control) => control.key === "email_confirmations")?.enabled, true);

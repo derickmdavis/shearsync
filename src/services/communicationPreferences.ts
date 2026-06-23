@@ -30,11 +30,19 @@ interface CanSendCommunicationOptions {
   globalEmailUnsubscribeCache?: Map<string, boolean>;
 }
 
-interface CanSendCommunicationResult {
+export interface CanSendCommunicationResult {
   canSend: boolean;
   reason?: "missing_contact" | "missing_sms_consent" | "opted_out" | "disabled" | "global_unsubscribe";
   preference?: Row;
   toNormalized?: string;
+}
+
+interface CommunicationEligibilityCandidate {
+  id: string;
+  clientId?: string | null;
+  channel: CommunicationChannel;
+  to?: string | null;
+  messageType: MessageType;
 }
 
 interface OptInSmsOptions {
@@ -186,6 +194,70 @@ const getSmsAllowed = (preference: Row, messageType: MessageType): CanSendCommun
     : { canSend: false, reason: "disabled", preference };
 };
 
+const loadPreferencesByNormalizedContact = async (
+  userId: string,
+  emailNormalizedValues: string[],
+  phoneNormalizedValues: string[]
+): Promise<{
+  byEmail: Map<string, Row>;
+  byPhone: Map<string, Row>;
+}> => {
+  const [emailResult, phoneResult] = await Promise.all([
+    emailNormalizedValues.length > 0
+      ? supabaseAdmin
+        .from("client_communication_preferences")
+        .select("*")
+        .eq("user_id", userId)
+        .in("email_normalized", emailNormalizedValues)
+      : Promise.resolve({ data: [], error: null }),
+    phoneNormalizedValues.length > 0
+      ? supabaseAdmin
+        .from("client_communication_preferences")
+        .select("*")
+        .eq("user_id", userId)
+        .in("phone_normalized", phoneNormalizedValues)
+      : Promise.resolve({ data: [], error: null })
+  ]);
+
+  handleSupabaseError(emailResult.error, "Unable to load communication preferences");
+  handleSupabaseError(phoneResult.error, "Unable to load communication preferences");
+
+  const byEmail = new Map<string, Row>();
+  const byPhone = new Map<string, Row>();
+
+  for (const preference of (emailResult.data ?? []) as Row[]) {
+    if (typeof preference.email_normalized === "string") {
+      byEmail.set(preference.email_normalized, preference);
+    }
+  }
+
+  for (const preference of (phoneResult.data ?? []) as Row[]) {
+    if (typeof preference.phone_normalized === "string") {
+      byPhone.set(preference.phone_normalized, preference);
+    }
+  }
+
+  return { byEmail, byPhone };
+};
+
+const loadGlobalUnsubscribedEmails = async (emailNormalizedValues: string[]): Promise<Set<string>> => {
+  if (emailNormalizedValues.length === 0) {
+    return new Set();
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("global_email_unsubscribes")
+    .select("email_normalized")
+    .in("email_normalized", emailNormalizedValues);
+
+  handleSupabaseError(error, "Unable to load global email unsubscribes");
+  return new Set(
+    ((data ?? []) as Row[])
+      .map((row) => (typeof row.email_normalized === "string" ? row.email_normalized : null))
+      .filter((value): value is string => value !== null)
+  );
+};
+
 export const communicationPreferencesService = {
   async getOrCreateCommunicationPreference(options: PreferenceContactOptions): Promise<Row> {
     const emailNormalized = normalizeEmail(options.email);
@@ -259,6 +331,87 @@ export const communicationPreferencesService = {
       : getSmsAllowed(preference, options.messageType);
 
     return { ...result, toNormalized: normalized };
+  },
+
+  async canSendCommunicationsReadOnly(
+    userId: string,
+    candidates: CommunicationEligibilityCandidate[]
+  ): Promise<Map<string, CanSendCommunicationResult>> {
+    const normalizedCandidates = candidates.map((candidate) => ({
+      ...candidate,
+      toNormalized: normalizeContact(candidate.channel, candidate.to)
+    }));
+    const emailNormalizedValues = [
+      ...new Set(
+        normalizedCandidates
+          .filter((candidate) => candidate.channel === "email" && candidate.toNormalized)
+          .map((candidate) => candidate.toNormalized as string)
+      )
+    ];
+    const phoneNormalizedValues = [
+      ...new Set(
+        normalizedCandidates
+          .filter((candidate) => candidate.channel === "sms" && candidate.toNormalized)
+          .map((candidate) => candidate.toNormalized as string)
+      )
+    ];
+    const globalEmailValues = [
+      ...new Set(
+        normalizedCandidates
+          .filter((candidate) =>
+            candidate.channel === "email"
+            && candidate.toNormalized
+            && !isGlobalEmailUnsubscribeExempt(candidate.messageType)
+          )
+          .map((candidate) => candidate.toNormalized as string)
+      )
+    ];
+
+    const [preferences, globalUnsubscribedEmails] = await Promise.all([
+      loadPreferencesByNormalizedContact(userId, emailNormalizedValues, phoneNormalizedValues),
+      loadGlobalUnsubscribedEmails(globalEmailValues)
+    ]);
+
+    return new Map(
+      normalizedCandidates.map((candidate): [string, CanSendCommunicationResult] => {
+        if (!candidate.toNormalized) {
+          return [candidate.id, { canSend: false, reason: "missing_contact" }];
+        }
+
+        if (
+          candidate.channel === "email"
+          && !isGlobalEmailUnsubscribeExempt(candidate.messageType)
+          && globalUnsubscribedEmails.has(candidate.toNormalized)
+        ) {
+          return [
+            candidate.id,
+            { canSend: false, reason: "global_unsubscribe", toNormalized: candidate.toNormalized }
+          ];
+        }
+
+        const preference = candidate.channel === "email"
+          ? preferences.byEmail.get(candidate.toNormalized)
+          : preferences.byPhone.get(candidate.toNormalized);
+
+        if (!preference) {
+          return candidate.channel === "sms"
+            ? [
+              candidate.id,
+              { canSend: false, reason: "missing_sms_consent", toNormalized: candidate.toNormalized }
+            ]
+            : [
+              candidate.id,
+              { canSend: true, toNormalized: candidate.toNormalized }
+            ];
+        }
+
+        const result = candidate.channel === "email"
+          ? getEmailAllowed(preference, candidate.messageType)
+          : getSmsAllowed(preference, candidate.messageType);
+
+        return [candidate.id, { ...result, toNormalized: candidate.toNormalized }];
+      })
+    );
   },
 
   async optInSms(options: OptInSmsOptions): Promise<Row> {

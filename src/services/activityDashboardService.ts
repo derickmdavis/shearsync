@@ -11,6 +11,8 @@ import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
 import { entitlementsService } from "./entitlementsService";
 import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
+import { communicationPreferencesService } from "./communicationPreferences";
+import type { MessageType } from "../lib/communications";
 
 const AUTOMATION_KEYS = [
   "rebook_nudges",
@@ -87,6 +89,9 @@ const APPOINTMENT_REMINDER_EMAIL_SELECT = `
 
 type ReminderQueueItem = {
   reminder_id: unknown;
+  rebook_nudge_id?: unknown;
+  birthday_reminder_id?: unknown;
+  thank_you_email_id?: unknown;
   email_event_id?: unknown;
   appointment_id?: unknown;
   client_id?: unknown;
@@ -97,6 +102,61 @@ type ReminderQueueItem = {
   reminder_type: unknown;
   status: string;
 };
+
+type AutomationQueueSource = "appointment_reminders" | "rebook_nudges" | "birthday_reminders" | "thank_you_emails";
+
+type AutomationQueueItem = ReminderQueueItem & {
+  automation_key: AutomationQueueSource;
+  send_at: string;
+  channel: "email" | "sms";
+  reminder_type: string;
+};
+
+type AutomationQueueCandidate = AutomationQueueItem & {
+  eligibility_contact: string | null;
+  eligibility_message_type: MessageType;
+};
+
+const REBOOK_NUDGE_SELECT = `
+  id,
+  user_id,
+  client_id,
+  last_appointment_id,
+  recipient_email,
+  status,
+  approval_required,
+  send_after,
+  template_data,
+  created_at,
+  updated_at
+`;
+
+const THANK_YOU_EMAIL_SELECT = `
+  id,
+  user_id,
+  client_id,
+  appointment_id,
+  recipient_email,
+  status,
+  approval_required,
+  send_after,
+  template_data,
+  created_at,
+  updated_at
+`;
+
+const BIRTHDAY_REMINDER_SELECT = `
+  id,
+  user_id,
+  client_id,
+  recipient_email,
+  birthday,
+  scheduled_send_at,
+  status,
+  template_data,
+  created_at,
+  updated_at
+`;
 
 const WAITLIST_SELECT = `
   id,
@@ -141,7 +201,7 @@ const loadClientsById = async (userId: string, clientIds: Array<string | null>):
 
   const { data, error } = await supabaseAdmin
     .from("clients")
-    .select("id, first_name, last_name")
+    .select("id, first_name, last_name, preferred_name, email, phone")
     .eq("user_id", userId)
     .in("id", ids);
 
@@ -177,6 +237,70 @@ const getEffectiveEnabled = (
   entitlements: UserEntitlements,
   key: AutomationControlKey
 ): boolean => isAutomationAvailable(entitlements, key) && getEnabled(settings, key);
+
+const isEmailChannelSendable = (client: Row | undefined, recipientEmail?: unknown): boolean =>
+  (typeof recipientEmail === "string" && recipientEmail.trim().length > 0)
+  || (typeof client?.email === "string" && client.email.trim().length > 0);
+
+const isSmsChannelSendable = (entitlements: UserEntitlements, client: Row | undefined): boolean =>
+  entitlements.status !== "cancelled"
+  && entitlements.features.smsReminders
+  && entitlements.smsRemainingThisMonth > 0
+  && typeof client?.phone === "string"
+  && client.phone.trim().length > 0;
+
+const isChannelSendable = (
+  entitlements: UserEntitlements,
+  client: Row | undefined,
+  channel: unknown,
+  recipientEmail?: unknown
+): channel is "email" | "sms" => {
+  if (channel === "email") {
+    return isEmailChannelSendable(client, recipientEmail);
+  }
+
+  if (channel === "sms") {
+    return isSmsChannelSendable(entitlements, client);
+  }
+
+  return false;
+};
+
+const sortAutomationQueue = (items: AutomationQueueItem[]): AutomationQueueItem[] =>
+  [...items].sort((left, right) => left.send_at.localeCompare(right.send_at));
+
+const stripAutomationQueueEligibilityFields = (item: AutomationQueueCandidate): AutomationQueueItem => {
+  const {
+    eligibility_contact: _eligibilityContact,
+    eligibility_message_type: _eligibilityMessageType,
+    ...queueItem
+  } = item;
+  return queueItem;
+};
+
+const filterEligibleAutomationQueue = async (
+  userId: string,
+  candidates: AutomationQueueCandidate[]
+): Promise<AutomationQueueItem[]> => {
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const eligibilityById = await communicationPreferencesService.canSendCommunicationsReadOnly(
+    userId,
+    candidates.map((candidate) => ({
+      id: String(candidate.reminder_id ?? ""),
+      clientId: typeof candidate.client_id === "string" ? candidate.client_id : null,
+      channel: candidate.channel,
+      to: candidate.eligibility_contact,
+      messageType: candidate.eligibility_message_type
+    }))
+  );
+
+  return candidates
+    .filter((candidate) => eligibilityById.get(String(candidate.reminder_id ?? ""))?.canSend === true)
+    .map(stripAutomationQueueEligibilityFields);
+};
 
 const loadRecentActivity = async (userId: string): Promise<ActivityEventItem[]> => {
   const feed = await activityEventsService.getFeed(userId, { limit: 10 });
@@ -270,36 +394,67 @@ const loadCancellationReviewItems = async (userId: string, timeZone: string) => 
     .filter((item): item is NonNullable<typeof item> => item !== null);
 };
 
-const loadReminderQueue = async (userId: string) => {
+const loadReminderQueue = async (
+  userId: string,
+  enabled: boolean
+): Promise<Row[]> => {
+  if (!enabled) {
+    return [];
+  }
+
   const { data, error } = await supabaseAdmin
     .from("reminders")
     .select(REMINDER_SELECT)
     .eq("user_id", userId)
     .eq("status", "open")
+    .eq("reminder_type", "appointment_reminder")
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: true })
     .limit(50);
 
   handleSupabaseError(error, "Unable to load reminder queue");
-  const reminders = (data ?? []) as Row[];
-  const clientsById = await loadClientsById(userId, reminders.map((row) => getString(row, "client_id")));
+  return (data ?? []) as Row[];
+};
 
-  return reminders.map((reminder) => {
+const toReminderQueueCandidates = (
+  reminders: Row[],
+  clientsById: Map<string, Row>,
+  entitlements: UserEntitlements
+): AutomationQueueCandidate[] => {
+  return reminders.flatMap((reminder) => {
     const clientId = getString(reminder, "client_id");
+    const client = clientId ? clientsById.get(clientId) : undefined;
+    const channel = reminder.channel ?? "sms";
+    const sendAt = getString(reminder, "due_date");
+    const eligibilityContact = channel === "email" ? getString(client ?? {}, "email") : getString(client ?? {}, "phone");
+    if (!sendAt || !isChannelSendable(entitlements, client, channel)) {
+      return [];
+    }
+
     return {
+      automation_key: "appointment_reminders",
       reminder_id: reminder.id,
       appointment_id: reminder.appointment_id ?? null,
       client_id: clientId,
-      client_name: toClientName(clientId ? clientsById.get(clientId) : undefined),
-      send_at: reminder.due_date,
-      channel: reminder.channel ?? "sms",
-      reminder_type: reminder.reminder_type ?? "general",
+      client_name: toClientName(client),
+      send_at: sendAt,
+      channel,
+      reminder_type: "appointment_reminder",
+      eligibility_contact: eligibilityContact,
+      eligibility_message_type: "appointment_reminder",
       status: "scheduled"
     };
   });
 };
 
-const loadAppointmentEmailReminderQueue = async (userId: string) => {
+const loadAppointmentEmailReminderQueue = async (
+  userId: string,
+  enabled: boolean
+): Promise<{ emailEvents: Row[]; appointmentsById: Map<string, Row> }> => {
+  if (!enabled) {
+    return { emailEvents: [], appointmentsById: new Map() };
+  }
+
   const { data, error } = await supabaseAdmin
     .from("appointment_email_events")
     .select(APPOINTMENT_REMINDER_EMAIL_SELECT)
@@ -311,7 +466,6 @@ const loadAppointmentEmailReminderQueue = async (userId: string) => {
 
   handleSupabaseError(error, "Unable to load appointment reminder email queue");
   const emailEvents = (data ?? []) as Row[];
-  const clientsById = await loadClientsById(userId, emailEvents.map((row) => getString(row, "client_id")));
   const appointmentIds = [...new Set(emailEvents.map((row) => getString(row, "appointment_id")).filter((id): id is string => Boolean(id)))];
   const appointmentData: Row[] = [];
 
@@ -327,24 +481,40 @@ const loadAppointmentEmailReminderQueue = async (userId: string) => {
   }
 
   const appointmentsById = new Map(appointmentData.map((appointment) => [appointment.id as string, appointment]));
+  return { emailEvents, appointmentsById };
+};
 
-  return emailEvents.map((emailEvent) => {
+const toAppointmentEmailReminderQueueCandidates = (
+  emailEvents: Row[],
+  appointmentsById: Map<string, Row>,
+  clientsById: Map<string, Row>,
+  entitlements: UserEntitlements
+): AutomationQueueCandidate[] => {
+  return emailEvents.flatMap((emailEvent) => {
     const clientId = getString(emailEvent, "client_id");
+    const client = clientId ? clientsById.get(clientId) : undefined;
     const appointmentId = getString(emailEvent, "appointment_id");
     const appointment = appointmentId ? appointmentsById.get(appointmentId) : undefined;
     const templateData = (emailEvent.template_data ?? {}) as Row;
     const appointmentStartTime = getString(appointment ?? {}, "appointment_date") ?? getString(templateData, "appointment_start_time");
+    const sendAt = getString(emailEvent, "created_at");
+    if (!sendAt || !isChannelSendable(entitlements, client, "email", emailEvent.recipient_email)) {
+      return [];
+    }
 
     return {
+      automation_key: "appointment_reminders",
       reminder_id: emailEvent.id,
       email_event_id: emailEvent.id,
       appointment_id: appointmentId,
       client_id: clientId,
-      client_name: toClientName(clientId ? clientsById.get(clientId) : undefined),
-      send_at: emailEvent.created_at,
+      client_name: toClientName(client),
+      send_at: sendAt,
       appointment_start_time: appointmentStartTime,
       channel: "email",
       reminder_type: "appointment_reminder",
+      eligibility_contact: getString(emailEvent, "recipient_email") ?? getString(client ?? {}, "email"),
+      eligibility_message_type: "appointment_reminder",
       status: emailEvent.status === "sending" ? "sending" : "queued"
     };
   });
@@ -363,9 +533,9 @@ const getReminderQueueDedupeKey = (item: ReminderQueueItem): string => {
 };
 
 const mergeReminderQueues = (
-  legacyReminderQueue: ReminderQueueItem[],
-  appointmentEmailReminderQueue: ReminderQueueItem[]
-): ReminderQueueItem[] => {
+  legacyReminderQueue: AutomationQueueCandidate[],
+  appointmentEmailReminderQueue: AutomationQueueCandidate[]
+): AutomationQueueCandidate[] => {
   const appointmentEmailReminderKeys = new Set(
     appointmentEmailReminderQueue.map((reminder) => getReminderQueueDedupeKey(reminder))
   );
@@ -374,6 +544,161 @@ const mergeReminderQueues = (
     ...legacyReminderQueue.filter((reminder) => !appointmentEmailReminderKeys.has(getReminderQueueDedupeKey(reminder))),
     ...appointmentEmailReminderQueue
   ];
+};
+
+const loadRebookNudgeQueue = async (
+  userId: string,
+  enabled: boolean
+): Promise<Row[]> => {
+  if (!enabled) {
+    return [];
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("rebook_nudges")
+    .select(REBOOK_NUDGE_SELECT)
+    .eq("user_id", userId)
+    .eq("status", "queued")
+    .eq("approval_required", false)
+    .gte("send_after", new Date().toISOString())
+    .order("send_after", { ascending: true })
+    .limit(50);
+
+  handleSupabaseError(error, "Unable to load rebook nudge automation queue");
+  return (data ?? []) as Row[];
+};
+
+const toRebookNudgeQueueCandidates = (
+  rows: Row[],
+  clientsById: Map<string, Row>,
+  entitlements: UserEntitlements
+): AutomationQueueCandidate[] => {
+  return rows.flatMap((row) => {
+    const clientId = getString(row, "client_id");
+    const client = clientId ? clientsById.get(clientId) : undefined;
+    const sendAt = getString(row, "send_after");
+    if (!sendAt || !isChannelSendable(entitlements, client, "email", row.recipient_email)) {
+      return [];
+    }
+
+    return {
+      automation_key: "rebook_nudges",
+      reminder_id: row.id,
+      rebook_nudge_id: row.id,
+      appointment_id: row.last_appointment_id ?? null,
+      client_id: clientId,
+      client_name: toClientName(client),
+      send_at: sendAt,
+      channel: "email",
+      reminder_type: "rebook_nudge",
+      eligibility_contact: getString(row, "recipient_email") ?? getString(client ?? {}, "email"),
+      eligibility_message_type: "rebooking_prompt",
+      status: "queued"
+    };
+  });
+};
+
+const loadBirthdayReminderAutomationQueue = async (
+  userId: string,
+  enabled: boolean
+): Promise<Row[]> => {
+  if (!enabled) {
+    return [];
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("birthday_reminders")
+    .select(BIRTHDAY_REMINDER_SELECT)
+    .eq("user_id", userId)
+    .eq("status", "queued")
+    .gte("scheduled_send_at", new Date().toISOString())
+    .order("scheduled_send_at", { ascending: true })
+    .limit(50);
+
+  handleSupabaseError(error, "Unable to load birthday reminder automation queue");
+  return (data ?? []) as Row[];
+};
+
+const toBirthdayReminderQueueCandidates = (
+  rows: Row[],
+  clientsById: Map<string, Row>,
+  entitlements: UserEntitlements
+): AutomationQueueCandidate[] => {
+  return rows.flatMap((row) => {
+    const clientId = getString(row, "client_id");
+    const client = clientId ? clientsById.get(clientId) : undefined;
+    const templateData = (row.template_data ?? {}) as Row;
+    const sendAt = getString(row, "scheduled_send_at");
+    if (!sendAt || !isChannelSendable(entitlements, client, "email", row.recipient_email)) {
+      return [];
+    }
+
+    return {
+      automation_key: "birthday_reminders",
+      reminder_id: row.id,
+      birthday_reminder_id: row.id,
+      client_id: clientId,
+      client_name: getString(templateData, "client_name") ?? toClientName(client),
+      send_at: sendAt,
+      channel: "email",
+      reminder_type: "birthday_reminder",
+      eligibility_contact: getString(row, "recipient_email") ?? getString(client ?? {}, "email"),
+      eligibility_message_type: "birthday_reminder",
+      status: "queued"
+    };
+  });
+};
+
+const loadThankYouEmailQueue = async (
+  userId: string,
+  enabled: boolean
+): Promise<Row[]> => {
+  if (!enabled) {
+    return [];
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("thank_you_emails")
+    .select(THANK_YOU_EMAIL_SELECT)
+    .eq("user_id", userId)
+    .eq("status", "queued")
+    .eq("approval_required", false)
+    .gte("send_after", new Date().toISOString())
+    .order("send_after", { ascending: true })
+    .limit(50);
+
+  handleSupabaseError(error, "Unable to load thank you email automation queue");
+  return (data ?? []) as Row[];
+};
+
+const toThankYouEmailQueueCandidates = (
+  rows: Row[],
+  clientsById: Map<string, Row>,
+  entitlements: UserEntitlements
+): AutomationQueueCandidate[] => {
+  return rows.flatMap((row) => {
+    const clientId = getString(row, "client_id");
+    const client = clientId ? clientsById.get(clientId) : undefined;
+    const sendAt = getString(row, "send_after");
+    if (!sendAt || !isChannelSendable(entitlements, client, "email", row.recipient_email)) {
+      return [];
+    }
+
+    return {
+      automation_key: "thank_you_emails",
+      reminder_id: row.id,
+      thank_you_email_id: row.id,
+      appointment_id: row.appointment_id ?? null,
+      client_id: clientId,
+      client_name: toClientName(client),
+      send_at: sendAt,
+      channel: "email",
+      reminder_type: "thank_you_email",
+      eligibility_contact: getString(row, "recipient_email") ?? getString(client ?? {}, "email"),
+      eligibility_message_type: "marketing",
+      status: "queued"
+    };
+  });
 };
 
 const loadReviewRequestQueue = async (userId: string) => {
@@ -572,40 +897,47 @@ export const activityDashboardService = {
 
   async getDashboard(userId: string): Promise<Row> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
-    const entitlementsPromise = entitlementsService.getEntitlementsForUser(userId);
+    const [entitlements, settings] = await Promise.all([
+      entitlementsService.getEntitlementsForUser(userId),
+      loadAutomationSettings(userId)
+    ]);
+    const appointmentRemindersEnabled = getEffectiveEnabled(settings, entitlements, "appointment_reminders");
+    const rebookNudgesEnabled = getEffectiveEnabled(settings, entitlements, "rebook_nudges");
+    const birthdayRemindersEnabled = getEffectiveEnabled(settings, entitlements, "birthday_reminders");
+    const thankYouEmailsEnabled = getEffectiveEnabled(settings, entitlements, "thank_you_emails");
     const [
-      entitlements,
-      settings,
       recentActivity,
       cancellationReviewItems,
-      reminderQueue,
-      appointmentEmailReminderQueue,
+      reminderRows,
+      appointmentEmailReminderSource,
+      rebookNudgeRows,
+      birthdayReminderRows,
+      thankYouEmailRows,
       reviewRequestQueue,
       waitlistMatches,
       feedCounts,
       rebookNudgeCounts,
       outstandingRebookNudges,
-      birthdayReminderCounts,
       birthdayReminderQueue,
       thankYouEmailCounts
     ] = await Promise.all([
-      entitlementsPromise,
-      loadAutomationSettings(userId),
       loadRecentActivity(userId),
       loadCancellationReviewItems(userId, timeZone),
-      loadReminderQueue(userId),
-      loadAppointmentEmailReminderQueue(userId),
+      loadReminderQueue(userId, appointmentRemindersEnabled),
+      loadAppointmentEmailReminderQueue(userId, appointmentRemindersEnabled),
+      loadRebookNudgeQueue(userId, rebookNudgesEnabled),
+      loadBirthdayReminderAutomationQueue(userId, birthdayRemindersEnabled),
+      loadThankYouEmailQueue(userId, thankYouEmailsEnabled),
       loadReviewRequestQueue(userId),
-      entitlementsPromise.then((entitlements) =>
+      Promise.resolve(
         isAutomationAvailable(entitlements, "waitlist_match")
           ? loadWaitlistMatches(userId, timeZone)
           : []
       ),
       activityEventsService.getCategoryCounts(userId, {}, timeZone),
       rebookNudgesService.getCountsForUser(userId),
-      rebookNudgesService.getOutstandingForUser(userId, 50),
-      birthdayRemindersService.getCountsForUser(userId),
-      birthdayRemindersService.getQueuedForUser(userId, 50),
+      rebookNudgesEnabled ? rebookNudgesService.getOutstandingForUser(userId, 50) : [],
+      birthdayRemindersEnabled ? birthdayRemindersService.getQueuedForUser(userId, 50) : [],
       thankYouEmailsService.getCountsForUser(userId)
     ]);
 
@@ -614,27 +946,59 @@ export const activityDashboardService = {
       loadImpactThisWeek(userId, timeZone)
     ]);
 
-    const appointmentReminderQueue = mergeReminderQueues(reminderQueue, appointmentEmailReminderQueue);
+    const automationQueueClientsById = await loadClientsById(userId, [
+      ...reminderRows.map((row) => getString(row, "client_id")),
+      ...appointmentEmailReminderSource.emailEvents.map((row) => getString(row, "client_id")),
+      ...rebookNudgeRows.map((row) => getString(row, "client_id")),
+      ...birthdayReminderRows.map((row) => getString(row, "client_id")),
+      ...thankYouEmailRows.map((row) => getString(row, "client_id"))
+    ]);
+    const legacyReminderCandidates = toReminderQueueCandidates(reminderRows, automationQueueClientsById, entitlements);
+    const appointmentEmailReminderCandidates = toAppointmentEmailReminderQueueCandidates(
+      appointmentEmailReminderSource.emailEvents,
+      appointmentEmailReminderSource.appointmentsById,
+      automationQueueClientsById,
+      entitlements
+    );
+    const rebookNudgeCandidates = toRebookNudgeQueueCandidates(rebookNudgeRows, automationQueueClientsById, entitlements);
+    const birthdayReminderCandidates = toBirthdayReminderQueueCandidates(birthdayReminderRows, automationQueueClientsById, entitlements);
+    const thankYouEmailCandidates = toThankYouEmailQueueCandidates(thankYouEmailRows, automationQueueClientsById, entitlements);
+    const appointmentReminderQueueCandidates = mergeReminderQueues(legacyReminderCandidates, appointmentEmailReminderCandidates);
+    const automationQueue = sortAutomationQueue(await filterEligibleAutomationQueue(userId, [
+      ...appointmentReminderQueueCandidates,
+      ...rebookNudgeCandidates,
+      ...birthdayReminderCandidates,
+      ...thankYouEmailCandidates
+    ]));
+    const appointmentReminderQueue = automationQueue.filter((item) => item.automation_key === "appointment_reminders");
+    const eligibleRebookNudgeQueue = automationQueue.filter((item) => item.automation_key === "rebook_nudges");
+    const eligibleBirthdayReminderQueue = automationQueue.filter((item) => item.automation_key === "birthday_reminders");
+    const eligibleThankYouEmailQueue = automationQueue.filter((item) => item.automation_key === "thank_you_emails");
+    const rebookNudgeApprovalNeededCount = rebookNudgeCounts.pending_approval;
+    const thankYouEmailApprovalNeededCount = thankYouEmailCounts.pending_approval;
+    const rebookNudgeAutoSendQueuedCount = eligibleRebookNudgeQueue.length;
+    const birthdayReminderAutoSendQueuedCount = eligibleBirthdayReminderQueue.length;
+    const thankYouEmailAutoSendQueuedCount = eligibleThankYouEmailQueue.length;
     const noShowTodayCount = 0;
     const automationControls = [
       {
         key: "rebook_nudges",
         label: AUTOMATION_LABELS.rebook_nudges,
-        enabled: getEffectiveEnabled(settings, entitlements, "rebook_nudges"),
+        enabled: rebookNudgesEnabled,
         feature_available: isAutomationAvailable(entitlements, "rebook_nudges"),
         status_label: !isAutomationAvailable(entitlements, "rebook_nudges")
           ? "Upgrade required"
-          : rebookNudgeCounts.pending_approval > 0
-          ? `${rebookNudgeCounts.pending_approval} need approval`
-          : `${rebookNudgeCounts.queued} queued`,
+          : rebookNudgeApprovalNeededCount > 0
+          ? `${rebookNudgeApprovalNeededCount} need approval`
+          : `${rebookNudgeAutoSendQueuedCount} queued`,
         due_count: feedCounts.rebook,
-        pending_approval_count: rebookNudgeCounts.pending_approval,
-        queued_count: rebookNudgeCounts.queued
+        pending_approval_count: rebookNudgeApprovalNeededCount,
+        queued_count: rebookNudgeAutoSendQueuedCount
       },
       {
         key: "appointment_reminders",
         label: AUTOMATION_LABELS.appointment_reminders,
-        enabled: getEffectiveEnabled(settings, entitlements, "appointment_reminders"),
+        enabled: appointmentRemindersEnabled,
         feature_available: isAutomationAvailable(entitlements, "appointment_reminders"),
         status_label: `${appointmentReminderQueue.length} scheduled`,
         scheduled_count: appointmentReminderQueue.length
@@ -669,25 +1033,25 @@ export const activityDashboardService = {
       {
         key: "birthday_reminders",
         label: AUTOMATION_LABELS.birthday_reminders,
-        enabled: getEffectiveEnabled(settings, entitlements, "birthday_reminders"),
+        enabled: birthdayRemindersEnabled,
         feature_available: isAutomationAvailable(entitlements, "birthday_reminders"),
         status_label: isAutomationAvailable(entitlements, "birthday_reminders")
-          ? `${birthdayReminderCounts.queued} queued`
+          ? `${birthdayReminderAutoSendQueuedCount} queued`
           : "Upgrade required",
-        queued_count: birthdayReminderCounts.queued
+        queued_count: birthdayReminderAutoSendQueuedCount
       },
       {
         key: "thank_you_emails",
         label: AUTOMATION_LABELS.thank_you_emails,
-        enabled: getEffectiveEnabled(settings, entitlements, "thank_you_emails"),
+        enabled: thankYouEmailsEnabled,
         feature_available: isAutomationAvailable(entitlements, "thank_you_emails"),
         status_label: !isAutomationAvailable(entitlements, "thank_you_emails")
           ? "Upgrade required"
-          : thankYouEmailCounts.pending_approval > 0
-          ? `${thankYouEmailCounts.pending_approval} need approval`
-          : `${thankYouEmailCounts.queued} queued`,
-        pending_approval_count: thankYouEmailCounts.pending_approval,
-        queued_count: thankYouEmailCounts.queued
+          : thankYouEmailApprovalNeededCount > 0
+          ? `${thankYouEmailApprovalNeededCount} need approval`
+          : `${thankYouEmailAutoSendQueuedCount} queued`,
+        pending_approval_count: thankYouEmailApprovalNeededCount,
+        queued_count: thankYouEmailAutoSendQueuedCount
       }
     ];
 
@@ -696,28 +1060,28 @@ export const activityDashboardService = {
         cancellations_need_review_count: cancellationReviewItems.length,
         waitlist_match_count: waitlistMatches.length,
         pending_approval_count: feedCounts.approvals,
-        pending_reminder_count: appointmentReminderQueue.length,
+        pending_reminder_count: automationQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
-        pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
-        birthday_reminder_count: birthdayReminderCounts.queued,
-        pending_thank_you_email_count: thankYouEmailCounts.pending_approval
+        pending_rebook_nudge_count: rebookNudgeApprovalNeededCount,
+        birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
+        pending_thank_you_email_count: thankYouEmailApprovalNeededCount
       },
       pending_approval_count: feedCounts.approvals,
-      pending_rebook_nudge_count: rebookNudgeCounts.pending_approval,
-      queued_rebook_nudge_count: rebookNudgeCounts.queued,
+      pending_rebook_nudge_count: rebookNudgeApprovalNeededCount,
+      queued_rebook_nudge_count: rebookNudgeAutoSendQueuedCount,
       outstanding_rebook_nudges: outstandingRebookNudges,
-      birthday_reminder_count: birthdayReminderCounts.queued,
-      queued_birthday_reminder_count: birthdayReminderCounts.queued,
+      birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
+      queued_birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
       birthday_reminder_queue: birthdayReminderQueue,
-      pending_thank_you_email_count: thankYouEmailCounts.pending_approval,
-      queued_thank_you_email_count: thankYouEmailCounts.queued,
+      pending_thank_you_email_count: thankYouEmailApprovalNeededCount,
+      queued_thank_you_email_count: thankYouEmailAutoSendQueuedCount,
       cancellation_review_count: cancellationReviewItems.length,
       cancellation_review_items: cancellationReviewItems,
       waitlist_match_count: waitlistMatches.length,
       waitlist_matches: waitlistMatches,
-      pending_reminder_count: appointmentReminderQueue.length,
-      scheduled_reminder_count: appointmentReminderQueue.length,
-      reminder_queue: appointmentReminderQueue,
+      pending_reminder_count: automationQueue.length,
+      scheduled_reminder_count: automationQueue.length,
+      reminder_queue: automationQueue,
       queued_review_request_count: reviewRequestQueue.length,
       review_request_queue: reviewRequestQueue,
       automation_health: automationHealth,

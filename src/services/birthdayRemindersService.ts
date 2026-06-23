@@ -1,4 +1,5 @@
 import { ApiError, requireFound } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { normalizeEmail } from "../lib/communications";
 import { addDays, formatDateInTimeZone, getCurrentLocalDate, zonedDateTimeToUtc } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
@@ -14,6 +15,10 @@ type BirthdayReminderStatus = "queued" | "sending" | "sent" | "cancelled" | "ski
 interface ListBirthdayReminderFilters {
   limit: number;
   cursor?: string;
+}
+
+interface ProcessQueuedBirthdayEmailOptions {
+  requestId?: string;
 }
 
 interface CursorPayload {
@@ -235,6 +240,42 @@ const queueEmailForReminder = async (reminder: Row): Promise<Row | null> => {
 
   handleSupabaseError(error, "Unable to queue birthday email");
   return data as Row;
+};
+
+const claimQueuedBirthdayReminderForEmail = async (reminder: Row, now: Date): Promise<Row | null> => {
+  const reminderId = String(reminder.id ?? "");
+  if (!reminderId) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("birthday_reminders")
+    .update({
+      status: "sending",
+      error: null
+    })
+    .eq("id", reminderId)
+    .eq("status", "queued")
+    .lt("scheduled_send_at", now.toISOString())
+    .select("*")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to claim birthday reminder for email");
+  return data as Row | null;
+};
+
+const markBirthdayEmailQueueFailure = async (reminderId: string, error: unknown): Promise<void> => {
+  const message = error instanceof Error ? error.message : "Unable to queue birthday reminder email";
+  const { error: updateError } = await supabaseAdmin
+    .from("birthday_reminders")
+    .update({
+      status: "failed",
+      error: message
+    })
+    .eq("id", reminderId)
+    .eq("status", "sending");
+
+  handleSupabaseError(updateError, "Unable to mark birthday reminder email queue failure");
 };
 
 const isBirthdayRemindersEnabled = async (userId: string): Promise<boolean> => {
@@ -475,7 +516,11 @@ export const birthdayRemindersService = {
     return toApiReminder(reminder);
   },
 
-  async processQueuedBirthdayEmails(now = new Date(), limit = 50): Promise<{ processed: number; queued_emails: number }> {
+  async processQueuedBirthdayEmails(
+    now = new Date(),
+    limit = 50,
+    options: ProcessQueuedBirthdayEmailOptions = {}
+  ): Promise<{ processed: number; queued_emails: number }> {
     const { data, error } = await supabaseAdmin
       .from("birthday_reminders")
       .select("*")
@@ -485,34 +530,70 @@ export const birthdayRemindersService = {
       .limit(limit);
 
     handleSupabaseError(error, "Unable to load queued birthday reminders");
+    const candidates = (data ?? []) as Row[];
+    const oldestDueAt = getString(candidates.find((reminder) => getString(reminder, "scheduled_send_at")), "scheduled_send_at");
+    const lagSeconds = oldestDueAt
+      ? Math.max(0, Math.floor((now.getTime() - new Date(oldestDueAt).getTime()) / 1000))
+      : null;
+    logger.info("birthday_reminder_email_processing_started", {
+      requestId: options.requestId,
+      candidateCount: candidates.length,
+      oldestDueAt,
+      lagSeconds
+    });
+
+    let processed = 0;
     let queuedEmails = 0;
 
-    for (const reminder of (data ?? []) as Row[]) {
+    for (const reminder of candidates) {
       const userId = String(reminder.user_id ?? "");
       if (!userId || !(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
         continue;
       }
 
-      const emailEvent = await queueEmailForReminder(reminder);
-      if (!emailEvent) {
+      const claimedReminder = await claimQueuedBirthdayReminderForEmail(reminder, now);
+      if (!claimedReminder) {
         continue;
       }
 
-      queuedEmails += 1;
-      const { error: updateError } = await supabaseAdmin
-        .from("birthday_reminders")
-        .update({
-          status: "sending",
-          email_event_id: emailEvent.id,
-          error: null
-        })
-        .eq("id", reminder.id);
+      processed += 1;
+      const reminderId = String(claimedReminder.id ?? "");
+      try {
+        const emailEvent = await queueEmailForReminder(claimedReminder);
+        if (!emailEvent) {
+          continue;
+        }
 
-      handleSupabaseError(updateError, "Unable to mark birthday reminder email queued");
+        queuedEmails += 1;
+        const { error: updateError } = await supabaseAdmin
+          .from("birthday_reminders")
+          .update({
+            email_event_id: emailEvent.id,
+            error: null
+          })
+          .eq("id", reminderId)
+          .eq("status", "sending");
+
+        handleSupabaseError(updateError, "Unable to link queued birthday reminder email");
+      } catch (queueError) {
+        await markBirthdayEmailQueueFailure(reminderId, queueError);
+        logger.error("birthday_reminder_email_queue_failed", {
+          requestId: options.requestId,
+          birthdayReminderId: reminderId,
+          userId,
+          errorMessage: queueError instanceof Error ? queueError.message : String(queueError)
+        });
+      }
     }
 
+    logger.info("birthday_reminder_email_processing_completed", {
+      requestId: options.requestId,
+      processed,
+      queuedEmails
+    });
+
     return {
-      processed: ((data ?? []) as Row[]).length,
+      processed,
       queued_emails: queuedEmails
     };
   },
