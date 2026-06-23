@@ -80,7 +80,7 @@ create table if not exists public.clients (
   phone_normalized text,
   email text,
   instagram text,
-  birthday date,
+  birthday text,
   notes text,
   preferred_contact_method text check (preferred_contact_method in ('text', 'call', 'email', 'instagram')),
   tags text[],
@@ -92,7 +92,25 @@ create table if not exists public.clients (
   deleted_reason text,
   purge_after timestamptz,
   created_at timestamptz default now(),
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  constraint clients_birthday_dd_mm_check
+    check (
+      birthday is null
+      or (
+        birthday ~ '^\d{2}/\d{2}$'
+        and substring(birthday from 1 for 2)::int between 1 and 31
+        and substring(birthday from 4 for 2)::int between 1 and 12
+        and substring(birthday from 1 for 2)::int <= extract(
+          day from (
+            date_trunc(
+              'month',
+              make_date(2024, substring(birthday from 4 for 2)::int, 1)
+            )
+            + interval '1 month - 1 day'
+          )
+        )
+      )
+    )
 );
 
 create table if not exists public.plan_usage_events (
@@ -391,7 +409,7 @@ create table if not exists public.birthday_reminders (
   client_id uuid not null references public.clients(id) on delete cascade,
   email_event_id uuid references public.appointment_email_events(id) on delete set null,
   recipient_email text not null,
-  birthday date not null,
+  birthday text not null,
   birthday_occurrence_date date not null,
   scheduled_send_at timestamptz not null,
   status text not null default 'queued',
@@ -406,6 +424,21 @@ create table if not exists public.birthday_reminders (
   updated_at timestamptz not null default now(),
   constraint birthday_reminders_recipient_email_check
     check (char_length(trim(recipient_email)) > 0),
+  constraint birthday_reminders_birthday_dd_mm_check
+    check (
+      birthday ~ '^\d{2}/\d{2}$'
+      and substring(birthday from 1 for 2)::int between 1 and 31
+      and substring(birthday from 4 for 2)::int between 1 and 12
+      and substring(birthday from 1 for 2)::int <= extract(
+        day from (
+          date_trunc(
+            'month',
+            make_date(2024, substring(birthday from 4 for 2)::int, 1)
+          )
+          + interval '1 month - 1 day'
+        )
+      )
+    ),
   constraint birthday_reminders_subject_length_check
     check (subject_snapshot is null or char_length(subject_snapshot) <= 160),
   constraint birthday_reminders_message_length_check

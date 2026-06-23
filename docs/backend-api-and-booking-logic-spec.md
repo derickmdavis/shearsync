@@ -549,7 +549,7 @@ Fields actively used:
 - `phone_normalized`
 - `email`
 - `instagram`
-- `birthday`
+- `birthday` (`DD/MM`)
 - `notes`
 - `preferred_contact_method`
 - `tags`
@@ -1040,7 +1040,7 @@ Fields actively used:
 - `client_id`
 - `email_event_id`
 - `recipient_email`
-- `birthday`
+- `birthday` (`DD/MM` snapshot)
 - `birthday_occurrence_date`
 - `scheduled_send_at`
 - `status`
@@ -1368,7 +1368,7 @@ Important waitlist distinction:
     - `phone`
     - `email`
     - `instagram`
-    - `birthday`
+    - `birthday` (`DD/MM`)
     - `preferred_contact_method`
     - `notes`
     - `tags`

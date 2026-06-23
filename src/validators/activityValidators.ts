@@ -194,3 +194,7 @@ export const recentCancellationsResponseSchema = z.object({
 export const appointmentActivityResponseSchema = z.object({
   events: z.array(activityEventItemSchema)
 });
+
+export const activityDashboardResponseSchema = z.object({
+  customers_reached_last_30_days: z.number().int().nonnegative()
+}).passthrough();

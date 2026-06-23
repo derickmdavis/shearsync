@@ -119,7 +119,7 @@ client_seed as (
     case when idx > 40 then first_name || ' ' || chr(64 + ((idx - 40) % 26) + 1) else first_name end as first_name,
     last_name,
     lower(regexp_replace(first_name || '.' || last_name || idx, '[^a-zA-Z0-9.]', '', 'g')) as handle,
-    (date '1980-01-01' + ((idx * 137) % 8500))::date as birthday,
+    to_char((date '1980-01-01' + ((idx * 137) % 8500))::date, 'DD/MM') as birthday,
     case
       when idx % 11 = 0 then array['new-client']
       when idx % 10 = 0 then array['vip', 'extensions']

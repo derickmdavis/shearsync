@@ -24,6 +24,7 @@ const {
   listActivityQuerySchema,
   activityFeedResponseSchema,
   appointmentActivityResponseSchema,
+  activityDashboardResponseSchema,
   recentCancellationsQuerySchema,
   recentCancellationsResponseSchema
 } =
@@ -1856,10 +1857,12 @@ describe("Activity handlers", () => {
           review_request_queue: Array<{ review_request_id: string; status: string }>;
           automation_health: { score: number; status: string };
           automation_impact_this_week: { booked_count: number; reminders_sent_count: number };
+          customers_reached_last_30_days: number;
           automation_controls: Array<{ key: string; enabled: boolean; status_label: string }>;
         };
       }).data;
 
+      activityDashboardResponseSchema.parse(payload);
       assert.deepEqual(payload.needs_attention, {
         cancellations_need_review_count: 1,
         waitlist_match_count: 1,
@@ -1889,6 +1892,7 @@ describe("Activity handlers", () => {
       assert.equal(payload.automation_health.status, "warning");
       assert.equal(payload.automation_impact_this_week.booked_count, 0);
       assert.equal(payload.automation_impact_this_week.reminders_sent_count, 1);
+      assert.equal(payload.customers_reached_last_30_days, 1);
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.enabled, true);
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.status_label, "On for bookings");
       assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
@@ -1913,6 +1917,140 @@ describe("Activity handlers", () => {
       const emailUpdateResponse = await runWithErrorHandler((request, res) => activityController.updateAutomationSetting(request, res), emailUpdateReq);
       assert.equal(emailUpdateResponse.statusCode, 200);
       assert.equal(supabase.state.automation_settings.find((setting) => setting.key === "email_confirmations")?.enabled, false);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("counts distinct customers reached by outbound communications in the last 30 days", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" },
+        { id: otherUserId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com", phone: "+15551234567" },
+        { id: secondClientId, user_id: userId, first_name: "Amanda", last_name: "Lee", email: "amanda@example.com", phone: "+15557654321" },
+        { id: thirdClientId, user_id: userId, first_name: "No", last_name: "Client Id", email: "missing@example.com", phone: "+15550000000" },
+        { id: foreignClientId, user_id: otherUserId, first_name: "Other", last_name: "Client", email: "other@example.com", phone: "+15551111111" }
+      ],
+      communication_events: [
+        {
+          id: "communication-reached-1",
+          user_id: userId,
+          client_id: clientId,
+          channel: "email",
+          message_type: "appointment_reminder",
+          status: "sent",
+          created_at: "2026-06-01T12:00:00.000Z"
+        },
+        {
+          id: "communication-reached-duplicate",
+          user_id: userId,
+          client_id: clientId,
+          channel: "sms",
+          message_type: "appointment_reminder",
+          status: "delivered",
+          created_at: "2026-06-02T12:00:00.000Z"
+        },
+        {
+          id: "communication-outside-window",
+          user_id: userId,
+          client_id: secondClientId,
+          channel: "email",
+          message_type: "appointment_reminder",
+          status: "sent",
+          created_at: "2026-05-01T12:00:00.000Z"
+        },
+        {
+          id: "communication-unsupported-no-show",
+          user_id: userId,
+          client_id: secondClientId,
+          channel: "email",
+          message_type: "no_show_follow_up",
+          status: "sent",
+          created_at: "2026-06-03T12:00:00.000Z"
+        },
+        {
+          id: "communication-missing-client",
+          user_id: userId,
+          client_id: null,
+          channel: "email",
+          message_type: "appointment_reminder",
+          status: "sent",
+          created_at: "2026-06-03T13:00:00.000Z"
+        },
+        {
+          id: "communication-foreign-user",
+          user_id: otherUserId,
+          client_id: foreignClientId,
+          channel: "email",
+          message_type: "appointment_reminder",
+          status: "sent",
+          created_at: "2026-06-03T14:00:00.000Z"
+        }
+      ],
+      appointment_email_events: [
+        {
+          id: "appointment-email-confirmation-reached",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: secondAppointmentId,
+          email_type: "appointment_confirmed",
+          recipient_email: "amanda@example.com",
+          status: "sent",
+          sent_at: "2026-06-04T12:00:00.000Z",
+          created_at: "2026-06-04T11:59:00.000Z",
+          template_data: {}
+        },
+        {
+          id: "appointment-email-missing-client",
+          user_id: userId,
+          client_id: null,
+          appointment_id: null,
+          email_type: "thank_you_email",
+          recipient_email: "unknown@example.com",
+          status: "sent",
+          sent_at: "2026-06-04T13:00:00.000Z",
+          created_at: "2026-06-04T12:59:00.000Z",
+          template_data: {}
+        }
+      ],
+      reminders: [
+        {
+          id: "review-request-duplicate-client",
+          user_id: userId,
+          client_id: secondClientId,
+          appointment_id: null,
+          title: "Review request",
+          due_date: "2026-06-05T12:00:00.000Z",
+          status: "sent",
+          channel: "email",
+          reminder_type: "follow_up",
+          sent_at: "2026-06-05T12:00:00.000Z",
+          created_at: "2026-06-05T11:00:00.000Z",
+          updated_at: "2026-06-05T12:00:00.000Z"
+        }
+      ],
+      automation_settings: []
+    });
+
+    try {
+      const dashboardReq = createMockRequest({
+        user: { id: userId } as Request["user"]
+      });
+
+      const dashboardResponse = await runWithErrorHandler((request, res) => activityController.dashboard(request, res), dashboardReq);
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: { customers_reached_last_30_days: number };
+      }).data;
+
+      activityDashboardResponseSchema.parse(payload);
+      assert.equal(payload.customers_reached_last_30_days, 2);
     } finally {
       supabase.restore();
       mock.timers.reset();
@@ -2126,7 +2264,7 @@ describe("Activity handlers", () => {
           user_id: userId,
           client_id: clientId,
           recipient_email: "sarah@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           scheduled_send_at: "2026-06-06T18:00:00.000Z",
           status: "queued",
           template_data: { client_name: "Sarah Miller" },
@@ -2138,7 +2276,7 @@ describe("Activity handlers", () => {
           user_id: userId,
           client_id: clientId,
           recipient_email: "sarah@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           scheduled_send_at: "2026-06-06T18:05:00.000Z",
           status: "failed",
           template_data: { client_name: "Sarah Miller" },
@@ -2150,7 +2288,7 @@ describe("Activity handlers", () => {
           user_id: userId,
           client_id: thirdClientId,
           recipient_email: "optout@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           scheduled_send_at: "2026-06-06T18:30:00.000Z",
           status: "queued",
           template_data: { client_name: "Opted Out" },
@@ -2362,7 +2500,7 @@ describe("Activity handlers", () => {
           user_id: userId,
           client_id: clientId,
           recipient_email: "sarah@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           scheduled_send_at: "2026-06-06T18:00:00.000Z",
           status: "queued",
           template_data: { client_name: "Sarah Miller" },
@@ -2578,7 +2716,7 @@ describe("Activity handlers", () => {
           user_id: userId,
           client_id: clientId,
           recipient_email: "sarah@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           scheduled_send_at: "2026-06-06T18:00:00.000Z",
           status: "queued",
           template_data: { client_name: "Sarah Miller" }
@@ -2717,7 +2855,7 @@ describe("Activity handlers", () => {
           first_name: "Jane",
           last_name: "Doe",
           email: "jane@example.com",
-          birthday: "1990-06-10"
+          birthday: "10/06"
         }
       ],
       appointments: [],

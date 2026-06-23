@@ -1,6 +1,7 @@
 import { requireFound } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { addDays, getCurrentLocalDate } from "../lib/timezone";
+import { toBirthdayOccurrence } from "../lib/birthday";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { businessTimeZoneService } from "./businessTimeZoneService";
@@ -14,8 +15,6 @@ interface BirthdayReminderFilters {
 
 const CLIENT_BIRTHDAY_SELECT =
   "id, first_name, last_name, preferred_name, birthday, phone, email, preferred_contact_method, reminder_consent";
-
-const pad = (value: number): string => String(value).padStart(2, "0");
 
 const toClientName = (client: Row): string => {
   const firstName = typeof client.first_name === "string" ? client.first_name : "";
@@ -37,18 +36,6 @@ const parseDateText = (dateText: string): { year: number; month: number; day: nu
     month: Number(monthText),
     day: Number(dayText)
   };
-};
-
-const toBirthdayOccurrence = (birthday: string, year: number): string | null => {
-  const parts = parseDateText(birthday);
-  if (!parts || !Number.isFinite(parts.year) || !Number.isFinite(parts.month) || !Number.isFinite(parts.day)) {
-    return null;
-  }
-
-  const lastDayOfMonth = new Date(Date.UTC(year, parts.month, 0)).getUTCDate();
-  const day = Math.min(parts.day, lastDayOfMonth);
-
-  return `${year}-${pad(parts.month)}-${pad(day)}`;
 };
 
 const daysBetweenDates = (startDate: string, endDate: string): number => {
@@ -106,16 +93,13 @@ export const remindersService = {
           return null;
         }
 
-        const birthdayParts = parseDateText(birthday);
-        const nextBirthdayYear = Number(nextBirthday.slice(0, 4));
-
         return {
           client_id: String(client.id ?? ""),
           client_name: toClientName(client),
           birthday,
           next_birthday: nextBirthday,
           days_until: daysBetweenDates(today, nextBirthday),
-          turning_age: birthdayParts ? nextBirthdayYear - birthdayParts.year : null,
+          turning_age: null,
           reminder_consent: typeof client.reminder_consent === "boolean" ? client.reminder_consent : null,
           preferred_contact_method: typeof client.preferred_contact_method === "string" ? client.preferred_contact_method : null,
           phone: typeof client.phone === "string" ? client.phone : null,

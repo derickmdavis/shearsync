@@ -133,7 +133,7 @@ Client contract notes:
 - Thank-you email settings are separate from email templates for approval-required mode, send delay, referral URL/code snapshots, and inline QR generation.
 - `GET /api/clients` supports backend search, pagination, sorting, and supported filters. It returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`. See `docs/frontend-clients-list-contract.md`.
 - `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as the `rebook` category in `GET /api/activity`.
-- `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday`, `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
+- `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday` (`DD/MM`), `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.
 
 Appointment contract notes:
 

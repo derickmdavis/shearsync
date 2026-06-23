@@ -117,6 +117,33 @@ type AutomationQueueCandidate = AutomationQueueItem & {
   eligibility_message_type: MessageType;
 };
 
+const customersReachedWindowMs = 30 * 24 * 60 * 60 * 1000;
+
+const CUSTOMER_REACHED_COMMUNICATION_MESSAGE_TYPES: MessageType[] = [
+  "appointment_confirmation",
+  "appointment_reminder",
+  "appointment_cancelled",
+  "appointment_rescheduled",
+  "waitlist_update",
+  "rebooking_prompt",
+  "birthday_reminder",
+  "marketing"
+];
+
+const CUSTOMER_REACHED_EMAIL_TYPES = [
+  "appointment_scheduled",
+  "appointment_pending",
+  "appointment_confirmed",
+  "appointment_cancelled",
+  "appointment_rescheduled",
+  "appointment_reminder",
+  "rebooking_prompt",
+  "birthday_reminder",
+  "thank_you_email"
+];
+
+const CUSTOMER_REACHED_REMINDER_TYPES = ["appointment_reminder", "follow_up", "general"];
+
 const REBOOK_NUDGE_SELECT = `
   id,
   user_id,
@@ -892,6 +919,100 @@ const loadImpactThisWeek = async (userId: string, timeZone: string) => {
   };
 };
 
+const addClientIds = (clientIds: Set<string>, rows: Row[] | null | undefined): void => {
+  (rows ?? []).forEach((row) => {
+    const clientId = getString(row, "client_id");
+    if (clientId) {
+      clientIds.add(clientId);
+    }
+  });
+};
+
+const loadCustomersReachedLast30Days = async (userId: string): Promise<number> => {
+  const sinceIso = new Date(Date.now() - customersReachedWindowMs).toISOString();
+  const [
+    communicationEventsResult,
+    appointmentEmailEventsResult,
+    reminderEventsResult,
+    reminderActivityResult,
+    rebookNudgesResult,
+    birthdayRemindersResult,
+    thankYouEmailsResult
+  ] = await Promise.all([
+    supabaseAdmin
+      .from("communication_events")
+      .select("client_id")
+      .eq("user_id", userId)
+      .in("status", ["sent", "delivered"])
+      .in("message_type", CUSTOMER_REACHED_COMMUNICATION_MESSAGE_TYPES)
+      .not("client_id", "is", null)
+      .gte("created_at", sinceIso),
+    supabaseAdmin
+      .from("appointment_email_events")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .in("email_type", CUSTOMER_REACHED_EMAIL_TYPES)
+      .not("client_id", "is", null)
+      .gte("sent_at", sinceIso),
+    supabaseAdmin
+      .from("reminders")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .in("reminder_type", CUSTOMER_REACHED_REMINDER_TYPES)
+      .not("client_id", "is", null)
+      .gte("sent_at", sinceIso),
+    supabaseAdmin
+      .from("activity_events")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("activity_type", "reminder_sent")
+      .not("client_id", "is", null)
+      .gte("occurred_at", sinceIso),
+    supabaseAdmin
+      .from("rebook_nudges")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .not("client_id", "is", null)
+      .gte("sent_at", sinceIso),
+    supabaseAdmin
+      .from("birthday_reminders")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .not("client_id", "is", null)
+      .gte("sent_at", sinceIso),
+    supabaseAdmin
+      .from("thank_you_emails")
+      .select("client_id")
+      .eq("user_id", userId)
+      .eq("status", "sent")
+      .not("client_id", "is", null)
+      .gte("sent_at", sinceIso)
+  ]);
+
+  handleSupabaseError(communicationEventsResult.error, "Unable to load customers reached communication events");
+  handleSupabaseError(appointmentEmailEventsResult.error, "Unable to load customers reached email events");
+  handleSupabaseError(reminderEventsResult.error, "Unable to load customers reached reminders");
+  handleSupabaseError(reminderActivityResult.error, "Unable to load customers reached reminder activity");
+  handleSupabaseError(rebookNudgesResult.error, "Unable to load customers reached rebook nudges");
+  handleSupabaseError(birthdayRemindersResult.error, "Unable to load customers reached birthday reminders");
+  handleSupabaseError(thankYouEmailsResult.error, "Unable to load customers reached thank you emails");
+
+  const clientIds = new Set<string>();
+  addClientIds(clientIds, communicationEventsResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, appointmentEmailEventsResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, reminderEventsResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, reminderActivityResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, rebookNudgesResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, birthdayRemindersResult.data as Row[] | null | undefined);
+  addClientIds(clientIds, thankYouEmailsResult.data as Row[] | null | undefined);
+
+  return clientIds.size;
+};
+
 export const activityDashboardService = {
   isAutomationControlKey,
 
@@ -919,7 +1040,8 @@ export const activityDashboardService = {
       rebookNudgeCounts,
       outstandingRebookNudges,
       birthdayReminderQueue,
-      thankYouEmailCounts
+      thankYouEmailCounts,
+      customersReachedLast30Days
     ] = await Promise.all([
       loadRecentActivity(userId),
       loadCancellationReviewItems(userId, timeZone),
@@ -938,7 +1060,8 @@ export const activityDashboardService = {
       rebookNudgesService.getCountsForUser(userId),
       rebookNudgesEnabled ? rebookNudgesService.getOutstandingForUser(userId, 50) : [],
       birthdayRemindersEnabled ? birthdayRemindersService.getQueuedForUser(userId, 50) : [],
-      thankYouEmailsService.getCountsForUser(userId)
+      thankYouEmailsService.getCountsForUser(userId),
+      loadCustomersReachedLast30Days(userId)
     ]);
 
     const [automationHealth, automationImpactThisWeek] = await Promise.all([
@@ -1091,6 +1214,7 @@ export const activityDashboardService = {
       delayed_automation_count: automationHealth.delayed_count,
       health_reasons: automationHealth.reasons,
       automation_impact_this_week: automationImpactThisWeek,
+      customers_reached_last_30_days: customersReachedLast30Days,
       recent_activity: recentActivity,
       automation_controls: automationControls
     };

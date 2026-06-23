@@ -29,7 +29,7 @@ const getPreviewTemplateData = (emailType: AppointmentEmailType) => ({
   last_appointment_display: "February 12, 2099",
   rebook_interval_days: 90,
   rebook_url: "https://example.com/book/maya-johnson",
-  birthday: "1990-06-15",
+  birthday: "15/06",
   birthday_label: "June 15",
   birthday_display: "June 15",
   appointment_date: "2099-05-12T16:00:00.000Z",

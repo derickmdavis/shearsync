@@ -52,7 +52,7 @@ type ClientRecord = {
   phone_normalized: string | null;
   email: string | null;
   instagram: string | null;
-  birthday: string | null;
+  birthday: string | null; // DD/MM
   notes: string | null;
   preferred_contact_method: "text" | "call" | "email" | "instagram" | null;
   tags: string[] | null;

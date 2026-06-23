@@ -2,6 +2,7 @@ import { ApiError, requireFound } from "../lib/errors";
 import { logger } from "../lib/logger";
 import { normalizeEmail } from "../lib/communications";
 import { addDays, formatDateInTimeZone, getCurrentLocalDate, zonedDateTimeToUtc } from "../lib/timezone";
+import { normalizeBirthday, toBirthdayOccurrence } from "../lib/birthday";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
@@ -34,8 +35,6 @@ const skippableEmailStatuses = ["queued", "failed", "sending"];
 const getString = (row: Row | null | undefined, key: string): string | null =>
   typeof row?.[key] === "string" && String(row[key]).trim().length > 0 ? String(row[key]).trim() : null;
 
-const pad = (value: number): string => String(value).padStart(2, "0");
-
 const parseDateText = (dateText: string): { year: number; month: number; day: number } | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText);
   if (!match) {
@@ -48,18 +47,6 @@ const parseDateText = (dateText: string): { year: number; month: number; day: nu
     month: Number(monthText),
     day: Number(dayText)
   };
-};
-
-const toBirthdayOccurrence = (birthday: string, year: number): string | null => {
-  const parts = parseDateText(birthday);
-  if (!parts || !Number.isFinite(parts.year) || !Number.isFinite(parts.month) || !Number.isFinite(parts.day)) {
-    return null;
-  }
-
-  const lastDayOfMonth = new Date(Date.UTC(year, parts.month, 0)).getUTCDate();
-  const day = Math.min(parts.day, lastDayOfMonth);
-
-  return `${year}-${pad(parts.month)}-${pad(day)}`;
 };
 
 const daysBetweenDates = (startDate: string, endDate: string): number => {
@@ -88,9 +75,6 @@ const getBusinessDisplayName = (user: Row | null): string => {
   const email = normalizeEmail(user?.email);
   return businessName ?? fullName ?? email ?? "Your stylist";
 };
-
-const normalizeDate = (value: unknown): string | null =>
-  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 
 const toApiReminder = (row: Row): Row => {
   const templateData = (row.template_data ?? {}) as Row;
@@ -315,7 +299,7 @@ export const birthdayRemindersService = {
 
     const candidates = ((clients ?? []) as Row[])
       .map((client): { client: Row; birthday: string; occurrenceDate: string; recipientEmail: string } | null => {
-        const birthday = normalizeDate(client.birthday);
+        const birthday = normalizeBirthday(client.birthday);
         const clientId = getString(client, "id");
         const recipientEmail = normalizeEmail(client.email);
         if (!clientId || !birthday || !recipientEmail) {

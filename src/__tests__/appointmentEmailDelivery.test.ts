@@ -480,7 +480,7 @@ describe("appointment email delivery", () => {
           first_name: "Jane",
           last_name: "Doe",
           email: "jane@example.com",
-          birthday: "1990-06-10"
+          birthday: "10/06"
         }
       ],
       appointment_email_templates: [
@@ -2252,7 +2252,7 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           client_id: TEST_CLIENT_ID,
           recipient_email: "jane@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           birthday_occurrence_date: "2026-06-10",
           scheduled_send_at: "2026-06-10T09:00:00.000Z",
           status: "queued",
@@ -2330,7 +2330,7 @@ describe("appointment email delivery", () => {
           first_name: "Jane",
           last_name: "Doe",
           email: "Jane@Example.com",
-          birthday: "1990-06-10"
+          birthday: "10/06"
         }
       ],
       appointment_email_templates: [
@@ -2730,7 +2730,7 @@ describe("appointment email delivery", () => {
           first_name: "Jane",
           last_name: "Doe",
           email: "jane@example.com",
-          birthday: "1990-06-10"
+          birthday: "10/06"
         }
       ],
       birthday_reminders: []
@@ -2776,7 +2776,7 @@ describe("appointment email delivery", () => {
           first_name: "Jane",
           last_name: "Doe",
           email: "jane@example.com",
-          birthday: "1990-06-10"
+          birthday: "10/06"
         }
       ],
       birthday_reminders: []
@@ -2815,7 +2815,7 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           client_id: TEST_CLIENT_ID,
           recipient_email: "a@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           birthday_occurrence_date: "2026-06-10",
           scheduled_send_at: "2026-06-10T09:00:00.000Z",
           status: "queued",
@@ -2826,7 +2826,7 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           client_id: TEST_CLIENT_ID,
           recipient_email: "b@example.com",
-          birthday: "1990-06-10",
+          birthday: "10/06",
           birthday_occurrence_date: "2026-06-10",
           scheduled_send_at: "2026-06-10T09:00:00.000Z",
           status: "queued",
@@ -2837,7 +2837,7 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           client_id: TEST_CLIENT_ID,
           recipient_email: "c@example.com",
-          birthday: "1990-06-11",
+          birthday: "11/06",
           birthday_occurrence_date: "2026-06-11",
           scheduled_send_at: "2026-06-11T09:00:00.000Z",
           status: "queued",

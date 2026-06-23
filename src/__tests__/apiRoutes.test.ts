@@ -857,7 +857,7 @@ describe("API handlers", () => {
           phone: "(555) 218-4401",
           email: "ava@example.com",
           instagram: "@avamartinezhair",
-          birthday: "1994-05-12",
+          birthday: "12/05",
           preferred_contact_method: "text",
           notes: "Prefers afternoon appointments.",
           tags: ["VIP", "Blonde"],
@@ -903,6 +903,19 @@ describe("API handlers", () => {
     );
 
     assert.equal(invalidResponse?.statusCode, 400);
+
+    const invalidBirthdayResponse = await runValidation(
+      createMockRequest({
+        body: {
+          first_name: "Ava",
+          last_name: "Martinez",
+          birthday: "1994-05-12"
+        }
+      }),
+      { body: createClientSchema }
+    );
+
+    assert.equal(invalidBirthdayResponse?.statusCode, 400);
   });
 
   it("returns enriched client list metadata", async () => {
@@ -1046,7 +1059,7 @@ describe("API handlers", () => {
           phone: "(555) 218-4401",
           email: "ava@example.com",
           instagram: "@avamartinezhair",
-          birthday: "1994-05-12",
+          birthday: "12/05",
           preferred_contact_method: "text",
           notes: "Prefers afternoon appointments.",
           tags: ["VIP", "Blonde", "VIP"],
@@ -1061,7 +1074,7 @@ describe("API handlers", () => {
       assert.equal(response.statusCode, 201);
       assert.equal(createdClient.preferred_name, "Avi");
       assert.equal(createdClient.instagram, "avamartinezhair");
-      assert.equal(createdClient.birthday, "1994-05-12");
+      assert.equal(createdClient.birthday, "12/05");
       assert.equal(createdClient.preferred_contact_method, "text");
       assert.deepEqual(createdClient.tags, ["VIP", "Blonde"]);
       assert.equal(createdClient.source, "instagram");
@@ -1090,7 +1103,7 @@ describe("API handlers", () => {
           user_id: userId,
           first_name: "Ava",
           last_name: "Martinez",
-          birthday: "1994-05-12"
+          birthday: "12/05"
         }
       ],
       appointments: []
@@ -1264,7 +1277,7 @@ describe("API handlers", () => {
           first_name: "Ava",
           last_name: "Martinez",
           preferred_name: "Avi",
-          birthday: "1990-12-20",
+          birthday: "20/12",
           phone: "(555) 111-2222",
           email: "ava@example.com",
           preferred_contact_method: "text",
@@ -1275,7 +1288,7 @@ describe("API handlers", () => {
           user_id: userId,
           first_name: "Noah",
           last_name: "Kim",
-          birthday: "1994-01-04",
+          birthday: "04/01",
           email: "noah@example.com",
           reminder_consent: null
         },
@@ -1284,7 +1297,7 @@ describe("API handlers", () => {
           user_id: userId,
           first_name: "Mia",
           last_name: "Parks",
-          birthday: "1992-02-15"
+          birthday: "15/02"
         },
         {
           id: "client-no-birthday",
@@ -1298,7 +1311,7 @@ describe("API handlers", () => {
           user_id: otherUserId,
           first_name: "Foreign",
           last_name: "Client",
-          birthday: "1991-12-21"
+          birthday: "21/12"
         }
       ]
     });
@@ -1317,10 +1330,10 @@ describe("API handlers", () => {
           {
             client_id: "client-birthday-today",
             client_name: "Avi",
-            birthday: "1990-12-20",
+            birthday: "20/12",
             next_birthday: "2026-12-20",
             days_until: 0,
-            turning_age: 36,
+            turning_age: null,
             reminder_consent: true,
             preferred_contact_method: "text",
             phone: "(555) 111-2222",
@@ -1329,10 +1342,10 @@ describe("API handlers", () => {
           {
             client_id: "client-birthday-upcoming",
             client_name: "Noah Kim",
-            birthday: "1994-01-04",
+            birthday: "04/01",
             next_birthday: "2027-01-04",
             days_until: 15,
-            turning_age: 33,
+            turning_age: null,
             reminder_consent: null,
             preferred_contact_method: null,
             phone: null,
