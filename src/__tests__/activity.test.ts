@@ -1956,6 +1956,15 @@ describe("Activity handlers", () => {
           created_at: "2026-06-02T12:00:00.000Z"
         },
         {
+          id: "communication-confirmation-excluded",
+          user_id: userId,
+          client_id: thirdClientId,
+          channel: "email",
+          message_type: "appointment_confirmation",
+          status: "sent",
+          created_at: "2026-06-02T13:00:00.000Z"
+        },
+        {
           id: "communication-outside-window",
           user_id: userId,
           client_id: secondClientId,
@@ -2003,6 +2012,18 @@ describe("Activity handlers", () => {
           status: "sent",
           sent_at: "2026-06-04T12:00:00.000Z",
           created_at: "2026-06-04T11:59:00.000Z",
+          template_data: {}
+        },
+        {
+          id: "appointment-email-scheduled-excluded",
+          user_id: userId,
+          client_id: thirdClientId,
+          appointment_id: thirdAppointmentId,
+          email_type: "appointment_scheduled",
+          recipient_email: "missing@example.com",
+          status: "sent",
+          sent_at: "2026-06-04T12:30:00.000Z",
+          created_at: "2026-06-04T12:29:00.000Z",
           template_data: {}
         },
         {

@@ -120,7 +120,6 @@ type AutomationQueueCandidate = AutomationQueueItem & {
 const customersReachedWindowMs = 30 * 24 * 60 * 60 * 1000;
 
 const CUSTOMER_REACHED_COMMUNICATION_MESSAGE_TYPES: MessageType[] = [
-  "appointment_confirmation",
   "appointment_reminder",
   "appointment_cancelled",
   "appointment_rescheduled",
@@ -131,9 +130,6 @@ const CUSTOMER_REACHED_COMMUNICATION_MESSAGE_TYPES: MessageType[] = [
 ];
 
 const CUSTOMER_REACHED_EMAIL_TYPES = [
-  "appointment_scheduled",
-  "appointment_pending",
-  "appointment_confirmed",
   "appointment_cancelled",
   "appointment_rescheduled",
   "appointment_reminder",
