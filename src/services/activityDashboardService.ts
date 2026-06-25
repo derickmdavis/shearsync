@@ -530,7 +530,9 @@ const toAppointmentEmailReminderQueueCandidates = (
       automation_key: "appointment_reminders",
       reminder_id: emailEvent.id,
       email_event_id: emailEvent.id,
-      appointment_id: appointmentId,
+      // reminder_queue items must always include appointment_id in the response contract,
+      // even when the source email event has no appointment attached.
+      appointment_id: appointmentId ?? null,
       client_id: clientId,
       client_name: toClientName(client),
       send_at: sendAt,
@@ -661,6 +663,9 @@ const toBirthdayReminderQueueCandidates = (
       automation_key: "birthday_reminders",
       reminder_id: row.id,
       birthday_reminder_id: row.id,
+      // reminder_queue items must always include appointment_id in the response contract,
+      // even when birthday reminders are not tied to a specific appointment.
+      appointment_id: null,
       client_id: clientId,
       client_name: getString(templateData, "client_name") ?? toClientName(client),
       send_at: sendAt,

@@ -2430,7 +2430,7 @@ describe("Activity handlers", () => {
           queued_thank_you_email_count: number;
           pending_rebook_nudge_count: number;
           pending_thank_you_email_count: number;
-          reminder_queue: Array<{ reminder_id: string; reminder_type: string; send_at: string; channel: string }>;
+          reminder_queue: Array<{ reminder_id: string; reminder_type: string; send_at: string; channel: string; appointment_id: string | null }>;
           automation_controls: Array<{ key: string; enabled: boolean; feature_available: boolean; queued_count?: number; scheduled_count?: number }>;
         };
       }).data;
@@ -2442,6 +2442,14 @@ describe("Activity handlers", () => {
         [birthdayReminderId, "birthday_reminder", "2026-06-06T18:00:00.000Z"],
         [thankYouEmailId, "thank_you_email", "2026-06-06T19:00:00.000Z"]
       ]);
+      assert.deepEqual(payload.reminder_queue.map((item) => item.appointment_id), [
+        appointmentId,
+        appointmentId,
+        appointmentId,
+        null,
+        appointmentId
+      ]);
+      assert.equal(payload.reminder_queue.some((item) => item.appointment_id === undefined), false);
       assert.equal(payload.reminder_queue.some((item) => item.reminder_id === "confirmation-email"), false);
       assert.equal(payload.reminder_queue.some((item) => item.reminder_id.includes("approval")), false);
       assert.equal(payload.reminder_queue.some((item) => item.reminder_id.includes("failed")), false);
