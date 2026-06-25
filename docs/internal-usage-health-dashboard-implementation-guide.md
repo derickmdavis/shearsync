@@ -76,6 +76,8 @@ Allowed safe identifiers:
 - booleans like `has_payment_url`, `has_qr_image_path`
 - counts and durations
 
+Note: some dashboard response contracts must preserve field presence even when the value is empty. In particular, `reminder_queue` items should always include `appointment_id` as `string | null` rather than omitting it.
+
 ## Chunk 1: Environment And Metadata Sanitization
 
 Goal: create a safe foundation before any persistent logging.
