@@ -21,6 +21,8 @@ import {
   createPublicAppointmentImageUploadToken,
   getPublicAppointmentImageUploadExpiresAt
 } from "../lib/publicAppointmentImageUpload";
+import { bookingErrorEventsService } from "./bookingErrorEventsService";
+import { recordProductTelemetry } from "./productTelemetry";
 
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -314,6 +316,28 @@ export const publicBookingsService = {
         }
       }
 
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: userId,
+        stylistSlug: stylist.slug as string,
+        step: "booking_submission",
+        errorCode: slotEvaluation.reason === "appointment_conflict" ? "booking_conflict" : "slot_unavailable",
+        severity: "warning",
+        errorMessage: slotEvaluation.message,
+        metadata: validationDetails
+      });
+      await recordProductTelemetry({
+        accountUserId: userId,
+        eventType: "public_booking_submission_failed",
+        eventSource: "public_booking",
+        stylistSlug: stylist.slug as string,
+        metadata: {
+          stylist_slug: stylist.slug,
+          service_id: service.id ?? null,
+          source: "public_booking",
+          reason: slotEvaluation.reason
+        }
+      });
+
       throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message, validationDetails, {
         exposeDetails: true
       });
@@ -349,6 +373,24 @@ export const publicBookingsService = {
         });
       }
 
+      await recordProductTelemetry({
+        accountUserId: userId,
+        clientId: typeof client.id === "string" ? client.id : null,
+        appointmentId: typeof appointment.id === "string" ? appointment.id : null,
+        eventType: "public_booking_submitted",
+        eventSource: "public_booking",
+        stylistSlug: stylist.slug as string,
+        dedupeKey: typeof appointment.id === "string" ? `public_booking_submitted:${appointment.id}` : null,
+        metadata: {
+          stylist_slug: stylist.slug,
+          service_id: service.id ?? null,
+          source: "public_booking",
+          status: appointment.status ?? null,
+          is_existing_client: Boolean(matchedClient),
+          has_referral: Boolean(referralAttribution)
+        }
+      });
+
       await queuePublicBookingEmail(userId, appointment, normalizedGuestEmail);
 
       return buildConfirmation({
@@ -374,6 +416,33 @@ export const publicBookingsService = {
       });
 
       if (!existingAppointment) {
+        await bookingErrorEventsService.recordBookingError({
+          accountUserId: userId,
+          clientId: typeof client.id === "string" ? client.id : null,
+          stylistSlug: stylist.slug as string,
+          step: "booking_submission",
+          errorCode: "booking_insert_failed",
+          severity: "warning",
+          errorMessage: "Requested time is no longer available",
+          metadata: {
+            ...validationDetails,
+            reason: "appointment_write_conflict"
+          }
+        });
+        await recordProductTelemetry({
+          accountUserId: userId,
+          clientId: typeof client.id === "string" ? client.id : null,
+          eventType: "public_booking_submission_failed",
+          eventSource: "public_booking",
+          stylistSlug: stylist.slug as string,
+          metadata: {
+            stylist_slug: stylist.slug,
+            service_id: service.id ?? null,
+            source: "public_booking",
+            reason: "appointment_write_conflict"
+          }
+        });
+
         throw new ApiError(409, "Requested time is no longer available", {
           ...validationDetails,
           reason: "appointment_write_conflict"

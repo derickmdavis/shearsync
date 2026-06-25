@@ -2,6 +2,7 @@ import { ApiError, requireFound } from "../lib/errors";
 import { normalizePhone } from "../lib/phone";
 import { supabaseAdmin } from "../lib/supabase";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { recordProductTelemetry } from "./productTelemetry";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
@@ -286,6 +287,19 @@ export const clientsService = {
 
     handleSupabaseError(error, "Unable to create client");
     const createdClient = requireFound(data, "Client was not created");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      clientId: typeof createdClient.id === "string" ? createdClient.id : null,
+      eventType: "client_created",
+      eventSource: "backend",
+      dedupeKey: typeof createdClient.id === "string" ? `client_created:${createdClient.id}` : null,
+      metadata: {
+        source: payload.acquisition_source ?? "manual",
+        has_email: Boolean(payload.email),
+        has_phone: Boolean(payload.phone)
+      }
+    });
     return this.getById(userId, createdClient.id as string);
   },
 
@@ -328,6 +342,16 @@ export const clientsService = {
 
     handleSupabaseError(error, "Unable to update client");
     requireFound(data, "Client not found");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      clientId,
+      eventType: "client_updated",
+      eventSource: "backend",
+      metadata: {
+        updated_fields: Object.keys(sanitizeClientPayload(updates)).filter((field) => !["email", "phone", "notes"].includes(field))
+      }
+    });
     return this.getById(userId, clientId);
   },
 

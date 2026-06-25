@@ -16,6 +16,7 @@ import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
 import { usersService } from "./usersService";
+import { bookingErrorEventsService } from "./bookingErrorEventsService";
 
 export interface PublicManagedAppointment {
   appointment_id: string;
@@ -314,6 +315,20 @@ export const publicAppointmentManagementService = {
     });
 
     if (!slotEvaluation.ok) {
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: stylistId,
+        clientId,
+        appointmentId: String(context.appointment.id ?? ""),
+        stylistSlug: typeof context.stylist?.slug === "string" ? context.stylist.slug : null,
+        step: "booking_reschedule",
+        errorCode: slotEvaluation.reason === "appointment_conflict" ? "booking_conflict" : "slot_unavailable",
+        severity: "warning",
+        errorMessage: slotEvaluation.message,
+        metadata: {
+          reason: slotEvaluation.reason,
+          requestedDateTime
+        }
+      });
       throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message);
     }
 
@@ -340,6 +355,14 @@ export const publicAppointmentManagementService = {
 
   async getAppointmentActionLink(shortCode: string): Promise<PublicAppointmentActionLinkResponse> {
     const context = await this.loadShortCodeManagedAppointmentContext(shortCode, { markAccessed: true });
+    if (!context) {
+      await bookingErrorEventsService.recordBookingError({
+        step: "booking_reschedule",
+        errorCode: "manage_link_expired",
+        severity: "warning",
+        errorMessage: "Appointment action link is invalid or expired"
+      });
+    }
     return context
       ? toActionLinkResponse(context)
       : invalidActionLinkResponse("expired", "This appointment link has expired. Please contact your stylist.");
@@ -398,6 +421,20 @@ export const publicAppointmentManagementService = {
     });
 
     if (!slotEvaluation.ok) {
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: stylistId,
+        clientId,
+        appointmentId: String(context.appointment.id ?? ""),
+        stylistSlug: typeof context.stylist?.slug === "string" ? context.stylist.slug : null,
+        step: "booking_reschedule",
+        errorCode: slotEvaluation.reason === "appointment_conflict" ? "booking_conflict" : "slot_unavailable",
+        severity: "warning",
+        errorMessage: slotEvaluation.message,
+        metadata: {
+          reason: slotEvaluation.reason,
+          requestedDateTime
+        }
+      });
       throw new ApiError(slotEvaluation.statusCode, slotEvaluation.message);
     }
 
@@ -539,6 +576,12 @@ export const publicAppointmentManagementService = {
     const context = await this.loadShortCodeManagedAppointmentContext(shortCode);
 
     if (!context) {
+      await bookingErrorEventsService.recordBookingError({
+        step: "booking_reschedule",
+        errorCode: "manage_link_invalid",
+        severity: "warning",
+        errorMessage: invalidManagementLinkMessage
+      });
       throw new ApiError(400, invalidManagementLinkMessage);
     }
 

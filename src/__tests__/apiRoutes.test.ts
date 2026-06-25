@@ -3182,7 +3182,7 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => calendarController.getDay(request, res), req);
       const payload = response.body as {
         date: string;
-        appointments: Array<{ id: string }>;
+        appointments: Array<{ id: string; revenue?: number; revenue_source?: string }>;
         availableSlots: Array<{ id: string; startTime: string; endTime: string; durationMinutes: number; canBook: boolean }>;
         summary: {
           selectedDateLabel: string;
@@ -3202,6 +3202,8 @@ describe("API handlers", () => {
         "appt-selected-2",
         "appt-selected-3"
       ]);
+      assert.equal(payload.appointments[0]?.revenue, 100);
+      assert.equal(payload.appointments[0]?.revenue_source, "appointment_price_fallback");
       assert.deepEqual(payload.availableSlots, [
         {
           id: "slot-2026-05-05-0900",

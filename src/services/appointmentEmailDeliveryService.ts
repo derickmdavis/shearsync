@@ -15,6 +15,7 @@ import { activityEventsService } from "./activityEventsService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
+import { notificationEventsService, type NotificationType } from "./notificationEventsService";
 
 export interface EmailMessage {
   to: string;
@@ -275,6 +276,74 @@ const getEmailEventMessageType = (emailEvent: Row): MessageType => {
   }
 
   return getAppointmentMessageType(emailEvent.email_type as AppointmentEmailType);
+};
+
+const getNotificationType = (emailType: AppointmentEmailType): NotificationType => {
+  switch (emailType) {
+    case "appointment_scheduled":
+      return "booking_confirmation";
+    case "appointment_pending":
+      return "booking_request_received";
+    case "appointment_confirmed":
+      return "booking_approved";
+    case "appointment_reminder":
+      return "appointment_reminder";
+    case "rebooking_prompt":
+      return "rebook_nudge";
+    case "birthday_reminder":
+      return "birthday_reminder";
+    case "thank_you_email":
+      return "thank_you_email";
+    case "appointment_cancelled":
+    case "appointment_rescheduled":
+      return "account_email";
+  }
+};
+
+const recordEmailNotificationTelemetry = async (
+  emailEvent: Row,
+  input: {
+    status: "sent" | "failed" | "skipped";
+    provider?: string | null;
+    providerMessageId?: string | null;
+    providerErrorCode?: string | null;
+    providerErrorMessage?: string | null;
+    metadata?: Row;
+  }
+): Promise<void> => {
+  try {
+    const payload = {
+      accountUserId: typeof emailEvent.user_id === "string" ? emailEvent.user_id : null,
+      clientId: typeof emailEvent.client_id === "string" ? emailEvent.client_id : null,
+      appointmentId: typeof emailEvent.appointment_id === "string" ? emailEvent.appointment_id : null,
+      notificationType: getNotificationType(emailEvent.email_type as AppointmentEmailType),
+      channel: "email" as const,
+      provider: input.provider ?? null,
+      providerMessageId: input.providerMessageId ?? null,
+      providerErrorCode: input.providerErrorCode ?? null,
+      providerErrorMessage: input.providerErrorMessage ?? null,
+      metadata: {
+        appointment_email_event_id: emailEvent.id ?? null,
+        email_type: emailEvent.email_type ?? null,
+        message_type: getEmailEventMessageType(emailEvent),
+        ...(input.metadata ?? {})
+      }
+    };
+
+    if (input.status === "sent") {
+      await notificationEventsService.recordNotificationSent(payload);
+    } else if (input.status === "failed") {
+      await notificationEventsService.recordNotificationFailed(payload);
+    } else {
+      await notificationEventsService.recordNotificationSkipped(payload);
+    }
+  } catch (telemetryError) {
+    console.warn("[APPOINTMENT_EMAIL_DELIVERY] notification telemetry failed", {
+      emailEventId: emailEvent.id ?? null,
+      userId: emailEvent.user_id ?? null,
+      error: telemetryError instanceof Error ? telemetryError.message : String(telemetryError)
+    });
+  }
 };
 
 const isEmailConfirmationsEnabled = async (userId: string): Promise<boolean> => {
@@ -891,6 +960,11 @@ export const appointmentEmailDeliveryService = {
             status: "skipped",
             error: "Email confirmations automation disabled"
           });
+          await recordEmailNotificationTelemetry(claimedEvent, {
+            status: "skipped",
+            providerErrorCode: "disabled",
+            providerErrorMessage: "Email confirmations automation disabled"
+          });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           await birthdayRemindersService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
           await thankYouEmailsService.markForEmailEvent(claimedEvent, "skipped", "Email confirmations automation disabled");
@@ -926,6 +1000,11 @@ export const appointmentEmailDeliveryService = {
           await markEmailEvent(String(claimedEvent.id ?? ""), {
             status: "skipped",
             error: canSend.reason ?? "Communication preference blocked send"
+          });
+          await recordEmailNotificationTelemetry(claimedEvent, {
+            status: "skipped",
+            providerErrorCode: canSend.reason ?? "communication_preference_blocked",
+            providerErrorMessage: canSend.reason ?? "Communication preference blocked send"
           });
           await rebookNudgesService.markForEmailEvent(
             claimedEvent,
@@ -964,6 +1043,11 @@ export const appointmentEmailDeliveryService = {
             status: "skipped",
             error: appointmentReminderSkipReason
           });
+          await recordEmailNotificationTelemetry(claimedEvent, {
+            status: "skipped",
+            providerErrorCode: appointmentReminderSkipReason,
+            providerErrorMessage: appointmentReminderSkipReason
+          });
           result.skipped += 1;
           continue;
         }
@@ -980,6 +1064,11 @@ export const appointmentEmailDeliveryService = {
             provider_message_id: providerResult.providerMessageId ?? null,
             sent_at: now.toISOString(),
             error: null
+          });
+          await recordEmailNotificationTelemetry(claimedEvent, {
+            status: "sent",
+            provider: providerResult.provider,
+            providerMessageId: providerResult.providerMessageId ?? null
           });
           await rebookNudgesService.markForEmailEvent(claimedEvent, "sent", null);
           await birthdayRemindersService.markForEmailEvent(claimedEvent, "sent", null);
@@ -1026,6 +1115,12 @@ export const appointmentEmailDeliveryService = {
           provider_message_id: providerResult.providerMessageId ?? null,
           error: providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
         });
+        await recordEmailNotificationTelemetry(claimedEvent, {
+          status: "skipped",
+          provider: providerResult.provider,
+          providerMessageId: providerResult.providerMessageId ?? null,
+          providerErrorMessage: providerResult.error ?? (isNoopProvider(provider) ? "No email provider configured" : null)
+        });
         await rebookNudgesService.markForEmailEvent(
           claimedEvent,
           "skipped",
@@ -1060,6 +1155,10 @@ export const appointmentEmailDeliveryService = {
         await markEmailEvent(String(claimedEvent.id ?? ""), {
           status: "failed",
           error: message
+        });
+        await recordEmailNotificationTelemetry(claimedEvent, {
+          status: "failed",
+          providerErrorMessage: message
         });
         await rebookNudgesService.markForEmailEvent(claimedEvent, "failed", message);
         await birthdayRemindersService.markForEmailEvent(claimedEvent, "failed", message);

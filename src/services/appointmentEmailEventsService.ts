@@ -7,6 +7,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
 import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
 import { appointmentActionLinksService } from "./appointmentActionLinksService";
+import { notificationEventsService, type NotificationType } from "./notificationEventsService";
 
 export type AppointmentEmailType =
   | "appointment_scheduled"
@@ -48,6 +49,27 @@ interface AppointmentEmailTemplateData {
     custom_message_block?: string | null;
   };
 }
+
+const getNotificationType = (emailType: AppointmentEmailType): NotificationType => {
+  switch (emailType) {
+    case "appointment_pending":
+      return "booking_request_received";
+    case "appointment_confirmed":
+      return "booking_approved";
+    case "appointment_cancelled":
+      return "booking_rejected";
+    case "appointment_reminder":
+      return "appointment_reminder";
+    case "birthday_reminder":
+      return "birthday_reminder";
+    case "thank_you_email":
+      return "thank_you_email";
+    case "rebooking_prompt":
+      return "rebook_nudge";
+    default:
+      return "booking_confirmation";
+  }
+};
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
 
@@ -306,6 +328,25 @@ export const appointmentEmailEventsService = {
     }
 
     handleSupabaseError(error, "Unable to queue appointment email");
+    try {
+      await notificationEventsService.recordNotificationQueued({
+        accountUserId: stylistId,
+        clientId,
+        appointmentId,
+        notificationType: getNotificationType(emailType),
+        channel: "email",
+        metadata: {
+          appointment_email_event_id: data.id ?? null,
+          email_type: emailType
+        }
+      });
+    } catch (telemetryError) {
+      console.warn("[APPOINTMENT_EMAIL_EVENTS] queued notification telemetry failed", {
+        emailEventId: data.id ?? null,
+        userId: stylistId,
+        error: telemetryError instanceof Error ? telemetryError.message : String(telemetryError)
+      });
+    }
     return data;
   }
 };

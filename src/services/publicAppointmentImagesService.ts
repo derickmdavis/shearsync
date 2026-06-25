@@ -17,6 +17,7 @@ import {
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { entitlementsService } from "./entitlementsService";
+import { bookingErrorEventsService } from "./bookingErrorEventsService";
 
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 
@@ -159,70 +160,84 @@ export const publicAppointmentImagesService = {
     }
 
     const context = resolveContext(payload.reference_photo_upload_token);
-    await assertReferencePhotosAllowed(context.stylistId);
-    const appointment = await this.getTokenAppointment(context);
-    await this.expirePendingReferenceUploads(context, now);
-    await this.assertReferenceImageAvailable(context, now);
+    try {
+      await assertReferencePhotosAllowed(context.stylistId);
+      const appointment = await this.getTokenAppointment(context);
+      await this.expirePendingReferenceUploads(context, now);
+      await this.assertReferenceImageAvailable(context, now);
 
-    const imageId = randomUUID();
-    const uploadExpiresAt = new Date(now.getTime() + UPLOAD_INTENT_TTL_MINUTES * 60 * 1000);
-    const paths = appointmentImageStorageService.generatePaths({
-      userId: context.stylistId,
-      clientId: context.clientId,
-      appointmentId: context.appointmentId,
-      imageId,
-      displayContentType: payload.display_content_type,
-      thumbnailContentType: payload.thumbnail_content_type
-    });
-    const uploadUrls = await appointmentImageStorageService.createSignedUploadUrls(paths);
+      const imageId = randomUUID();
+      const uploadExpiresAt = new Date(now.getTime() + UPLOAD_INTENT_TTL_MINUTES * 60 * 1000);
+      const paths = appointmentImageStorageService.generatePaths({
+        userId: context.stylistId,
+        clientId: context.clientId,
+        appointmentId: context.appointmentId,
+        imageId,
+        displayContentType: payload.display_content_type,
+        thumbnailContentType: payload.thumbnail_content_type
+      });
+      const uploadUrls = await appointmentImageStorageService.createSignedUploadUrls(paths);
 
-    const { data, error } = await supabaseAdmin
-      .from("appointment_images")
-      .insert({
-        id: imageId,
-        user_id: context.stylistId,
-        client_id: context.clientId,
-        appointment_id: context.appointmentId,
-        bucket: APPOINTMENT_IMAGES_BUCKET,
-        storage_path: paths.storagePath,
-        thumbnail_path: paths.thumbnailPath,
-        original_filename: payload.original_filename ?? null,
-        content_type: payload.display_content_type,
-        file_size_bytes: payload.input_size_bytes,
-        image_role: "reference",
-        image_source: "client",
-        uploaded_by_user_id: null,
-        public_upload_token_id: context.tokenId,
-        cache_version: 1,
-        upload_status: "pending",
-        upload_expires_at: toIso(uploadExpiresAt),
-        finalized_at: null
-      })
-      .select("*")
-      .single();
+      const { data, error } = await supabaseAdmin
+        .from("appointment_images")
+        .insert({
+          id: imageId,
+          user_id: context.stylistId,
+          client_id: context.clientId,
+          appointment_id: context.appointmentId,
+          bucket: APPOINTMENT_IMAGES_BUCKET,
+          storage_path: paths.storagePath,
+          thumbnail_path: paths.thumbnailPath,
+          original_filename: payload.original_filename ?? null,
+          content_type: payload.display_content_type,
+          file_size_bytes: payload.input_size_bytes,
+          image_role: "reference",
+          image_source: "client",
+          uploaded_by_user_id: null,
+          public_upload_token_id: context.tokenId,
+          cache_version: 1,
+          upload_status: "pending",
+          upload_expires_at: toIso(uploadExpiresAt),
+          finalized_at: null
+        })
+        .select("*")
+        .single();
 
-    handleSupabaseError(error, "Unable to create reference photo upload intent");
+      handleSupabaseError(error, "Unable to create reference photo upload intent");
 
-    return {
-      ...requireFound(data, "Reference photo upload intent was not created"),
-      signed_upload_urls: uploadUrls,
-      max_constraints: {
-        max_reference_images: 1,
-        max_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
-        max_display_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
-        max_thumbnail_file_size_bytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
-        max_display_long_edge_px: APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
-        max_thumbnail_long_edge_px: APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
-        upload_expires_in_minutes: UPLOAD_INTENT_TTL_MINUTES
-      },
-      appointment_status: appointment.status
-    };
+      return {
+        ...requireFound(data, "Reference photo upload intent was not created"),
+        signed_upload_urls: uploadUrls,
+        max_constraints: {
+          max_reference_images: 1,
+          max_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+          max_display_file_size_bytes: APPOINTMENT_IMAGE_MAX_DISPLAY_BYTES,
+          max_thumbnail_file_size_bytes: APPOINTMENT_IMAGE_MAX_THUMBNAIL_BYTES,
+          max_display_long_edge_px: APPOINTMENT_IMAGE_MAX_DISPLAY_LONG_EDGE,
+          max_thumbnail_long_edge_px: APPOINTMENT_IMAGE_MAX_THUMBNAIL_LONG_EDGE,
+          upload_expires_in_minutes: UPLOAD_INTENT_TTL_MINUTES
+        },
+        appointment_status: appointment.status
+      };
+    } catch (error) {
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: context.stylistId,
+        clientId: context.clientId,
+        appointmentId: context.appointmentId,
+        step: "reference_photo_upload",
+        errorCode: "reference_photo_upload_failed",
+        severity: error instanceof ApiError && error.statusCode < 500 ? "warning" : "error",
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   },
 
   async finalize(payload: PublicFinalizePayload, now = new Date()): Promise<Row> {
     const context = resolveContext(payload.reference_photo_upload_token);
-    await assertReferencePhotosAllowed(context.stylistId);
-    await this.getTokenAppointment(context);
+    try {
+      await assertReferencePhotosAllowed(context.stylistId);
+      await this.getTokenAppointment(context);
 
     const { data: pendingImage, error: pendingError } = await supabaseAdmin
       .from("appointment_images")
@@ -345,7 +360,22 @@ export const publicAppointmentImagesService = {
       .select("*")
       .maybeSingle();
 
-    handleSupabaseError(error, "Unable to finalize reference photo");
-    return requireFound(data, "Reference photo not found");
+      handleSupabaseError(error, "Unable to finalize reference photo");
+      return requireFound(data, "Reference photo not found");
+    } catch (error) {
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: context.stylistId,
+        clientId: context.clientId,
+        appointmentId: context.appointmentId,
+        step: "reference_photo_upload",
+        errorCode: "reference_photo_upload_failed",
+        severity: error instanceof ApiError && error.statusCode < 500 ? "warning" : "error",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        metadata: {
+          image_id: payload.image_id
+        }
+      });
+      throw error;
+    }
   }
 };

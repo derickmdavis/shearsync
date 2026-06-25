@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { appointmentImagesController } from "../controllers/appointmentImagesController";
-import { appointmentPaymentsController } from "../controllers/appointmentPaymentsController";
 import { appointmentsController } from "../controllers/appointmentsController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
@@ -13,10 +12,6 @@ import {
   updateAppointmentImageSchema
 } from "../validators/appointmentImageValidators";
 import {
-  markAppointmentPaidSchema,
-  updateAppointmentPaymentSchema
-} from "../validators/appointmentPaymentsValidators";
-import {
   createAppointmentSchema,
   getInternalAppointmentContextSchema,
   pendingAppointmentDecisionSchema,
@@ -25,8 +20,6 @@ import {
 import { uuidParamSchema } from "../validators/common";
 
 export const appointmentRouter = Router();
-
-const appointmentIdParamSchema = uuidParamSchema.transform(({ id }) => ({ appointmentId: id }));
 
 appointmentRouter.get(
   "/internal-context",
@@ -77,26 +70,6 @@ appointmentRouter.delete(
   "/:id/images/:imageId",
   validate({ params: appointmentImageParamsSchema }),
   asyncHandler(appointmentImagesController.remove)
-);
-appointmentRouter.get(
-  "/:id/payment",
-  validate({ params: appointmentIdParamSchema }),
-  asyncHandler(appointmentPaymentsController.get)
-);
-appointmentRouter.post(
-  "/:id/payment/mark-paid",
-  validate({ params: appointmentIdParamSchema, body: markAppointmentPaidSchema }),
-  asyncHandler(appointmentPaymentsController.markPaid)
-);
-appointmentRouter.post(
-  "/:id/payment/mark-unpaid",
-  validate({ params: appointmentIdParamSchema }),
-  asyncHandler(appointmentPaymentsController.markUnpaid)
-);
-appointmentRouter.patch(
-  "/:id/payment",
-  validate({ params: appointmentIdParamSchema, body: updateAppointmentPaymentSchema }),
-  asyncHandler(appointmentPaymentsController.update)
 );
 appointmentRouter.get("/:id", validate({ params: uuidParamSchema }), asyncHandler(appointmentsController.getById));
 appointmentRouter.post("/", validate({ body: createAppointmentSchema }), asyncHandler(appointmentsController.create));

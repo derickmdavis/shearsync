@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "202606220001_external_payment_shortcuts";
+const REQUIRED_SCHEMA_VERSION = "internal_usage_health_dashboard_contract_2026_06_24";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -57,25 +57,103 @@ const REQUIRED_TABLE_COLUMNS = {
     "created_at",
     "updated_at"
   ],
-  appointment_payments: [
+  admin_users: [
     "id",
-    "user_id",
+    "email",
+    "is_active",
+    "created_at"
+  ],
+  admin_account_notes: [
+    "id",
+    "account_user_id",
+    "created_by_admin_email",
+    "note",
+    "metadata",
+    "created_at"
+  ],
+  product_events: [
+    "id",
+    "environment",
+    "account_user_id",
+    "actor_user_id",
+    "client_id",
     "appointment_id",
-    "payment_method_id",
+    "event_type",
+    "event_source",
+    "stylist_slug",
+    "anonymous_id",
+    "session_id",
+    "dedupe_key",
+    "metadata",
+    "created_at"
+  ],
+  notification_events: [
+    "id",
+    "environment",
+    "account_user_id",
+    "actor_user_id",
+    "client_id",
+    "appointment_id",
+    "notification_type",
+    "channel",
     "status",
-    "amount",
-    "tip_amount",
-    "total_recorded",
-    "external_provider",
-    "external_provider_label",
-    "external_reference",
-    "notes",
-    "marked_paid_at",
-    "marked_unpaid_at",
-    "voided_at",
-    "is_current",
+    "provider",
+    "provider_message_id",
+    "provider_error_code",
+    "provider_error_message",
+    "metadata",
+    "created_at"
+  ],
+  job_runs: [
+    "id",
+    "environment",
+    "job_name",
+    "status",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "records_processed",
+    "records_succeeded",
+    "records_failed",
+    "error_code",
+    "error_message",
+    "metadata",
     "created_at",
     "updated_at"
+  ],
+  api_request_logs: [
+    "id",
+    "environment",
+    "request_id",
+    "method",
+    "path",
+    "route_pattern",
+    "status_code",
+    "duration_ms",
+    "account_user_id",
+    "actor_user_id",
+    "error_code",
+    "error_message",
+    "severity",
+    "metadata",
+    "created_at"
+  ],
+  booking_error_events: [
+    "id",
+    "environment",
+    "account_user_id",
+    "client_id",
+    "appointment_id",
+    "stylist_slug",
+    "request_id",
+    "session_id",
+    "anonymous_id",
+    "step",
+    "error_code",
+    "severity",
+    "error_message",
+    "metadata",
+    "created_at"
   ]
 } as const;
 

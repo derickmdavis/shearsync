@@ -154,6 +154,7 @@ describe("Profile and dashboard handlers", () => {
       const upcomingAppointments = dashboard.upcoming_appointments as Array<Record<string, unknown>>;
       const recentAppointments = dashboard.recent_appointments as Array<Record<string, unknown>>;
       const appointments = dashboard.appointments as Array<Record<string, unknown>>;
+      const monthlyRevenueSummary = dashboard.monthly_revenue_summary as Record<string, unknown>;
 
       assert.equal(response.statusCode, 200);
       assert.equal(nextAppointment?.id, "future-001");
@@ -168,6 +169,7 @@ describe("Profile and dashboard handlers", () => {
       assert.equal(recentAppointments[0]?.id, "past-105");
       assert.equal(recentAppointments[0]?.client_name, "Taylor Client");
       assert.equal("client" in (recentAppointments[0] ?? {}), false);
+      assert.equal(monthlyRevenueSummary.source, "appointment_price_fallback");
     } finally {
       supabase.restore();
     }

@@ -7,6 +7,7 @@ import { ApiError } from "../lib/errors";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { entitlementsService } from "./entitlementsService";
 import { usersService } from "./usersService";
+import { recordProductTelemetry } from "./productTelemetry";
 
 const sanitizeStylistPayload = (payload: Row): Row => ({
   ...payload,
@@ -250,7 +251,20 @@ export const stylistsService = {
       }
 
       handleSupabaseError(error, "Unable to update booking settings");
-      return requireFound(data, "Booking settings were not updated");
+      const stylist = requireFound(data, "Booking settings were not updated");
+      if (payload.booking_enabled !== undefined && payload.booking_enabled !== existing.booking_enabled) {
+        await recordProductTelemetry({
+          accountUserId: userId,
+          actorUserId: userId,
+          eventType: payload.booking_enabled ? "booking_page_enabled" : "booking_page_disabled",
+          eventSource: "backend",
+          stylistSlug: typeof stylist.slug === "string" ? stylist.slug : null,
+          metadata: {
+            stylist_slug: stylist.slug ?? null
+          }
+        });
+      }
+      return stylist;
     }
 
     return createDefaultStylistForUser(userId, cleanedPayload);

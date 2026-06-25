@@ -5,6 +5,7 @@ import type { ServiceCatalogItem } from "../types/api";
 import type { Row, RowList } from "./db";
 import { bookingRulesService } from "./bookingRulesService";
 import { handleSupabaseError } from "./db";
+import { recordProductTelemetry } from "./productTelemetry";
 import { stylistsService } from "./stylistsService";
 
 interface ServiceRow extends Row {
@@ -160,7 +161,19 @@ export const servicesService = {
       .single();
 
     handleSupabaseError(error, "Unable to create service");
-    return toServiceCatalogItem(requireFound(data as ServiceRow | null, "Service was not created"));
+    const service = requireFound(data as ServiceRow | null, "Service was not created");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: "service_created",
+      eventSource: "backend",
+      metadata: {
+        service_id: service.id,
+        is_active: service.is_active,
+        has_price: service.price !== null && service.price !== undefined
+      }
+    });
+    return toServiceCatalogItem(service);
   },
 
   async update(userId: string, serviceId: string, payload: ServiceCatalogUpdateInput): Promise<ServiceCatalogItem> {
@@ -196,7 +209,19 @@ export const servicesService = {
       .maybeSingle();
 
     handleSupabaseError(error, "Unable to update service");
-    return toServiceCatalogItem(requireFound(data as ServiceRow | null, "Service not found"));
+    const service = requireFound(data as ServiceRow | null, "Service not found");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: "service_updated",
+      eventSource: "backend",
+      metadata: {
+        service_id: service.id,
+        updated_fields: Object.keys(updates).filter((field) => field !== "description"),
+        is_active: service.is_active
+      }
+    });
+    return toServiceCatalogItem(service);
   },
 
   async delete(userId: string, serviceId: string): Promise<void> {
@@ -210,6 +235,15 @@ export const servicesService = {
 
     handleSupabaseError(error, "Unable to delete service");
     requireFound(data, "Service not found");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: "service_deleted",
+      eventSource: "backend",
+      metadata: {
+        service_id: serviceId
+      }
+    });
   },
 
   async reorder(userId: string, serviceIds: string[]): Promise<ServiceCatalogItem[]> {

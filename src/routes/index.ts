@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { slugParamSchema } from "../validators/common";
 import { accountRouter } from "./accountRoutes";
+import { adminRouter } from "./adminRoutes";
 import { activityRouter } from "./activityRoutes";
 import { appointmentRouter } from "./appointmentRoutes";
 import { authRouter } from "./authRoutes";
@@ -38,6 +39,7 @@ apiRouter.use("/api", requireAuth);
 
 apiRouter.use(authRouter);
 apiRouter.use("/api/account", accountRouter);
+apiRouter.use("/api/admin", adminRouter);
 apiRouter.use("/api/activity", activityRouter);
 apiRouter.use("/api/clients", clientRouter);
 apiRouter.use("/api/appointments", appointmentRouter);

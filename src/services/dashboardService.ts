@@ -4,7 +4,10 @@ import {
   getStartOfCurrentLocalMonthUtc,
   getStartOfLocalDayUtc
 } from "../lib/timezone";
-import { calculateAppointmentMetricTotals } from "../lib/appointmentMetrics";
+import {
+  APPOINTMENT_PRICE_FALLBACK_REVENUE_SOURCE,
+  calculateAppointmentMetricTotals
+} from "../lib/appointmentMetrics";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
@@ -163,7 +166,8 @@ export const dashboardService = {
       top_clients_by_spend: topClientsResult.data ?? [],
       monthly_revenue_summary: {
         month_start: startOfCurrentMonthIso,
-        completed_revenue: monthlyRevenue
+        completed_revenue: monthlyRevenue,
+        source: APPOINTMENT_PRICE_FALLBACK_REVENUE_SOURCE
       }
     };
   }

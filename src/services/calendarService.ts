@@ -11,6 +11,7 @@ import {
 } from "../lib/timezone";
 import { getAppointmentEndIso } from "../lib/appointments";
 import {
+  APPOINTMENT_PRICE_FALLBACK_REVENUE_SOURCE,
   calculateAppointmentMetricTotals,
   calculatePercentChange,
   getAppointmentDurationMinutes,
@@ -141,6 +142,7 @@ const toCalendarAppointment = (appointment: Row): Row => {
     end_time: endTime,
     services: serviceName ? [serviceName] : [],
     revenue: price,
+    revenue_source: APPOINTMENT_PRICE_FALLBACK_REVENUE_SOURCE,
     price,
     client_name: clientName,
     location: null

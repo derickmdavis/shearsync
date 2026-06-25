@@ -78,3 +78,8 @@ internalRouter.post(
   validate({ query: cleanupAppointmentImagesQuerySchema }),
   asyncHandler(internalController.cleanupAppointmentImages)
 );
+internalRouter.post(
+  "/api-request-logs/cleanup",
+  requireInternalApiSecret,
+  asyncHandler(internalController.cleanupApiRequestLogs)
+);

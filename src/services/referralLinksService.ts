@@ -6,6 +6,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import { clientsService } from "./clientsService";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
+import { recordProductTelemetry } from "./productTelemetry";
 
 const REFERRAL_CODE_PREFIX = "rf_";
 const REFERRAL_CODE_RANDOM_BYTES = 6;
@@ -191,7 +192,19 @@ export const referralLinksService = {
       }
 
       handleSupabaseError(error, "Unable to create client referral link");
-      return requireFound(data, "Referral link was not created");
+      const link = requireFound(data, "Referral link was not created");
+      await recordProductTelemetry({
+        accountUserId: userId,
+        actorUserId: userId,
+        clientId,
+        eventType: "referral_link_created",
+        eventSource: "backend",
+        dedupeKey: typeof link.id === "string" ? `referral_link_created:${link.id}` : null,
+        metadata: {
+          referral_link_id: link.id ?? null
+        }
+      });
+      return link;
     }
 
     throw new ApiError(500, "Unable to generate a unique referral code");
@@ -217,6 +230,17 @@ export const referralLinksService = {
       context,
       metadata: {
         expires_at: addDays(now, REFERRAL_ATTRIBUTION_WINDOW_DAYS).toISOString()
+      }
+    });
+    await recordProductTelemetry({
+      accountUserId: typeof context.link.user_id === "string" ? context.link.user_id : null,
+      clientId: typeof context.referrerClient.id === "string" ? context.referrerClient.id : null,
+      eventType: "referral_link_clicked",
+      eventSource: "public_booking",
+      stylistSlug: typeof context.stylist.slug === "string" ? context.stylist.slug : null,
+      metadata: {
+        referral_link_id: context.link.id ?? null,
+        stylist_slug: context.stylist.slug ?? null
       }
     });
 
@@ -314,6 +338,18 @@ export const referralLinksService = {
       context,
       appointmentId,
       metadata
+    });
+    await recordProductTelemetry({
+      accountUserId: typeof context.link.user_id === "string" ? context.link.user_id : null,
+      clientId: typeof context.referrerClient.id === "string" ? context.referrerClient.id : null,
+      appointmentId,
+      eventType: "referral_booking_submitted",
+      eventSource: "public_booking",
+      stylistSlug: typeof context.stylist.slug === "string" ? context.stylist.slug : null,
+      metadata: {
+        referral_link_id: context.link.id ?? null,
+        is_existing_client: metadata.is_existing_client ?? null
+      }
     });
   },
 

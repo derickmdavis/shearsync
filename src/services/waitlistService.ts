@@ -10,6 +10,8 @@ import { clientsService } from "./clientsService";
 import { entitlementsService } from "./entitlementsService";
 import { servicesService } from "./servicesService";
 import { stylistsService } from "./stylistsService";
+import { bookingErrorEventsService } from "./bookingErrorEventsService";
+import { recordProductTelemetry } from "./productTelemetry";
 
 type WaitlistSource = "public_booking" | "stylist_created" | "manual";
 
@@ -205,6 +207,19 @@ const insertWaitlistEntry = async (
 
   const waitlistEntry = requireFound(data as WaitlistRow | null, "Waitlist entry was not created");
   await activityEventsService.recordWaitlistJoined(userId, waitlistEntry);
+  await recordProductTelemetry({
+    accountUserId: userId,
+    clientId: waitlistEntry.client_id,
+    eventType: "waitlist_entry_created",
+    eventSource: source === "public_booking" ? "public_booking" : "backend",
+    dedupeKey: `waitlist_entry_created:${waitlistEntry.id}`,
+    metadata: {
+      waitlist_entry_id: waitlistEntry.id,
+      service_id: waitlistEntry.service_id ?? null,
+      source,
+      requested_date: waitlistEntry.requested_date
+    }
+  });
 
   return toWaitlistEntry(waitlistEntry);
 };
@@ -264,9 +279,25 @@ export const waitlistService = {
   async createPublicWaitlistEntry(slug: string, input: CreateWaitlistEntryInput): Promise<WaitlistEntry> {
     const stylist = await stylistsService.getBySlug(slug);
     const userId = stylist.user_id as string;
-    await assertWaitlistAvailableForUser(userId);
-    await assertServiceBelongsToStylist(userId, input.serviceId, true);
-    return insertWaitlistEntry(userId, input, "public_booking");
+    try {
+      await assertWaitlistAvailableForUser(userId);
+      await assertServiceBelongsToStylist(userId, input.serviceId, true);
+      return await insertWaitlistEntry(userId, input, "public_booking");
+    } catch (error) {
+      await bookingErrorEventsService.recordBookingError({
+        accountUserId: userId,
+        stylistSlug: slug,
+        step: "waitlist_submit",
+        errorCode: "waitlist_create_failed",
+        severity: error instanceof ApiError && error.statusCode < 500 ? "warning" : "error",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        metadata: {
+          service_id: input.serviceId ?? null,
+          requested_date: input.requestedDate
+        }
+      });
+      throw error;
+    }
   },
 
   async createStylistWaitlistEntry(userId: string, input: CreateWaitlistEntryInput): Promise<WaitlistEntry> {

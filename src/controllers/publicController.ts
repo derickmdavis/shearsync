@@ -14,6 +14,7 @@ import { referralLinksService } from "../services/referralLinksService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
+import { recordProductTelemetry } from "../services/productTelemetry";
 
 const setLiveInventoryHeaders = (res: Response) => {
   if (typeof res.set === "function") {
@@ -50,7 +51,21 @@ export const publicController = {
   },
 
   async getStylist(req: Request, res: Response) {
-    const stylist = await stylistsService.getPublicProfileBySlug(getRequiredParam(req, "slug"));
+    const slug = getRequiredParam(req, "slug");
+    const [stylist, internalStylist] = await Promise.all([
+      stylistsService.getPublicProfileBySlug(slug),
+      stylistsService.getBySlug(slug)
+    ]);
+    await recordProductTelemetry({
+      accountUserId: typeof internalStylist.user_id === "string" ? internalStylist.user_id : null,
+      eventType: "booking_page_viewed",
+      eventSource: "public_booking",
+      stylistSlug: slug,
+      metadata: {
+        stylist_slug: slug,
+        source: "public_booking"
+      }
+    });
     res.json({ data: stylist });
   },
 

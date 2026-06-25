@@ -5,6 +5,7 @@ import { appointmentImageCleanupService } from "../services/appointmentImageClea
 import { appointmentRemindersService } from "../services/appointmentRemindersService";
 import { birthdayRemindersService } from "../services/birthdayRemindersService";
 import { clientPurgeService } from "../services/clientPurgeService";
+import { apiRequestLogRetentionService } from "../services/apiRequestLogRetentionService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
 import { thankYouEmailsService } from "../services/thankYouEmailsService";
 
@@ -133,5 +134,10 @@ export const internalController = {
         orphanedStorage
       }
     });
+  },
+
+  async cleanupApiRequestLogs(_req: Request, res: Response) {
+    const result = await apiRequestLogRetentionService.cleanup();
+    res.json({ data: result });
   }
 };

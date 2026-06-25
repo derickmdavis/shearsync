@@ -4,6 +4,7 @@ export { ACTIVITY_TYPES, isActivityType } from "../lib/activityTypes";
 export type { ActivityType } from "../lib/activityTypes";
 
 export type AppointmentStatus = "pending" | "scheduled" | "completed" | "cancelled" | "no_show";
+export type RevenueSource = "appointment_price_fallback" | "recorded_revenue";
 export type BookingSource = "public" | "internal";
 export type ReminderStatus = "open" | "done" | "dismissed" | "sent";
 export type ReminderChannel = "sms" | "email";
@@ -72,6 +73,11 @@ export interface RequestAuth {
   userId: string;
   email?: string;
   source: "jwt" | "dev";
+}
+
+export interface RequestAdmin {
+  email: string;
+  userId: string;
 }
 
 export interface BookingSettings {
@@ -351,7 +357,10 @@ export interface CalendarAvailableSlot {
 
 export interface CalendarDayResponse {
   date: string;
-  appointments: Array<Record<string, unknown>>;
+  appointments: Array<Record<string, unknown> & {
+    revenue?: number;
+    revenue_source?: RevenueSource;
+  }>;
   availableSlots: CalendarAvailableSlot[];
   summary: {
     selectedDateLabel: string;

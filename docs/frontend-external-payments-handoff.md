@@ -1,10 +1,10 @@
 # External Payment Shortcuts Frontend Handoff
 
-This handoff covers frontend integration for stylist-owned external payment shortcuts and manual appointment payment records.
+This handoff covers frontend integration for stylist-owned external payment shortcuts.
 
 Important boundary:
 
-DripDesk does **not** process or verify payments in this feature. The frontend should present this as a way for stylists to save external payment links/QR codes and manually record that an appointment was paid outside DripDesk.
+DripDesk does **not** process, verify, record, or track payments in this feature. The frontend should present this only as a way for stylists to save external payment links/QR codes they can share with clients. Appointment-level payment state lives outside DripDesk.
 
 Use copy like:
 
@@ -16,6 +16,8 @@ Avoid copy like:
 
 - Payment processed by DripDesk
 - Payment confirmed
+- Payment recorded
+- Appointment payment state controls
 - Charge customer
 - Capture payment
 - Refund through DripDesk
@@ -27,9 +29,9 @@ All endpoints are authenticated stylist/admin endpoints under the existing auth 
 
 There are no public client payment mutation endpoints.
 
-No Stripe, Square API, PayPal API, Venmo API, OAuth, webhooks, refunds, payouts, tax reporting, or processor reconciliation were added.
+No appointment-level payment state, payment tracking, Stripe, Square API, PayPal API, Venmo API, OAuth, webhooks, refunds, payouts, tax reporting, or processor reconciliation were added.
 
-## Suggested Frontend Surfaces
+## Suggested Frontend Surface
 
 ### Payment Shortcuts Settings
 
@@ -51,19 +53,7 @@ Core UI:
 - Reorder shortcuts.
 - Upload or paste a QR image/link.
 
-### Appointment Payment Panel
-
-Add an appointment detail panel section where a stylist can manually record payment status.
-
-Suggested labels:
-
-- `Payment`
-- `Manually mark paid`
-- `Recorded payment`
-- `External payment method`
-- `Mark unpaid`
-
-The UI should make clear that this is a manual record, not payment processing.
+Do not add appointment-level payment-state controls.
 
 ## Types
 
@@ -79,13 +69,6 @@ type PaymentProvider =
   | "cash"
   | "other";
 
-type AppointmentPaymentStatus =
-  | "unpaid"
-  | "marked_paid"
-  | "partially_paid"
-  | "refunded"
-  | "voided";
-
 type PaymentMethod = {
   id: string;
   user_id: string;
@@ -100,29 +83,6 @@ type PaymentMethod = {
   sort_order: number;
   created_at: string;
   updated_at: string;
-  payment_notice: string;
-};
-
-type AppointmentPayment = {
-  id: string;
-  appointment_id: string;
-  payment_method_id: string | null;
-  status: AppointmentPaymentStatus;
-  amount: number;
-  tip_amount: number;
-  total_recorded: number;
-  external_provider: PaymentProvider | null;
-  external_provider_label: string | null;
-  external_reference: string | null;
-  notes: string | null;
-  marked_paid_at: string | null;
-  created_at: string;
-  updated_at: string;
-  payment_method: {
-    id: string;
-    provider: PaymentProvider;
-    display_name: string;
-  } | null;
   payment_notice: string;
 };
 ```
@@ -155,7 +115,7 @@ type ListPaymentMethodsResponse = {
 Frontend behavior:
 
 - Default method should be visually marked.
-- Inactive methods should be hidden unless the settings UI has an “include inactive” or archive view.
+- Inactive methods should be hidden unless the settings UI has an include inactive or archive view.
 - Use `display_name` for the visible label.
 - Use provider-specific labels/icons in the UI, but keep the backend enum value as the persisted provider.
 
@@ -194,7 +154,7 @@ Validation notes:
 - `display_name`: required, max 80 chars.
 - `payment_url`: optional, valid URL, max 2048 chars.
 - `qr_image_url`: optional, valid URL, max 2048 chars.
-- `qr_image_path`: optional, max 500 chars.
+- `qr_image_path`: optional, max 500 chars. Must be the bucket-relative path returned by `POST /api/payment-methods/qr-upload-intent`, shaped like `<user-id>/<image-id>.png`.
 - `instructions`: optional, max 500 chars.
 - `sort_order`: integer, default `0`.
 - At least one of `payment_url`, `qr_image_url`, or `qr_image_path` is required unless provider is `cash` or `other`.
@@ -259,8 +219,8 @@ type DeletePaymentMethodResponse = {
 Frontend behavior:
 
 - Remove it from the active list immediately.
-- Do not imply old appointment payment history was deleted.
-- Use copy like `Deactivate payment shortcut`, not `Delete payment history`.
+- Use copy like `Deactivate payment shortcut`.
+- Do not imply any appointment payment history exists in DripDesk.
 
 ### Reorder Payment Shortcuts
 
@@ -329,6 +289,7 @@ Rules:
 - Allowed MIME types: `image/png`, `image/jpeg`, `image/webp`.
 - The backend generates the storage path.
 - Do not let the user provide a storage path.
+- `storage_path` is relative to the private `payment-method-qrs` bucket. Do not prefix it with the bucket name.
 
 Upload flow:
 
@@ -364,147 +325,6 @@ await api.post("/api/payment-methods", {
 
 Note: this endpoint creates a signed upload URL only. It does not create a public image URL. If the frontend needs to display saved QR images later, add a signed-read endpoint in a follow-up.
 
-## Appointment Payment Endpoints
-
-### Get Appointment Payment
-
-```http
-GET /api/appointments/:appointmentId/payment
-```
-
-Success:
-
-```ts
-type GetAppointmentPaymentResponse = {
-  data: {
-    payment: AppointmentPayment | null;
-    payment_notice: string;
-  };
-};
-```
-
-Frontend behavior:
-
-- If `payment === null`, show unpaid/manual not recorded state.
-- If `payment.status === "marked_paid"`, show recorded paid state.
-- Always show the notice somewhere near the manual payment controls.
-
-### Mark Appointment Paid
-
-```http
-POST /api/appointments/:appointmentId/payment/mark-paid
-```
-
-Request:
-
-```ts
-type MarkAppointmentPaidRequest = {
-  payment_method_id?: string | null;
-  amount?: number;
-  tip_amount?: number;
-  external_provider?: PaymentProvider | null;
-  external_provider_label?: string | null;
-  external_reference?: string | null;
-  notes?: string | null;
-};
-```
-
-Success:
-
-```ts
-type MarkAppointmentPaidResponse = {
-  data: {
-    payment: AppointmentPayment;
-    payment_notice: string;
-  };
-};
-```
-
-Validation notes:
-
-- `amount`: optional, number >= 0, max 999999.99.
-- If `amount` is omitted, backend defaults to the appointment `price`.
-- `tip_amount`: optional, number >= 0, max 999999.99, default `0`.
-- `payment_method_id`: optional; if provided, it must be active and owned by the authenticated stylist.
-- `external_provider`: optional; must match `PaymentProvider`.
-- `external_reference`: optional, max 255 chars.
-- `notes`: optional, max 2000 chars.
-
-Frontend behavior:
-
-- Pre-fill amount from the appointment price if available.
-- Allow tip amount if the UI supports it.
-- Let the stylist select one active payment shortcut.
-- If a payment shortcut is selected, the backend snapshots its provider/display label.
-- Show success as `Payment recorded` or `Appointment manually marked paid`.
-- Do not show `Payment confirmed` or `Payment processed`.
-
-### Mark Appointment Unpaid
-
-```http
-POST /api/appointments/:appointmentId/payment/mark-unpaid
-```
-
-Success:
-
-```ts
-type MarkAppointmentUnpaidResponse = {
-  data: {
-    payment: AppointmentPayment | null;
-    payment_notice: string;
-  };
-};
-```
-
-Backend behavior:
-
-- Existing current payment record is marked `voided`.
-- Backend preserves the old record for audit/support.
-- If no current payment exists, response `payment` may be `null`.
-
-Frontend behavior:
-
-- Use copy like `Mark unpaid` or `Void recorded payment`.
-- Do not call this a refund.
-- After success, display unpaid/manual not recorded state.
-
-### Edit Appointment Payment
-
-```http
-PATCH /api/appointments/:appointmentId/payment
-```
-
-Request:
-
-```ts
-type UpdateAppointmentPaymentRequest = {
-  payment_method_id?: string | null;
-  amount?: number;
-  tip_amount?: number;
-  external_provider?: PaymentProvider | null;
-  external_provider_label?: string | null;
-  external_reference?: string | null;
-  notes?: string | null;
-};
-```
-
-Success:
-
-```ts
-type UpdateAppointmentPaymentResponse = {
-  data: {
-    payment: AppointmentPayment;
-    payment_notice: string;
-  };
-};
-```
-
-Frontend behavior:
-
-- Use this for correcting manually entered amount, tip, reference, notes, or method.
-- Do not expose raw status editing.
-- Do not allow changing a manual record into any “verified” or processor-backed state.
-
 ## Provider Labels
 
 Suggested UI labels:
@@ -523,28 +343,12 @@ const paymentProviderLabels: Record<PaymentProvider, string> = {
 };
 ```
 
-## Empty States
-
-### No Payment Shortcuts
+## Empty State
 
 Suggested copy:
 
 ```txt
 Add external payment shortcuts so you can quickly share payment links or QR codes with clients. Payment happens outside DripDesk.
-```
-
-### No Appointment Payment Record
-
-Suggested copy:
-
-```txt
-No payment has been manually recorded for this appointment.
-```
-
-CTA:
-
-```txt
-Mark paid
 ```
 
 ## Error Handling
@@ -562,27 +366,19 @@ Safe generic copy:
 Unable to save payment shortcut. Please try again.
 ```
 
-```txt
-Unable to record appointment payment. Please try again.
-```
-
 Do not expose backend internals, storage paths, or stack traces.
 
 ## Frontend Implementation Checklist
 
 1. Add API client methods for `/api/payment-methods`.
-2. Add API client methods for appointment payment endpoints.
-3. Add `PaymentProvider` and `AppointmentPayment` types.
-4. Build payment shortcuts settings UI.
-5. Add QR upload flow using `qr-upload-intent`.
-6. Add appointment payment panel.
-7. Use active payment shortcuts as the method picker.
-8. Preserve the manual/external payment copy boundary.
-9. Handle inactive methods gracefully if old payment records reference them.
-10. Add frontend tests for create/edit/deactivate shortcut and mark paid/unpaid.
+2. Add `PaymentProvider` and `PaymentMethod` types.
+3. Build payment shortcuts settings UI.
+4. Add QR upload flow using `qr-upload-intent`.
+5. Preserve the external-payment copy boundary.
+6. Add frontend tests for create/edit/deactivate/reorder shortcut flows.
 
 ## Known Follow-Ups
 
 - Add signed-read support for private QR images if the frontend needs to render uploaded QR files from `qr_image_path`.
 - Consider exposing a current default shortcut in appointment detail responses if the frontend wants fewer round trips.
-- Consider adding frontend analytics for payment shortcut creation and manual payment recording.
+- Consider adding frontend analytics for payment shortcut creation.

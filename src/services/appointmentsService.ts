@@ -11,6 +11,7 @@ import { activityEventsService } from "./activityEventsService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { servicesService } from "./servicesService";
+import { recordProductTelemetry } from "./productTelemetry";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
 const appointmentSlotConstraintName = "appointments_user_id_appointment_date_active_idx";
@@ -287,6 +288,21 @@ export const appointmentsService = {
     handleSupabaseError(error, "Unable to create appointment");
     const appointment = requireFound(data, "Appointment was not created");
     await activityEventsService.recordBookingCreated(userId, appointment);
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: bookingSource === "internal" ? userId : null,
+      clientId: typeof appointment.client_id === "string" ? appointment.client_id : null,
+      appointmentId: typeof appointment.id === "string" ? appointment.id : null,
+      eventType: "appointment_created",
+      eventSource: bookingSource === "public" ? "public_booking" : "backend",
+      dedupeKey: typeof appointment.id === "string" ? `appointment_created:${appointment.id}` : null,
+      metadata: {
+        source: bookingSource,
+        status: appointment.status ?? null,
+        service_id: appointment.service_id ?? null,
+        has_price: appointment.price !== null && appointment.price !== undefined
+      }
+    });
     if (
       appointment.status !== "cancelled"
       && typeof appointment.client_id === "string"
@@ -374,6 +390,19 @@ export const appointmentsService = {
         "appointment_cancelled",
         { cancelledBy: options.cancelledBy ?? "stylist" }
       );
+      await recordProductTelemetry({
+        accountUserId: userId,
+        actorUserId: options.cancelledBy === "client" ? null : userId,
+        clientId: typeof updatedAppointment.client_id === "string" ? updatedAppointment.client_id : null,
+        appointmentId: typeof updatedAppointment.id === "string" ? updatedAppointment.id : null,
+        eventType: "appointment_cancelled",
+        eventSource: "backend",
+        metadata: {
+          cancelled_by: options.cancelledBy ?? "stylist",
+          previous_status: existingAppointment.status ?? null,
+          status: updatedAppointment.status ?? null
+        }
+      });
       return updatedAppointment;
     }
 
@@ -385,6 +414,38 @@ export const appointmentsService = {
       )
     ) {
       await activityEventsService.recordAppointmentRescheduled(userId, existingAppointment, updatedAppointment);
+      await recordProductTelemetry({
+        accountUserId: userId,
+        actorUserId: userId,
+        clientId: typeof updatedAppointment.client_id === "string" ? updatedAppointment.client_id : null,
+        appointmentId: typeof updatedAppointment.id === "string" ? updatedAppointment.id : null,
+        eventType: "appointment_rescheduled",
+        eventSource: "backend",
+        metadata: {
+          status: updatedAppointment.status ?? null,
+          service_id: updatedAppointment.service_id ?? null
+        }
+      });
+    }
+
+    if (
+      existingAppointment.status !== updatedAppointment.status &&
+      (updatedAppointment.status === "completed" || updatedAppointment.status === "no_show")
+    ) {
+      await recordProductTelemetry({
+        accountUserId: userId,
+        actorUserId: userId,
+        clientId: typeof updatedAppointment.client_id === "string" ? updatedAppointment.client_id : null,
+        appointmentId: typeof updatedAppointment.id === "string" ? updatedAppointment.id : null,
+        eventType: updatedAppointment.status === "completed" ? "appointment_completed" : "appointment_no_show",
+        eventSource: "backend",
+        metadata: {
+          previous_status: existingAppointment.status ?? null,
+          status: updatedAppointment.status,
+          service_id: updatedAppointment.service_id ?? null,
+          has_price: updatedAppointment.price !== null && updatedAppointment.price !== undefined
+        }
+      });
     }
 
     if (
@@ -472,6 +533,19 @@ export const appointmentsService = {
     if (decision === "accept") {
       await appointmentEmailEventsService.queueAppointmentEmail(userId, updatedAppointment, "appointment_confirmed");
     }
+
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      clientId: typeof updatedAppointment.client_id === "string" ? updatedAppointment.client_id : null,
+      appointmentId: typeof updatedAppointment.id === "string" ? updatedAppointment.id : null,
+      eventType: decision === "accept" ? "booking_approved" : "booking_rejected",
+      eventSource: "backend",
+      metadata: {
+        status: updatedAppointment.status ?? null,
+        service_id: updatedAppointment.service_id ?? null
+      }
+    });
 
     return updatedAppointment;
   }

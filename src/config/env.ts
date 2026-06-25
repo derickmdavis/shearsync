@@ -11,6 +11,7 @@ const envBooleanSchema = z
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  APP_ENV: z.string().min(1).optional(),
   AUTH_MODE: z.enum(["dev", "production"]).default("production"),
   ENABLE_DEV_AUTH_FALLBACK: envBooleanSchema,
   SUPABASE_URL: z.string().url(),
@@ -22,10 +23,25 @@ const envSchema = z.object({
   CLIENT_APP_URL: z.string().url().optional(),
   WEB_APP_URL: z.string().url().optional(),
   INTERNAL_API_SECRET: z.string().min(16).optional(),
+  ADMIN_API_KEY: z.string().min(16).optional(),
+  API_REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
   EMAIL_REPLY_TO: z.string().email().optional()
 });
+
+export type AppEnvironment = "development" | "test" | "staging" | "production";
+
+const normalizeAppEnvironment = (value: string | undefined): AppEnvironment => {
+  switch (value) {
+    case "production":
+    case "staging":
+    case "test":
+      return value;
+    default:
+      return "development";
+  }
+};
 
 export const parseEnv = (rawEnv: NodeJS.ProcessEnv) => {
   const parsedEnv = envSchema.safeParse(rawEnv);
@@ -48,3 +64,6 @@ export const parseEnv = (rawEnv: NodeJS.ProcessEnv) => {
 };
 
 export const env = parseEnv(process.env);
+
+export const getAppEnvironment = (rawEnv: NodeJS.ProcessEnv = process.env): AppEnvironment =>
+  normalizeAppEnvironment(rawEnv.APP_ENV ?? rawEnv.NODE_ENV);

@@ -13,6 +13,7 @@ import { entitlementsService } from "./entitlementsService";
 import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
 import { communicationPreferencesService } from "./communicationPreferences";
 import type { MessageType } from "../lib/communications";
+import { recordProductTelemetry } from "./productTelemetry";
 
 const AUTOMATION_KEYS = [
   "rebook_nudges",
@@ -1245,7 +1246,17 @@ export const activityDashboardService = {
         .maybeSingle();
 
       handleSupabaseError(error, "Unable to update automation setting");
-      return requireFound(data, "Automation setting not found");
+      const setting = requireFound(data, "Automation setting not found");
+      await recordProductTelemetry({
+        accountUserId: userId,
+        actorUserId: userId,
+        eventType: enabled ? "automation_enabled" : "automation_disabled",
+        eventSource: "backend",
+        metadata: {
+          automation_key: key
+        }
+      });
+      return setting;
     }
 
     const { data, error } = await supabaseAdmin
@@ -1255,6 +1266,16 @@ export const activityDashboardService = {
       .single();
 
     handleSupabaseError(error, "Unable to create automation setting");
-    return requireFound(data, "Automation setting was not created");
+    const setting = requireFound(data, "Automation setting was not created");
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: enabled ? "automation_enabled" : "automation_disabled",
+      eventSource: "backend",
+      metadata: {
+        automation_key: key
+      }
+    });
+    return setting;
   }
 };

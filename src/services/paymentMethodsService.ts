@@ -4,6 +4,7 @@ import type { PaymentProvider } from "../validators/paymentMethodsValidators";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { paymentMethodQrStorageService } from "./paymentMethodQrStorageService";
+import { recordProductTelemetry } from "./productTelemetry";
 
 type PaymentMethodPayload = {
   provider: PaymentProvider;
@@ -101,6 +102,8 @@ export const paymentMethodsService = {
   },
 
   async create(userId: string, payload: PaymentMethodPayload): Promise<Row> {
+    paymentMethodQrStorageService.assertQrPathMatches(userId, payload.qr_image_path);
+
     if (payload.is_default === true) {
       await this.unsetActiveDefaults(userId);
     }
@@ -124,10 +127,29 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to create payment shortcut");
-    return normalizePaymentMethod(requireFound(data, "Payment shortcut was not created"));
+    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not created"));
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: "payment_shortcut_created",
+      eventSource: "backend",
+      dedupeKey: typeof method.id === "string" ? `payment_shortcut_created:${method.id}` : null,
+      metadata: {
+        provider: method.provider ?? null,
+        has_payment_url: Boolean(method.payment_url),
+        has_qr_image_url: Boolean(method.qr_image_url),
+        has_qr_image_path: Boolean(method.qr_image_path),
+        is_default: method.is_default === true
+      }
+    });
+    return method;
   },
 
   async update(userId: string, paymentMethodId: string, updates: PaymentMethodUpdatePayload): Promise<Row> {
+    if (updates.qr_image_path !== undefined) {
+      paymentMethodQrStorageService.assertQrPathMatches(userId, updates.qr_image_path);
+    }
+
     const existing = await this.getOwned(userId, paymentMethodId);
     const merged = {
       ...existing,
@@ -157,7 +179,21 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to update payment shortcut");
-    return normalizePaymentMethod(requireFound(data, "Payment shortcut was not updated"));
+    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not updated"));
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: method.is_active === false ? "payment_shortcut_disabled" : "payment_shortcut_updated",
+      eventSource: "backend",
+      metadata: {
+        provider: method.provider ?? null,
+        has_payment_url: Boolean(method.payment_url),
+        has_qr_image_url: Boolean(method.qr_image_url),
+        has_qr_image_path: Boolean(method.qr_image_path),
+        updated_fields: Object.keys(updates).filter((field) => !["payment_url", "qr_image_url", "qr_image_path", "instructions"].includes(field))
+      }
+    });
+    return method;
   },
 
   async remove(userId: string, paymentMethodId: string): Promise<Row> {
@@ -175,7 +211,20 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to deactivate payment shortcut");
-    return normalizePaymentMethod(requireFound(data, "Payment shortcut was not deactivated"));
+    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not deactivated"));
+    await recordProductTelemetry({
+      accountUserId: userId,
+      actorUserId: userId,
+      eventType: "payment_shortcut_disabled",
+      eventSource: "backend",
+      metadata: {
+        provider: method.provider ?? null,
+        has_payment_url: Boolean(method.payment_url),
+        has_qr_image_url: Boolean(method.qr_image_url),
+        has_qr_image_path: Boolean(method.qr_image_path)
+      }
+    });
+    return method;
   },
 
   async reorder(userId: string, items: ReorderPaymentMethodItem[]): Promise<RowList> {

@@ -1,4 +1,6 @@
-import type { AppointmentStatus } from "../types/api";
+import type { AppointmentStatus, RevenueSource } from "../types/api";
+
+export const APPOINTMENT_PRICE_FALLBACK_REVENUE_SOURCE: RevenueSource = "appointment_price_fallback";
 
 export type AppointmentMetricType =
   | "booked_revenue"
@@ -119,4 +121,3 @@ export const calculatePercentChange = (current: number, previous: number): numbe
 };
 
 export const toCents = (value: number): number => Math.round(value * 100);
-

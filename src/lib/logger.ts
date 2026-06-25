@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { randomUUID } from "crypto";
+import { apiRequestLogsService } from "../services/apiRequestLogsService";
+import type { ErrorSeverity } from "./errors";
 
 type LogLevel = "info" | "warn" | "error";
 
@@ -86,7 +88,7 @@ export const requestObservability = (req: Request, res: Response, next: NextFunc
   res.on("finish", () => {
     const latencyMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     const statusCode = res.statusCode;
-    const error = res.locals.error as { code?: unknown; message?: unknown } | undefined;
+    const error = res.locals.error as { code?: unknown; message?: unknown; severity?: unknown } | undefined;
 
     logger.info("http_request_completed", {
       requestId,
@@ -99,6 +101,23 @@ export const requestObservability = (req: Request, res: Response, next: NextFunc
       publicStylistSlug: getPublicStylistSlug(req),
       errorCode: error?.code,
       errorMessage: error?.message
+    });
+
+    void apiRequestLogsService.record({
+      requestId,
+      method: req.method,
+      routePattern: getRoute(req),
+      path: req.originalUrl ?? req.url,
+      statusCode,
+      durationMs: latencyMs,
+      accountUserId: req.auth?.userId,
+      actorUserId: req.auth?.userId,
+      errorCode: error?.code as string | number | null | undefined,
+      errorMessage: typeof error?.message === "string" ? error.message : null,
+      severity: typeof error?.severity === "string" ? error.severity as ErrorSeverity : undefined,
+      metadata: {
+        public_stylist_slug: getPublicStylistSlug(req)
+      }
     });
   });
 

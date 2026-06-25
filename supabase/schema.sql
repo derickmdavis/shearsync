@@ -16,16 +16,6 @@ begin
       'other'
     );
   end if;
-
-  if not exists (select 1 from pg_type where typname = 'appointment_payment_status') then
-    create type public.appointment_payment_status as enum (
-      'unpaid',
-      'marked_paid',
-      'partially_paid',
-      'refunded',
-      'voided'
-    );
-  end if;
 end
 $$;
 
@@ -144,6 +134,14 @@ create table if not exists public.payment_methods (
     check (qr_image_url is null or char_length(qr_image_url) <= 2048),
   constraint payment_methods_qr_image_path_length_check
     check (qr_image_path is null or char_length(qr_image_path) <= 500),
+  constraint payment_methods_qr_image_path_owner_check
+    check (
+      qr_image_path is null
+      or (
+        qr_image_path ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg|webp)$'
+        and split_part(qr_image_path, '/', 1) = user_id::text
+      )
+    ),
   constraint payment_methods_instructions_length_check
     check (instructions is null or char_length(instructions) <= 500),
   constraint payment_methods_sort_order_check
@@ -206,39 +204,6 @@ create table if not exists public.appointments (
   appointment_time_range tstzrange,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
-);
-
-create table if not exists public.appointment_payments (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.users(id) on delete cascade,
-  appointment_id uuid not null references public.appointments(id) on delete cascade,
-  payment_method_id uuid references public.payment_methods(id) on delete set null,
-  status public.appointment_payment_status not null default 'marked_paid',
-  amount numeric(10, 2) not null default 0,
-  tip_amount numeric(10, 2) not null default 0,
-  total_recorded numeric(10, 2) generated always as (amount + tip_amount) stored,
-  external_provider public.payment_provider,
-  external_provider_label text,
-  external_reference text,
-  notes text,
-  marked_paid_at timestamptz,
-  marked_unpaid_at timestamptz,
-  voided_at timestamptz,
-  is_current boolean not null default true,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint appointment_payments_amount_check
-    check (amount >= 0 and amount <= 999999.99),
-  constraint appointment_payments_tip_amount_check
-    check (tip_amount >= 0 and tip_amount <= 999999.99),
-  constraint appointment_payments_external_provider_label_length_check
-    check (external_provider_label is null or char_length(external_provider_label) <= 120),
-  constraint appointment_payments_external_reference_length_check
-    check (external_reference is null or char_length(external_reference) <= 255),
-  constraint appointment_payments_notes_length_check
-    check (notes is null or char_length(notes) <= 2000),
-  constraint appointment_payments_voided_current_check
-    check (status <> 'voided' or is_current = false)
 );
 
 create table if not exists public.photos (
@@ -901,15 +866,6 @@ create unique index if not exists appointments_user_id_appointment_date_active_i
   where status <> 'cancelled';
 create index if not exists appointments_time_range_gist_idx
   on public.appointments using gist (appointment_time_range);
-create unique index if not exists appointment_payments_current_appointment_idx
-  on public.appointment_payments(appointment_id)
-  where is_current = true;
-create index if not exists appointment_payments_user_appointment_idx
-  on public.appointment_payments(user_id, appointment_id, is_current);
-create index if not exists appointment_payments_user_status_idx
-  on public.appointment_payments(user_id, status, created_at desc);
-create index if not exists appointment_payments_payment_method_id_idx
-  on public.appointment_payments(payment_method_id);
 create index if not exists photos_user_id_client_id_idx on public.photos(user_id, client_id);
 create unique index if not exists appointment_images_thumbnail_path_unique_idx
   on public.appointment_images(bucket, thumbnail_path)
@@ -1051,7 +1007,6 @@ alter table public.appointments enable row level security;
 alter table public.photos enable row level security;
 alter table public.appointment_images enable row level security;
 alter table public.payment_methods enable row level security;
-alter table public.appointment_payments enable row level security;
 alter table public.reminders enable row level security;
 alter table public.activity_events enable row level security;
 alter table public.appointment_email_events enable row level security;
@@ -1105,12 +1060,6 @@ $$;
 drop trigger if exists set_payment_methods_updated_at on public.payment_methods;
 create trigger set_payment_methods_updated_at
   before update on public.payment_methods
-  for each row
-  execute function public.set_external_payment_updated_at();
-
-drop trigger if exists set_appointment_payments_updated_at on public.appointment_payments;
-create trigger set_appointment_payments_updated_at
-  before update on public.appointment_payments
   for each row
   execute function public.set_external_payment_updated_at();
 
@@ -1168,50 +1117,6 @@ begin
   ) then
     create policy payment_methods_update_own
       on public.payment_methods
-      for update
-      using (auth.uid() = user_id)
-      with check (auth.uid() = user_id);
-  end if;
-end
-$$;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_policies
-    where schemaname = 'public'
-      and tablename = 'appointment_payments'
-      and policyname = 'appointment_payments_select_own'
-  ) then
-    create policy appointment_payments_select_own
-      on public.appointment_payments
-      for select
-      using (auth.uid() = user_id);
-  end if;
-
-  if not exists (
-    select 1
-    from pg_policies
-    where schemaname = 'public'
-      and tablename = 'appointment_payments'
-      and policyname = 'appointment_payments_insert_own'
-  ) then
-    create policy appointment_payments_insert_own
-      on public.appointment_payments
-      for insert
-      with check (auth.uid() = user_id);
-  end if;
-
-  if not exists (
-    select 1
-    from pg_policies
-    where schemaname = 'public'
-      and tablename = 'appointment_payments'
-      and policyname = 'appointment_payments_update_own'
-  ) then
-    create policy appointment_payments_update_own
-      on public.appointment_payments
       for update
       using (auth.uid() = user_id)
       with check (auth.uid() = user_id);
