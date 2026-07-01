@@ -27,6 +27,12 @@ export const pendingAppointmentDecisionSchema = z.object({
   decision: z.enum(["accept", "reject"])
 });
 
+export const listClientAppointmentsQuerySchema = z.object({
+  status: z.enum(["all", "past", "upcoming"]).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().min(1).optional()
+});
+
 const isValidDateString = (value: string): boolean => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 

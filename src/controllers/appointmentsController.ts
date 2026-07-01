@@ -16,6 +16,14 @@ export const appointmentsController = {
 
   async listByClient(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
+    const query = req.query as unknown as { status?: "all" | "past" | "upcoming"; limit?: number; cursor?: string };
+
+    if (query.status || query.limit || query.cursor) {
+      const result = await appointmentsService.listByClientPaginated(userId, getRequiredParam(req, "id"), query);
+      res.json({ data: result.data, next_cursor: result.next_cursor });
+      return;
+    }
+
     const appointments = await appointmentsService.listByClient(userId, getRequiredParam(req, "id"));
     res.json({ data: appointments });
   },

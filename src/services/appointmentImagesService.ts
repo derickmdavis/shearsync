@@ -136,6 +136,12 @@ type ClientVisualHistoryQuery = {
   include_display_urls?: boolean;
 };
 
+type ClientVisualHistoryResult = {
+  data: RowList;
+  photo_count: number;
+  history_available: boolean;
+};
+
 type UploadIntentPayload = {
   original_filename?: string | null;
   content_type: string;
@@ -282,11 +288,20 @@ const normalizeImageForVisualHistory = async (
   const displayUrl = includeDisplayUrl && typeof image.storage_path === "string"
     ? await appointmentImageStorageService.createSignedReadUrl(image.storage_path, SIGNED_DISPLAY_URL_TTL_SECONDS)
     : null;
+  const serviceLabel = typeof appointment?.service_name === "string" && appointment.service_name.trim().length > 0
+    ? appointment.service_name
+    : null;
+  const sourceLabel = image.image_source === "client" ? "Client upload" : "Stylist upload";
 
   return omitStoragePaths({
     ...image,
     thumbnail_url: thumbnailUrl,
     display_url: displayUrl,
+    full_url: displayUrl,
+    caption: typeof image.caption === "string" ? image.caption : null,
+    source_label: sourceLabel,
+    service_label: serviceLabel,
+    appointment_id: typeof image.appointment_id === "string" ? image.appointment_id : null,
     appointment: appointment
       ? {
           appointment_id: appointment.id,
@@ -446,9 +461,33 @@ export const appointmentImagesService = {
     };
   },
 
-  async listClientVisualHistory(userId: string, clientId: string, query: ClientVisualHistoryQuery = {}): Promise<RowList> {
-    await assertAppointmentPhotosAllowed(userId);
+  async listClientVisualHistory(
+    userId: string,
+    clientId: string,
+    query: ClientVisualHistoryQuery = {}
+  ): Promise<ClientVisualHistoryResult> {
     await clientsService.assertOwned(userId, clientId);
+    const [{ count, error: countError }, historyAllowed] = await Promise.all([
+      supabaseAdmin
+        .from("appointment_images")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("client_id", clientId)
+        .eq("upload_status", "ready"),
+      entitlementsService.isFeatureAllowed(userId, "appointmentPhotos")
+    ]);
+
+    handleSupabaseError(countError, "Unable to load client visual history count");
+    const photoCount = count ?? 0;
+
+    if (!historyAllowed) {
+      return {
+        data: [],
+        photo_count: photoCount,
+        history_available: false
+      };
+    }
+
     const limit = query.limit ?? 50;
     const includeDisplayUrls = query.include_display_urls ?? false;
 
@@ -490,7 +529,7 @@ export const appointmentImagesService = {
       }
     }
 
-    return Promise.all(
+    const normalizedImages = await Promise.all(
       visualHistoryImages.map((image) =>
         normalizeImageForVisualHistory(
           image,
@@ -499,6 +538,35 @@ export const appointmentImagesService = {
         )
       )
     );
+
+    return {
+      data: normalizedImages,
+      photo_count: photoCount,
+      history_available: true
+    };
+  },
+
+  async getClientAvatarUrl(userId: string, clientId: string, imageId: string | null | undefined): Promise<string | null> {
+    if (!imageId) {
+      return null;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("appointment_images")
+      .select("id, user_id, client_id, thumbnail_path, upload_status")
+      .eq("id", imageId)
+      .eq("user_id", userId)
+      .eq("client_id", clientId)
+      .eq("upload_status", "ready")
+      .maybeSingle();
+
+    handleSupabaseError(error, "Unable to load client avatar image");
+    const avatarImage = data as Row | null;
+    if (!avatarImage || typeof avatarImage.thumbnail_path !== "string") {
+      return null;
+    }
+
+    return createOptionalSignedReadUrl(avatarImage.thumbnail_path, SIGNED_THUMBNAIL_URL_TTL_SECONDS, avatarImage);
   },
 
   async createUploadIntent(userId: string, appointmentId: string, payload: UploadIntentPayload, now = new Date()): Promise<Row> {

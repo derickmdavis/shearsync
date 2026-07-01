@@ -8,7 +8,7 @@ import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
 
 const CLIENT_LIST_SELECT =
-  "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, total_spend, last_visit_at, deleted_at, deleted_reason, purge_after, created_at, updated_at";
+  "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, is_vip, avatar_image_id, total_spend, last_visit_at, deleted_at, deleted_reason, purge_after, created_at, updated_at";
 
 const CLIENT_SOFT_DELETE_RETENTION_DAYS = 30;
 
@@ -37,6 +37,8 @@ const CLIENT_OPTIONAL_DEFAULTS: Row = {
   tags: null,
   source: null,
   reminder_consent: null,
+  is_vip: false,
+  avatar_image_id: null,
   total_spend: null,
   last_visit_at: null
 };
@@ -85,6 +87,8 @@ const sanitizeClientPayload = (payload: Row): Row => {
     original_acquisition_source: payload.original_acquisition_source,
     original_referral_attributed_at: payload.original_referral_attributed_at,
     reminder_consent: payload.reminder_consent,
+    is_vip: payload.is_vip,
+    avatar_image_id: payload.avatar_image_id,
     total_spend: payload.total_spend,
     last_visit_at: payload.last_visit_at
   };
@@ -104,6 +108,22 @@ const normalizeBookingLookup = (payload: Row): { phone?: string; phoneNormalized
     phone,
     phoneNormalized
   };
+};
+
+const assertReadyClientAvatarImage = async (userId: string, clientId: string, imageId: string): Promise<void> => {
+  const { data, error } = await supabaseAdmin
+    .from("appointment_images")
+    .select("id")
+    .eq("id", imageId)
+    .eq("user_id", userId)
+    .eq("client_id", clientId)
+    .eq("upload_status", "ready")
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to validate client avatar image");
+  if (!data) {
+    throw new ApiError(400, "Avatar image must be a ready image for this client");
+  }
 };
 
 const normalizeClientRecord = (client: Row): Row => {
@@ -145,6 +165,7 @@ const normalizeListOptions = (options: ListClientsOptions = {}): Required<ListCl
 
 const applyClientListFilters = <T extends {
   or: (filters: string) => T;
+  eq: (column: string, value: unknown) => T;
 }>(query: T, options: Required<ListClientsOptions>): T => {
   let nextQuery = query;
 
@@ -153,7 +174,7 @@ const applyClientListFilters = <T extends {
   }
 
   if (options.filter === "vip") {
-    nextQuery = nextQuery.or('tags.cs.{"VIP"},tags.cs.{"vip"}');
+    nextQuery = nextQuery.eq("is_vip", true);
   }
 
   return nextQuery;
@@ -331,9 +352,14 @@ export const clientsService = {
   },
 
   async update(userId: string, clientId: string, updates: Row): Promise<Row> {
+    const sanitizedUpdates = sanitizeClientPayload(updates);
+    if (sanitizedUpdates.avatar_image_id !== undefined && sanitizedUpdates.avatar_image_id !== null) {
+      await assertReadyClientAvatarImage(userId, clientId, String(sanitizedUpdates.avatar_image_id));
+    }
+
     const { data, error } = await supabaseAdmin
       .from("clients")
-      .update(sanitizeClientPayload(updates))
+      .update(sanitizedUpdates)
       .eq("id", clientId)
       .eq("user_id", userId)
       .is("deleted_at", null)
@@ -349,10 +375,14 @@ export const clientsService = {
       eventType: "client_updated",
       eventSource: "backend",
       metadata: {
-        updated_fields: Object.keys(sanitizeClientPayload(updates)).filter((field) => !["email", "phone", "notes"].includes(field))
+        updated_fields: Object.keys(sanitizedUpdates).filter((field) => !["email", "phone", "notes"].includes(field))
       }
     });
     return this.getById(userId, clientId);
+  },
+
+  async updateAvatar(userId: string, clientId: string, avatarImageId: string | null): Promise<Row> {
+    return this.update(userId, clientId, { avatar_image_id: avatarImageId });
   },
 
   async remove(userId: string, clientId: string): Promise<void> {

@@ -111,6 +111,44 @@ export interface AppointmentConflictSummary {
   status?: string;
 }
 
+interface ListClientAppointmentsOptions {
+  status?: "all" | "past" | "upcoming";
+  limit?: number;
+  cursor?: string;
+}
+
+interface ClientAppointmentsCursor {
+  appointment_date: string;
+  id: string;
+}
+
+const encodeClientAppointmentsCursor = (row: Row): string | null => {
+  if (typeof row.appointment_date !== "string" || typeof row.id !== "string") {
+    return null;
+  }
+
+  return Buffer.from(JSON.stringify({
+    appointment_date: row.appointment_date,
+    id: row.id
+  }), "utf8").toString("base64url");
+};
+
+const decodeClientAppointmentsCursor = (cursor: string): ClientAppointmentsCursor => {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<ClientAppointmentsCursor>;
+    if (typeof parsed.appointment_date !== "string" || typeof parsed.id !== "string") {
+      throw new Error("Invalid cursor shape");
+    }
+
+    return {
+      appointment_date: parsed.appointment_date,
+      id: parsed.id
+    };
+  } catch {
+    throw new ApiError(400, "Invalid client appointments cursor");
+  }
+};
+
 export const appointmentsService = {
   async findMatchingPublicBooking(
     userId: string,
@@ -214,6 +252,51 @@ export const appointmentsService = {
 
     handleSupabaseError(error, "Unable to load appointments");
     return data ?? [];
+  },
+
+  async listByClientPaginated(
+    userId: string,
+    clientId: string,
+    options: ListClientAppointmentsOptions = {}
+  ): Promise<{ data: RowList; next_cursor: string | null }> {
+    await clientsService.assertOwned(userId, clientId);
+
+    const limit = options.limit ?? 25;
+    const status = options.status ?? "all";
+    const nowIso = new Date().toISOString();
+    const cursor = options.cursor ? decodeClientAppointmentsCursor(options.cursor) : null;
+    let query = supabaseAdmin
+      .from("appointments")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("client_id", clientId)
+      .order("appointment_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(limit + 1);
+
+    if (status === "past") {
+      query = query.neq("status", "cancelled").lt("appointment_date", nowIso);
+    } else if (status === "upcoming") {
+      query = query.neq("status", "cancelled").gte("appointment_date", nowIso);
+    }
+
+    if (cursor) {
+      query = query.or(
+        `appointment_date.lt.${cursor.appointment_date},and(appointment_date.eq.${cursor.appointment_date},id.lt.${cursor.id})`
+      );
+    }
+
+    const { data, error } = await query;
+
+    handleSupabaseError(error, "Unable to load client appointments");
+    const rows = (data ?? []) as RowList;
+    const pageRows = rows.slice(0, limit);
+    const nextCursor = rows.length > limit ? encodeClientAppointmentsCursor(pageRows[pageRows.length - 1] ?? {}) : null;
+
+    return {
+      data: pageRows,
+      next_cursor: nextCursor
+    };
   },
 
   async getOwned(userId: string, appointmentId: string): Promise<Row> {

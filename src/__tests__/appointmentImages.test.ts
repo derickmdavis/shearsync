@@ -1004,11 +1004,15 @@ describe("appointment images service", () => {
     const storage = installStorageMock();
 
     try {
-      const history = await appointmentImagesService.listClientVisualHistory(USER_ID, CLIENT_ID, { limit: 10 });
+      const historyResult = await appointmentImagesService.listClientVisualHistory(USER_ID, CLIENT_ID, { limit: 10 });
+      const history = historyResult.data;
 
+      assert.equal(historyResult.photo_count, 2);
+      assert.equal(historyResult.history_available, true);
       assert.deepEqual(history.map((image) => image.id), [imageTwoId, IMAGE_ID]);
       assert.equal(history[0]?.thumbnail_url, `https://example.supabase.co/read/${imageTwoThumbPath}?token=test`);
       assert.equal(history[0]?.display_url, null);
+      assert.equal(history[0]?.full_url, null);
       assert.equal("storage_path" in (history[0] ?? {}), false);
       assert.equal("thumbnail_path" in (history[0] ?? {}), false);
       assert.deepEqual(history[0]?.appointment, {
@@ -1019,19 +1023,25 @@ describe("appointment images service", () => {
       });
       assert.equal(history[0]?.image_source, "client");
       assert.equal(history[0]?.image_role, "reference");
+      assert.equal(history[0]?.source_label, "Client upload");
+      assert.equal(history[0]?.service_label, "Color");
+      assert.equal(history[0]?.appointment_id, appointmentTwoId);
       assert.deepEqual(storage.calls.createSignedUrl, [
         imageTwoThumbPath,
         THUMB_PATH
       ]);
 
       storage.calls.createSignedUrl.length = 0;
-      const historyWithDisplayUrls = await appointmentImagesService.listClientVisualHistory(USER_ID, CLIENT_ID, {
+      const historyWithDisplayUrlsResult = await appointmentImagesService.listClientVisualHistory(USER_ID, CLIENT_ID, {
         limit: 10,
         include_display_urls: true
       });
+      const historyWithDisplayUrls = historyWithDisplayUrlsResult.data;
 
+      assert.equal(historyWithDisplayUrlsResult.photo_count, 2);
       assert.equal(historyWithDisplayUrls[0]?.thumbnail_url, `https://example.supabase.co/read/${imageTwoThumbPath}?token=test`);
       assert.equal(historyWithDisplayUrls[0]?.display_url, `https://example.supabase.co/read/${imageTwoDisplayPath}?token=test`);
+      assert.equal(historyWithDisplayUrls[0]?.full_url, `https://example.supabase.co/read/${imageTwoDisplayPath}?token=test`);
       assert.equal("storage_path" in (historyWithDisplayUrls[0] ?? {}), false);
       assert.equal("thumbnail_path" in (historyWithDisplayUrls[0] ?? {}), false);
       assert.deepEqual(storage.calls.createSignedUrl, [
@@ -1040,6 +1050,67 @@ describe("appointment images service", () => {
         imageTwoDisplayPath,
         DISPLAY_PATH
       ]);
+    } finally {
+      storage.restore();
+      supabase.restore();
+    }
+  });
+
+  it("returns client visual history count when appointment photos are plan-gated", async () => {
+    const supabase = installMockSupabase({
+      ...baseState(),
+      users: [
+        {
+          id: USER_ID,
+          email: "stylist@example.com",
+          plan_tier: "basic",
+          plan_status: "active"
+        }
+      ],
+      appointment_images: [
+        {
+          id: IMAGE_ID,
+          user_id: USER_ID,
+          client_id: CLIENT_ID,
+          appointment_id: APPOINTMENT_ID,
+          bucket: "appointment-images",
+          storage_path: DISPLAY_PATH,
+          thumbnail_path: THUMB_PATH,
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "ready",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-06-16T18:05:00.000Z"
+        },
+        {
+          id: "pending-image",
+          user_id: USER_ID,
+          client_id: CLIENT_ID,
+          appointment_id: APPOINTMENT_ID,
+          bucket: "appointment-images",
+          storage_path: "pending.jpg",
+          thumbnail_path: "pending_thumb.jpg",
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "pending",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-06-16T18:06:00.000Z"
+        }
+      ]
+    });
+    const storage = installStorageMock();
+
+    try {
+      const historyResult = await appointmentImagesService.listClientVisualHistory(USER_ID, CLIENT_ID, { limit: 10 });
+
+      assert.deepEqual(historyResult, {
+        data: [],
+        photo_count: 1,
+        history_available: false
+      });
+      assert.deepEqual(storage.calls.createSignedUrl, []);
     } finally {
       storage.restore();
       supabase.restore();

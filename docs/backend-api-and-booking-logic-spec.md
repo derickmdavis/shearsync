@@ -1345,6 +1345,7 @@ Important waitlist distinction:
   - `direction`: `asc` or `desc`, default `desc`
   - `filter`: `all`, `active`, or `vip`
 - Response: `{ data: Row[], page: number, pageSize: number, totalCount: number, nextCursor: string | null }`
+- Persisted VIP status is returned as `is_vip`; the `vip` filter uses `clients.is_vip = true`, not client tags.
 - Additional derived fields per row:
   - `next_appointment_at`
   - `has_future_appointment`
@@ -1374,6 +1375,8 @@ Important waitlist distinction:
     - `tags`
     - `source`
     - `reminder_consent`
+    - `is_vip`
+    - `avatar_image_id`
     - `total_spend`
     - `last_visit_at`
 - Main logic:
@@ -1393,13 +1396,125 @@ Important waitlist distinction:
 - Main service: `clientsService.getById`
 - Response: `{ data: Row }`
 
+### 7.9a `GET /api/clients/:id/detail`
+
+- Auth: required
+- Validator: `uuidParamSchema`
+- Controller: `clientsController.getDetail`
+- Purpose: UI-ready client detail foundation with backend-owned identity and snapshot metadata
+- Main service: `clientsDetailService.getDetail`
+- Response:
+  - `data.client`: existing client row plus current derived client summary fields
+  - `data.identity.display_name`: preferred name when present, otherwise first/last name
+  - `data.identity.avatar_url`: signed thumbnail URL for the selected client avatar image, or `null`
+  - `data.identity.avatar_image_id`: persisted `clients.avatar_image_id`, or `null`
+  - `data.identity.avatar_initials`: backend fallback initials
+  - `data.identity.is_vip`: persisted `clients.is_vip`
+  - `data.snapshot.last_visit_at`
+  - `data.snapshot.last_visit_label`
+  - `data.snapshot.total_completed_visits`
+  - `data.snapshot.average_days_between_visits`
+  - `data.snapshot.total_spent`
+  - `data.snapshot.average_ticket`
+  - `data.snapshot.member_since`
+  - `data.snapshot.member_since_label`
+  - `data.rebooking_preference.preferred_interval_days`
+  - `data.rebooking_preference.next_recommended_date`
+  - `data.rebooking_preference.next_recommended_label`
+  - `data.rebooking_preference.basis_label`
+  - `data.rebooking_preference.basis_visit_count`
+  - `data.rebooking_preference.basis_visit_count_label`
+  - `data.rebooking_preference.source`: `manual` when using a per-client override, `auto` when derived from completed visit spacing, `default` when using account default settings
+  - `data.rebooking_preference.is_overridden`: `true` when a per-client override exists
+  - `data.next_appointment`: next non-cancelled appointment after request time, or `null`
+  - `data.next_appointment_summary.when_label`
+  - `data.next_appointment_summary.duration_label`
+  - `data.next_appointment_summary.status_label`
+  - `data.next_appointment_summary.status_tone`
+  - `data.status_summary.status_label`
+  - `data.status_summary.status_tone`
+  - `data.value_summary.total_spent`
+  - `data.value_summary.average_ticket`
+  - `data.value_summary.rebooking_rate`
+  - `data.value_summary.trend_label`
+  - `data.value_summary.trend_detail`
+  - `data.recent_history.data`: first page of recent appointment history
+  - `data.recent_history.next_cursor`
+  - `data.visual_history.data`: first visual history preview page
+  - `data.visual_history.photo_count`
+  - `data.visual_history.history_available`
+- Snapshot rules:
+  - completed visits are appointments where `status = "completed"`
+  - `total_spent` and `average_ticket` are appointment-price-derived when completed appointments exist
+  - `clients.total_spend` and `clients.last_visit_at` are fallback values when completed appointment history is absent
+  - date labels use the stylist business timezone
+- Appointment summary rules:
+  - next appointment ignores `cancelled` rows
+  - `when_label` is formatted in the stylist business timezone
+  - `duration_label` is formatted as minutes or hours/minutes
+  - `status_summary` uses `success` for upcoming appointment, `warning` for completed history without an upcoming appointment, and `neutral` when there is no appointment history
+- Value summary rules:
+  - `total_spent` and `average_ticket` mirror the snapshot values
+  - `rebooking_rate` is `100` when completed history has a future non-cancelled appointment, `0` when completed history has no future appointment, and `null` when there is no completed history
+  - `trend_label` is `Active client`, `Ready to rebook`, or `New client`
+  - `trend_detail` describes the completed-visit basis
+- Recent history rules:
+  - embeds the same result as `GET /api/clients/:id/appointments?status=past&limit=3`
+  - includes non-cancelled appointments where `appointment_date < now()`
+  - orders by `appointment_date desc`, then `id desc`
+  - includes `next_cursor` for loading more through the appointments endpoint
+- Visual history rules:
+  - embeds the same result as `GET /api/clients/:id/visual-history` with `limit=6`
+  - includes authoritative `photo_count`
+  - when visual history is plan-gated, returns `data: []`, `history_available: false`, and the authoritative `photo_count`
+  - display/full URLs are not signed by default; thumbnail URLs are included when available
+- Rebooking preference rules:
+  - when at least two completed visits exist, `preferred_interval_days` is the rounded average spacing between completed visits
+  - otherwise `preferred_interval_days` uses `rebook_nudge_settings.default_rebook_interval_days`, falling back to `90`
+  - `next_recommended_date` is calculated from the latest completed visit plus the preferred interval
+  - manual per-client overrides come from `client_rebooking_preferences`
+  - `basis_visit_count` is the completed visit basis count; auto display is capped at 5
+  - `basis_visit_count_label` is backend-owned copy such as `Based on last 3 visits`, `Based on 1 completed visit`, `Manual override`, or `Account default`
+
+### 7.9b `PATCH /api/clients/:id/rebooking-preference`
+
+- Auth: required
+- Validator: `uuidParamSchema` + `updateClientRebookingPreferenceSchema`
+- Controller: `clientsController.updateRebookingPreference`
+- Purpose: set or clear a per-client rebooking interval override
+- Request:
+  - `{ preferred_interval_days: number }`: upserts a manual override, 1-730 days
+  - `{ preferred_interval_days: null }`: clears the manual override and returns the derived/default preference
+- Response: `{ data: rebookingPreference }`
+- Main logic:
+  - verifies the client belongs to the authenticated stylist
+  - writes `client_rebooking_preferences.source = "manual"` for overrides
+  - recalculates the returned recommendation using the same logic as `GET /api/clients/:id/detail`
+
 ### 7.10 `PATCH /api/clients/:id`
 
 - Auth: required
 - Validator: `uuidParamSchema` + `updateClientSchema`
 - Purpose: partial client update
 - Main logic: same sanitization path as create
+- VIP updates are made with `is_vip: boolean`; client tags are not authoritative for VIP status.
+- Product telemetry records `is_vip` in `client_updated.metadata.updated_fields` when the VIP flag changes.
 - Response: `{ data: updatedClientRowWithDerivedSummaryFields }`
+
+### 7.10a `PATCH /api/clients/:id/avatar`
+
+- Auth: required
+- Validator: `uuidParamSchema` + `updateClientAvatarSchema`
+- Controller: `clientsController.updateAvatar`
+- Purpose: set or clear a client's selected avatar image
+- Request:
+  - `{ avatar_image_id: uuid }`: sets the selected avatar image
+  - `{ avatar_image_id: null }`: clears the selected avatar image
+- Response: `{ data: identity }`
+- Main logic:
+  - non-null values must reference a ready `appointment_images` row owned by the authenticated stylist and the same client
+  - updates `clients.avatar_image_id`
+  - returns the same identity shape as `GET /api/clients/:id/detail`, including signed `avatar_url`
 
 ### 7.11 `DELETE /api/clients/:id`
 
@@ -1462,12 +1577,21 @@ Referral link rows include:
 ### 7.12 `GET /api/clients/:id/appointments`
 
 - Auth: required
-- Validator: `uuidParamSchema`
+- Validator: `uuidParamSchema`, `listClientAppointmentsQuerySchema`
 - Controller: `appointmentsController.listByClient`
 - Purpose: list appointments for one client
 - Main service: `appointmentsService.listByClient`
-- Response: `{ data: Row[] }`
-- Order: `appointment_date desc`
+- Legacy response with no query params: `{ data: Row[] }`
+- Query params:
+  - `status`: optional `all`, `past`, or `upcoming`
+  - `limit`: optional integer, 1-50
+  - `cursor`: optional cursor from the previous paginated response
+- Paginated response when `status`, `limit`, or `cursor` is present: `{ data: Row[], next_cursor: string | null }`
+- Main paginated service: `appointmentsService.listByClientPaginated`
+- Order: `appointment_date desc`, then `id desc`
+- `status=past`: non-cancelled appointments where `appointment_date < now()`
+- `status=upcoming`: non-cancelled appointments where `appointment_date >= now()`
+- Cursor: base64url JSON containing `appointment_date` and `id` from the last returned row.
 
 ### 7.13 `GET /api/clients/:id/photos`
 
@@ -1490,14 +1614,17 @@ Referral link rows include:
 - Controller: `appointmentImagesController.listClientVisualHistory`
 - Purpose: list production-ready appointment image history for one client
 - Main service: `appointmentImagesService.listClientVisualHistory`
-- Response: `{ data: Row[] }`
+- Response: `{ data: VisualHistoryImage[], photo_count: number, history_available: boolean }`
 - Order: `created_at desc`
 - Important implementation details:
   - verifies the client belongs to the authenticated user
+  - returns `photo_count` for ready client images even when full visual history is not available to the current plan
+  - returns `history_available: false` and `data: []` when visual history is plan-gated
   - reads ready rows from `appointment_images`, not legacy `photos`
   - includes signed `thumbnail_url` values
-  - returns `display_url: null` by default; signs display URLs only when `include_display_urls=true`
+  - returns `display_url: null` and `full_url: null` by default; signs display/full URLs only when `include_display_urls=true`
   - includes `image_source` and `image_role`
+  - includes UI-ready `source_label`, `service_label`, `appointment_id`, `caption`, `thumbnail_url`, `full_url`, and `created_at`
   - includes appointment context under `appointment`: `appointment_id`, `appointment_date`, `service_name`, and `status`
 
 ### 7.14 `GET /api/appointments/internal-context`
@@ -2481,7 +2608,7 @@ Service recommendation is text-based, not foreign-key-based.
 10. decide whether caller is existing client from booking context token or direct match
 11. validate booking rules
 12. validate availability
-13. find or create client
+13. find or create client; auto-created public booking clients set `is_vip = false`
 14. create appointment with `booking_source = "public"` and referral attribution fields when applicable
 15. record a `booking_attributed` referral event when applicable
 16. return confirmation payload
@@ -2878,6 +3005,7 @@ Public booking-created client rows use:
 - `last_name`
 - `email`
 - `phone`
+- `is_vip = false`
 
 Public booking notes are stored on the appointment, not copied into client notes.
 

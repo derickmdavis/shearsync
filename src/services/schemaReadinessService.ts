@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "internal_usage_health_dashboard_contract_2026_06_24";
+const REQUIRED_SCHEMA_VERSION = "client_avatar_image_contract_2026_06_30";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -36,6 +36,8 @@ const REQUIRED_TABLE_COLUMNS = {
     "tags",
     "source",
     "reminder_consent",
+    "is_vip",
+    "avatar_image_id",
     "total_spend",
     "last_visit_at",
     "deleted_at",
@@ -154,6 +156,15 @@ const REQUIRED_TABLE_COLUMNS = {
     "error_message",
     "metadata",
     "created_at"
+  ],
+  client_rebooking_preferences: [
+    "id",
+    "user_id",
+    "client_id",
+    "preferred_interval_days",
+    "source",
+    "created_at",
+    "updated_at"
   ]
 } as const;
 

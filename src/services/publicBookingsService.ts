@@ -348,6 +348,7 @@ export const publicBookingsService = {
       last_name: payload.guest_last_name,
       email: normalizedGuestEmail,
       phone: payload.guest_phone,
+      is_vip: false,
       ...toNewClientReferralFields(referralAttribution)
     });
     const client = await persistGuestEmailIfMissing(userId, resolvedClient, normalizedGuestEmail);

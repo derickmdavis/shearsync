@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
 import { getAuthUserId, getRequiredParam } from "../lib/request";
+import { clientRebookingPreferencesService } from "../services/clientRebookingPreferencesService";
+import { clientsDetailService } from "../services/clientsDetailService";
 import { clientsService } from "../services/clientsService";
 import { referralLinksService } from "../services/referralLinksService";
 
@@ -22,10 +24,32 @@ export const clientsController = {
     res.json({ data: client });
   },
 
+  async getDetail(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const detail = await clientsDetailService.getDetail(userId, getRequiredParam(req, "id"));
+    res.json({ data: detail });
+  },
+
   async update(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const client = await clientsService.update(userId, getRequiredParam(req, "id"), req.body);
     res.json({ data: client });
+  },
+
+  async updateAvatar(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const clientId = getRequiredParam(req, "id");
+    await clientsService.updateAvatar(userId, clientId, req.body.avatar_image_id);
+    const detail = await clientsDetailService.getDetail(userId, clientId);
+    res.json({ data: detail.identity });
+  },
+
+  async updateRebookingPreference(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const clientId = getRequiredParam(req, "id");
+    await clientRebookingPreferencesService.updateForClient(userId, clientId, req.body);
+    const detail = await clientsDetailService.getDetail(userId, clientId);
+    res.json({ data: detail.rebooking_preference });
   },
 
   async remove(req: Request, res: Response) {

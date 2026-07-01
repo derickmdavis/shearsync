@@ -56,9 +56,9 @@ const {
 } = require("../validators/waitlistValidators") as typeof import("../validators/waitlistValidators");
 const { createServiceSchema, reorderServicesSchema, updateServiceSchema } =
   require("../validators/serviceValidators") as typeof import("../validators/serviceValidators");
-const { createAppointmentSchema, pendingAppointmentDecisionSchema } =
+const { createAppointmentSchema, listClientAppointmentsQuerySchema, pendingAppointmentDecisionSchema } =
   require("../validators/appointmentValidators") as typeof import("../validators/appointmentValidators");
-const { createClientSchema, updateClientSchema } =
+const { createClientSchema, updateClientAvatarSchema, updateClientRebookingPreferenceSchema, updateClientSchema } =
   require("../validators/clientValidators") as typeof import("../validators/clientValidators");
 const { birthdayRemindersQuerySchema } =
   require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
@@ -87,6 +87,28 @@ const otherUserId = "22222222-2222-2222-2222-222222222222";
 const ownedServiceId = "33333333-3333-4333-8333-333333333333";
 const foreignServiceId = "44444444-4444-4444-8444-444444444444";
 const fakeJwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJlbWFpbCI6Imp3dC11c2VyQGV4YW1wbGUuY29tIiwiYXVkIjoiYXV0aGVudGljYXRlZCIsImlzcyI6Imh0dHBzOi8vZXhhbXBsZS5zdXBhYmFzZS5jby9hdXRoL3YxIn0.signature";
+
+const installStorageReadMock = () => {
+  const calls = {
+    createSignedUrl: [] as string[]
+  };
+  const fromMock = mock.method(supabaseAdmin.storage, "from", () => ({
+    createSignedUrl: async (path: string) => {
+      calls.createSignedUrl.push(path);
+      return {
+        data: {
+          signedUrl: `https://example.supabase.co/read/${path}?token=test`
+        },
+        error: null
+      };
+    }
+  }));
+
+  return {
+    calls,
+    restore: () => fromMock.mock.restore()
+  };
+};
 
 const withAuthConfig = async <T>(
   config: {
@@ -381,7 +403,8 @@ describe("API handlers", () => {
           first_name: "Maria",
           last_name: "Santos",
           email: "maria@example.com",
-          tags: ["VIP"],
+          tags: ["Color"],
+          is_vip: true,
           updated_at: "2026-04-25T12:00:00.000Z"
         },
         {
@@ -390,7 +413,8 @@ describe("API handlers", () => {
           first_name: "Maria",
           last_name: "Lopez",
           email: "lopez@example.com",
-          tags: ["Color"],
+          tags: ["VIP"],
+          is_vip: false,
           updated_at: "2026-04-26T12:00:00.000Z"
         },
         {
@@ -400,6 +424,7 @@ describe("API handlers", () => {
           last_name: "Foreign",
           email: "foreign@example.com",
           tags: ["VIP"],
+          is_vip: true,
           updated_at: "2026-04-27T12:00:00.000Z"
         }
       ],
@@ -453,7 +478,7 @@ describe("API handlers", () => {
             table === "clients"
               ? {
                   code: "PGRST204",
-                  message: "Could not find the 'total_spend' column of 'clients' in the schema cache",
+                  message: "Could not find the 'is_vip' column of 'clients' in the schema cache",
                   details: null,
                   hint: null
                 }
@@ -470,7 +495,7 @@ describe("API handlers", () => {
           assert.match((error as Error).message, /Database schema is out of date/);
           assert.equal(
             ((error as { details?: { missingColumn?: string } }).details)?.missingColumn,
-            "total_spend"
+            "is_vip"
           );
           return true;
         }
@@ -862,7 +887,8 @@ describe("API handlers", () => {
           notes: "Prefers afternoon appointments.",
           tags: ["VIP", "Blonde"],
           source: "instagram",
-          reminder_consent: true
+          reminder_consent: true,
+          is_vip: true
         }
       }),
       { body: createClientSchema }
@@ -882,6 +908,7 @@ describe("API handlers", () => {
           tags: null,
           source: null,
           reminder_consent: null,
+          is_vip: false,
           total_spend: null,
           last_visit_at: null
         }
@@ -927,7 +954,9 @@ describe("API handlers", () => {
       users: [
         {
           id: userId,
-          timezone: "UTC"
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
         }
       ],
       clients: [
@@ -940,6 +969,7 @@ describe("API handlers", () => {
           phone: "(555) 218-4401",
           email: "ava@example.com",
           tags: ["VIP", "Blonde"],
+          is_vip: true,
           reminder_consent: true,
           updated_at: "2026-04-27T12:00:00.000Z"
         },
@@ -1003,6 +1033,8 @@ describe("API handlers", () => {
             tags: ["VIP", "Blonde"],
             source: null,
             reminder_consent: true,
+            is_vip: true,
+            avatar_image_id: null,
             total_spend: null,
             last_visit_at: null,
             updated_at: "2026-04-27T12:00:00.000Z",
@@ -1023,6 +1055,8 @@ describe("API handlers", () => {
             tags: null,
             source: null,
             reminder_consent: null,
+            is_vip: false,
+            avatar_image_id: null,
             total_spend: null,
             last_visit_at: null,
             updated_at: "2026-04-26T12:00:00.000Z",
@@ -1064,7 +1098,8 @@ describe("API handlers", () => {
           notes: "Prefers afternoon appointments.",
           tags: ["VIP", "Blonde", "VIP"],
           source: "instagram",
-          reminder_consent: true
+          reminder_consent: true,
+          is_vip: true
         }
       });
 
@@ -1079,12 +1114,780 @@ describe("API handlers", () => {
       assert.deepEqual(createdClient.tags, ["VIP", "Blonde"]);
       assert.equal(createdClient.source, "instagram");
       assert.equal(createdClient.reminder_consent, true);
+      assert.equal(createdClient.is_vip, true);
       assert.equal(createdClient.phone_normalized, "+15552184401");
       assert.equal(createdClient.next_appointment_at, null);
       assert.equal(createdClient.has_future_appointment, false);
       assert.equal(createdClient.needs_rebook, false);
       assert.equal(createdClient.last_service, null);
     } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns backend-owned client detail identity and snapshot metadata", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          preferred_name: "Avi",
+          email: "ava@example.com",
+          tags: ["VIP"],
+          is_vip: true,
+          avatar_image_id: "44444444-4444-4444-8444-444444444462",
+          total_spend: 999,
+          last_visit_at: "2025-12-01T15:00:00.000Z",
+          created_at: "2025-01-10T15:00:00.000Z"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-01-01T15:00:00.000Z",
+          service_name: "Cut",
+          price: 100,
+          status: "completed"
+        },
+        {
+          id: "appointment-2",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-02-15T15:00:00.000Z",
+          service_name: "Color",
+          price: 120,
+          status: "completed"
+        },
+        {
+          id: "appointment-3",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-04-01T15:00:00.000Z",
+          service_name: "Gloss",
+          price: 110,
+          status: "completed"
+        },
+        {
+          id: "appointment-4",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-05-01T15:00:00.000Z",
+          service_name: "Consult",
+          price: 50,
+          status: "scheduled"
+        },
+        {
+          id: "appointment-5",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2099-01-05T15:00:00.000Z",
+          service_name: "Cut",
+          duration_minutes: 90,
+          price: 125,
+          status: "scheduled"
+        },
+        {
+          id: "appointment-6",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-05-15T15:00:00.000Z",
+          service_name: "Cancelled Consultation",
+          duration_minutes: 30,
+          price: 0,
+          status: "cancelled"
+        }
+      ],
+      appointment_images: [
+        {
+          id: "44444444-4444-4444-8444-444444444461",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_id: "appointment-1",
+          bucket: "appointment-images",
+          storage_path: "users/client-1/appointment-1/image-1.jpg",
+          thumbnail_path: "users/client-1/appointment-1/image-1_thumb.jpg",
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "ready",
+          image_role: "before",
+          image_source: "stylist",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-01-01T16:00:00.000Z"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444462",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_id: "appointment-3",
+          bucket: "appointment-images",
+          storage_path: "users/client-1/appointment-3/image-2.jpg",
+          thumbnail_path: "users/client-1/appointment-3/image-2_thumb.jpg",
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "ready",
+          image_role: "reference",
+          image_source: "client",
+          caption: "Fresh gloss reference",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-04-01T16:00:00.000Z"
+        },
+        {
+          id: "image-pending",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_id: "appointment-3",
+          bucket: "appointment-images",
+          storage_path: "users/client-1/appointment-3/pending.jpg",
+          thumbnail_path: "users/client-1/appointment-3/pending_thumb.jpg",
+          content_type: "image/jpeg",
+          file_size_bytes: 2048,
+          upload_status: "pending",
+          cache_version: 1,
+          sort_order: 0,
+          created_at: "2026-04-01T17:00:00.000Z"
+        }
+      ]
+    });
+    const storage = installStorageReadMock();
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => clientsController.getDetail(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual((response.body as { data: Record<string, unknown> }).data.identity, {
+        display_name: "Avi",
+        avatar_url: "https://example.supabase.co/read/users/client-1/appointment-3/image-2_thumb.jpg?token=test",
+        avatar_image_id: "44444444-4444-4444-8444-444444444462",
+        avatar_initials: "A",
+        is_vip: true
+      });
+      assert.deepEqual((response.body as { data: { snapshot: Record<string, unknown> } }).data.snapshot, {
+        last_visit_at: "2026-04-01T15:00:00.000Z",
+        last_visit_label: "Apr 1, 2026",
+        total_completed_visits: 3,
+        average_days_between_visits: 45,
+        total_spent: 330,
+        average_ticket: 110,
+        member_since: "2025-01-10T15:00:00.000Z",
+        member_since_label: "Jan 10, 2025"
+      });
+      assert.deepEqual((response.body as { data: { rebooking_preference: Record<string, unknown> } }).data.rebooking_preference, {
+        preferred_interval_days: 45,
+        next_recommended_date: "2026-05-16",
+        next_recommended_label: "May 16, 2026",
+        basis_label: "Based on the last completed visit on Apr 1, 2026",
+        basis_visit_count: 3,
+        basis_visit_count_label: "Based on last 3 visits",
+        source: "auto",
+        is_overridden: false
+      });
+      assert.deepEqual((response.body as { data: { next_appointment: Record<string, unknown> | null } }).data.next_appointment, {
+        id: "appointment-5",
+        user_id: userId,
+        client_id: "client-1",
+        appointment_date: "2099-01-05T15:00:00.000Z",
+        service_name: "Cut",
+        duration_minutes: 90,
+        price: 125,
+        status: "scheduled"
+      });
+      assert.deepEqual((response.body as { data: { next_appointment_summary: Record<string, unknown> | null } }).data.next_appointment_summary, {
+        when_label: "Jan 5, 2099, 3:00 PM",
+        duration_label: "1 hr 30 min",
+        status_label: "Upcoming appointment",
+        status_tone: "success"
+      });
+      assert.deepEqual((response.body as { data: { status_summary: Record<string, unknown> } }).data.status_summary, {
+        status_label: "Upcoming appointment",
+        status_tone: "success"
+      });
+      assert.deepEqual((response.body as { data: { value_summary: Record<string, unknown> } }).data.value_summary, {
+        total_spent: 330,
+        average_ticket: 110,
+        rebooking_rate: 100,
+        trend_label: "Active client",
+        trend_detail: "3 completed visits with an upcoming appointment"
+      });
+      const recentHistory = (response.body as {
+        data: {
+          recent_history: {
+            data: Array<{ id: string; status: string; appointment_date: string }>;
+            next_cursor: string | null;
+          };
+        };
+      }).data.recent_history;
+      assert.deepEqual(recentHistory.data.map((appointment) => appointment.id), [
+        "appointment-4",
+        "appointment-3",
+        "appointment-2"
+      ]);
+      assert.ok(recentHistory.data.every((appointment) => appointment.status !== "cancelled"));
+      assert.ok(recentHistory.data.every((appointment) => appointment.appointment_date < "2099-01-05T15:00:00.000Z"));
+      assert.equal(typeof recentHistory.next_cursor, "string");
+      const visualHistory = (response.body as {
+        data: {
+          visual_history: {
+            data: Array<{
+              id: string;
+              thumbnail_url: string | null;
+              full_url: string | null;
+              caption: string | null;
+              source_label: string;
+              service_label: string | null;
+              appointment_id: string | null;
+            }>;
+            photo_count: number;
+            history_available: boolean;
+          };
+        };
+      }).data.visual_history;
+      assert.equal(visualHistory.photo_count, 2);
+      assert.equal(visualHistory.history_available, true);
+      assert.deepEqual(visualHistory.data.map((image) => image.id), [
+        "44444444-4444-4444-8444-444444444462",
+        "44444444-4444-4444-8444-444444444461"
+      ]);
+      assert.equal(visualHistory.data[0]?.thumbnail_url, "https://example.supabase.co/read/users/client-1/appointment-3/image-2_thumb.jpg?token=test");
+      assert.equal(visualHistory.data[0]?.full_url, null);
+      assert.equal(visualHistory.data[0]?.caption, "Fresh gloss reference");
+      assert.equal(visualHistory.data[0]?.source_label, "Client upload");
+      assert.equal(visualHistory.data[0]?.service_label, "Gloss");
+      assert.equal(visualHistory.data[0]?.appointment_id, "appointment-3");
+      assert.deepEqual(storage.calls.createSignedUrl, [
+        "users/client-1/appointment-3/image-2_thumb.jpg",
+        "users/client-1/appointment-1/image-1_thumb.jpg",
+        "users/client-1/appointment-3/image-2_thumb.jpg"
+      ]);
+    } finally {
+      storage.restore();
+      supabase.restore();
+    }
+  });
+
+  it("returns neutral client detail appointment summaries when there is no appointment history", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-empty",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          is_vip: false,
+          created_at: "2025-01-10T15:00:00.000Z"
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => clientsController.getDetail(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-empty" }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal((response.body as { data: { next_appointment: unknown } }).data.next_appointment, null);
+      assert.equal((response.body as { data: { next_appointment_summary: unknown } }).data.next_appointment_summary, null);
+      assert.deepEqual((response.body as { data: { recent_history: Record<string, unknown> } }).data.recent_history, {
+        data: [],
+        next_cursor: null
+      });
+      assert.deepEqual((response.body as { data: { visual_history: Record<string, unknown> } }).data.visual_history, {
+        data: [],
+        photo_count: 0,
+        history_available: false
+      });
+      assert.deepEqual((response.body as { data: { value_summary: Record<string, unknown> } }).data.value_summary, {
+        total_spent: 0,
+        average_ticket: null,
+        rebooking_rate: null,
+        trend_label: "New client",
+        trend_detail: "No completed visits yet"
+      });
+      assert.deepEqual((response.body as { data: { rebooking_preference: Record<string, unknown> } }).data.rebooking_preference, {
+        preferred_interval_days: 90,
+        next_recommended_date: null,
+        next_recommended_label: null,
+        basis_label: "Based on the default 90-day rebooking interval",
+        basis_visit_count: 0,
+        basis_visit_count_label: "Account default",
+        source: "default",
+        is_overridden: false
+      });
+      assert.deepEqual((response.body as { data: { status_summary: Record<string, unknown> } }).data.status_summary, {
+        status_label: "No appointment history",
+        status_tone: "neutral"
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("updates and clears per-client rebooking preference overrides", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          is_vip: false,
+          created_at: "2025-01-10T15:00:00.000Z"
+        }
+      ],
+      appointments: [
+        {
+          id: "appointment-1",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_date: "2026-04-01T15:00:00.000Z",
+          service_name: "Cut",
+          price: 100,
+          status: "completed"
+        }
+      ],
+      rebook_nudge_settings: [
+        {
+          user_id: userId,
+          default_rebook_interval_days: 60
+        }
+      ],
+      client_rebooking_preferences: []
+    });
+
+    try {
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => clientsController.updateRebookingPreference(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" },
+          body: updateClientRebookingPreferenceSchema.parse({
+            preferred_interval_days: 21
+          })
+        })
+      );
+
+      assert.equal(updateResponse.statusCode, 200);
+      assert.deepEqual(updateResponse.body, {
+        data: {
+          preferred_interval_days: 21,
+          next_recommended_date: "2026-04-22",
+          next_recommended_label: "Apr 22, 2026",
+          basis_label: "Based on the manually set 21-day rebooking interval",
+          basis_visit_count: 1,
+          basis_visit_count_label: "Manual override",
+          source: "manual",
+          is_overridden: true
+        }
+      });
+      assert.equal(supabase.state.client_rebooking_preferences.length, 1);
+      assert.equal(supabase.state.client_rebooking_preferences[0]?.preferred_interval_days, 21);
+
+      const detailResponse = await runWithErrorHandler(
+        (request, res) => clientsController.getDetail(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" }
+        })
+      );
+
+      assert.equal(
+        (detailResponse.body as { data: { rebooking_preference: { source: string } } }).data.rebooking_preference.source,
+        "manual"
+      );
+      assert.deepEqual((detailResponse.body as { data: { value_summary: Record<string, unknown> } }).data.value_summary, {
+        total_spent: 100,
+        average_ticket: 100,
+        rebooking_rate: 0,
+        trend_label: "Ready to rebook",
+        trend_detail: "1 completed visit"
+      });
+
+      const clearResponse = await runWithErrorHandler(
+        (request, res) => clientsController.updateRebookingPreference(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" },
+          body: updateClientRebookingPreferenceSchema.parse({
+            preferred_interval_days: null
+          })
+        })
+      );
+
+      assert.equal(clearResponse.statusCode, 200);
+      assert.equal(supabase.state.client_rebooking_preferences.length, 0);
+      assert.deepEqual(clearResponse.body, {
+        data: {
+          preferred_interval_days: 60,
+          next_recommended_date: "2026-05-31",
+          next_recommended_label: "May 31, 2026",
+          basis_label: "Based on the last completed visit on Apr 1, 2026",
+          basis_visit_count: 1,
+          basis_visit_count_label: "Based on 1 completed visit",
+          source: "default",
+          is_overridden: false
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("paginates recent client appointment history with a cursor", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "33333333-3333-4333-8333-333333333331",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          is_vip: false
+        }
+      ],
+      appointments: [
+        {
+          id: "44444444-4444-4444-8444-444444444441",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2026-01-10T15:00:00.000Z",
+          service_name: "Cut",
+          duration_minutes: 45,
+          price: 80,
+          status: "completed"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444442",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2026-01-08T15:00:00.000Z",
+          service_name: "Color",
+          duration_minutes: 90,
+          price: 150,
+          status: "completed"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444443",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2026-01-05T15:00:00.000Z",
+          service_name: "Gloss",
+          duration_minutes: 45,
+          price: 90,
+          status: "no_show"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2099-01-05T15:00:00.000Z",
+          service_name: "Future Cut",
+          duration_minutes: 45,
+          price: 90,
+          status: "scheduled"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444445",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2026-01-09T15:00:00.000Z",
+          service_name: "Cancelled Cut",
+          duration_minutes: 45,
+          price: 90,
+          status: "cancelled"
+        }
+      ]
+    });
+
+    try {
+      const firstResponse = await runWithErrorHandler(
+        (request, res) => appointmentsController.listByClient(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "33333333-3333-4333-8333-333333333331" },
+          query: listClientAppointmentsQuerySchema.parse({ status: "past", limit: "2" }) as Request["query"]
+        })
+      );
+
+      assert.equal(firstResponse.statusCode, 200);
+      const firstPayload = firstResponse.body as {
+        data: Array<{ id: string; status: string }>;
+        next_cursor: string | null;
+      };
+      assert.deepEqual(firstPayload.data.map((appointment) => appointment.id), [
+        "44444444-4444-4444-8444-444444444441",
+        "44444444-4444-4444-8444-444444444442"
+      ]);
+      assert.equal(typeof firstPayload.next_cursor, "string");
+      assert.ok(firstPayload.data.every((appointment) => appointment.status !== "cancelled"));
+
+      const secondResponse = await runWithErrorHandler(
+        (request, res) => appointmentsController.listByClient(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "33333333-3333-4333-8333-333333333331" },
+          query: listClientAppointmentsQuerySchema.parse({
+            status: "past",
+            limit: "2",
+            cursor: firstPayload.next_cursor as string
+          }) as Request["query"]
+        })
+      );
+
+      assert.equal(secondResponse.statusCode, 200);
+      assert.deepEqual((secondResponse.body as { data: Array<{ id: string }>; next_cursor: string | null }).data, [
+        {
+          id: "44444444-4444-4444-8444-444444444443",
+          user_id: userId,
+          client_id: "33333333-3333-4333-8333-333333333331",
+          appointment_date: "2026-01-05T15:00:00.000Z",
+          service_name: "Gloss",
+          duration_minutes: 45,
+          price: 90,
+          status: "no_show"
+        }
+      ]);
+      assert.equal((secondResponse.body as { next_cursor: string | null }).next_cursor, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("rejects paginated client appointment history for foreign clients", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        },
+        {
+          id: otherUserId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "33333333-3333-4333-8333-333333333332",
+          user_id: otherUserId,
+          first_name: "Foreign",
+          last_name: "Client",
+          is_vip: false
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => appointmentsController.listByClient(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "33333333-3333-4333-8333-333333333332" },
+          query: listClientAppointmentsQuerySchema.parse({ status: "past", limit: "3" }) as Request["query"]
+        })
+      );
+
+      assert.equal(response.statusCode, 400);
+      assert.equal((response.body as { error: { message: string } }).error.message, "Client does not belong to the authenticated user");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("updates client VIP status as a first-class field", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          tags: ["VIP"],
+          is_vip: true
+        }
+      ],
+      appointments: []
+    });
+
+    try {
+      const req = createMockRequest({
+        user: { id: userId } as Request["user"],
+        params: { id: "client-1" },
+        body: updateClientSchema.parse({
+          is_vip: false
+        })
+      });
+      const response = await runWithErrorHandler((request, res) => clientsController.update(request, res), req);
+      const updatedClient = (response.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(updatedClient.is_vip, false);
+      assert.deepEqual(updatedClient.tags, ["VIP"]);
+      assert.equal(supabase.state.clients[0]?.is_vip, false);
+      const [updateEvent] = supabase.state.product_events ?? [];
+      assert.equal(updateEvent?.event_type, "client_updated");
+      assert.deepEqual((updateEvent?.metadata as { updated_fields?: string[] } | undefined)?.updated_fields, ["is_vip"]);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("updates client avatar image when the selected image belongs to the client", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          timezone: "UTC"
+        }
+      ],
+      clients: [
+        {
+          id: "client-1",
+          user_id: userId,
+          first_name: "Ava",
+          last_name: "Martinez",
+          is_vip: false,
+          avatar_image_id: null
+        }
+      ],
+      appointments: [],
+      appointment_images: [
+        {
+          id: "44444444-4444-4444-8444-444444444471",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_id: "appointment-1",
+          thumbnail_path: "users/client-1/appointment-1/image-1_thumb.jpg",
+          upload_status: "ready"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444472",
+          user_id: userId,
+          client_id: "client-2",
+          appointment_id: "appointment-2",
+          thumbnail_path: "users/client-2/appointment-2/image_thumb.jpg",
+          upload_status: "ready"
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444473",
+          user_id: userId,
+          client_id: "client-1",
+          appointment_id: "appointment-1",
+          thumbnail_path: "users/client-1/appointment-1/pending_thumb.jpg",
+          upload_status: "pending"
+        }
+      ]
+    });
+    const storage = installStorageReadMock();
+
+    try {
+      assert.deepEqual(updateClientSchema.parse({ avatar_image_id: "44444444-4444-4444-8444-444444444471" }), {});
+
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => clientsController.updateAvatar(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" },
+          body: updateClientAvatarSchema.parse({
+            avatar_image_id: "44444444-4444-4444-8444-444444444471"
+          })
+        })
+      );
+
+      assert.equal(updateResponse.statusCode, 200);
+      assert.equal(
+        (updateResponse.body as { data: { avatar_image_id: string | null } }).data.avatar_image_id,
+        "44444444-4444-4444-8444-444444444471"
+      );
+      assert.equal(
+        (updateResponse.body as { data: { avatar_url: string | null } }).data.avatar_url,
+        "https://example.supabase.co/read/users/client-1/appointment-1/image-1_thumb.jpg?token=test"
+      );
+      assert.equal(supabase.state.clients[0]?.avatar_image_id, "44444444-4444-4444-8444-444444444471");
+      assert.deepEqual(
+        (supabase.state.product_events[0]?.metadata as { updated_fields?: string[] } | undefined)?.updated_fields,
+        ["avatar_image_id"]
+      );
+
+      const foreignImageResponse = await runWithErrorHandler(
+        (request, res) => clientsController.updateAvatar(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" },
+          body: updateClientAvatarSchema.parse({
+            avatar_image_id: "44444444-4444-4444-8444-444444444472"
+          })
+        })
+      );
+
+      assert.equal(foreignImageResponse.statusCode, 400);
+      assert.equal(
+        (foreignImageResponse.body as { error: { message: string } }).error.message,
+        "Avatar image must be a ready image for this client"
+      );
+
+      const clearResponse = await runWithErrorHandler(
+        (request, res) => clientsController.updateAvatar(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: "client-1" },
+          body: updateClientAvatarSchema.parse({
+            avatar_image_id: null
+          })
+        })
+      );
+
+      assert.equal(clearResponse.statusCode, 200);
+      assert.equal((clearResponse.body as { data: { avatar_image_id: string | null } }).data.avatar_image_id, null);
+      assert.equal(supabase.state.clients[0]?.avatar_image_id, null);
+    } finally {
+      storage.restore();
       supabase.restore();
     }
   });
@@ -4441,6 +5244,7 @@ describe("API handlers", () => {
       );
       assert.equal(supabase.state.appointments[0]?.notes, "Please keep volume low.");
       assert.equal(supabase.state.clients[0]?.notes, undefined);
+      assert.equal(supabase.state.clients[0]?.is_vip, false);
       assert.equal(supabase.state.clients[0]?.phone_normalized, "+17205550102");
       assert.equal(supabase.state.appointment_email_events.length, 1);
       assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_pending");

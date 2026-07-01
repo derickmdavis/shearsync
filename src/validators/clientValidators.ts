@@ -7,6 +7,7 @@ const clientSourceSchema = z.enum(["referral", "instagram", "walk-in", "existing
 const listClientSortSchema = z.enum(["updated", "updated_at", "name", "spend", "total_spend", "last_visit", "last_visit_at"]);
 const listClientFilterSchema = z.enum(["all", "active", "vip"]);
 const birthdaySchema = z.string().refine(isValidBirthday, "Birthday must use DD/MM format");
+const clientAvatarImageIdSchema = z.string().uuid().nullable();
 
 export const createClientSchema = z.object({
   first_name: z.string().min(1).max(100),
@@ -21,11 +22,20 @@ export const createClientSchema = z.object({
   tags: z.array(z.string().min(1).max(100)).max(100).nullable().optional(),
   source: clientSourceSchema.nullable().optional(),
   reminder_consent: z.boolean().nullable().optional(),
+  is_vip: z.boolean().optional(),
   total_spend: z.number().min(0).nullable().optional(),
   last_visit_at: z.string().datetime({ offset: true }).nullable().optional()
 });
 
 export const updateClientSchema = createClientSchema.partial();
+
+export const updateClientAvatarSchema = z.object({
+  avatar_image_id: clientAvatarImageIdSchema
+});
+
+export const updateClientRebookingPreferenceSchema = z.object({
+  preferred_interval_days: z.number().int().min(1).max(730).nullable()
+});
 
 export const listClientsQuerySchema = z.object({
   search: z.string().trim().min(1).max(200).optional(),

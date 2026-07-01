@@ -6,7 +6,14 @@ import { photosController } from "../controllers/photosController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import { clientVisualHistoryQuerySchema } from "../validators/appointmentImageValidators";
-import { createClientSchema, listClientsQuerySchema, updateClientSchema } from "../validators/clientValidators";
+import { listClientAppointmentsQuerySchema } from "../validators/appointmentValidators";
+import {
+  createClientSchema,
+  listClientsQuerySchema,
+  updateClientAvatarSchema,
+  updateClientRebookingPreferenceSchema,
+  updateClientSchema
+} from "../validators/clientValidators";
 import { uuidParamSchema } from "../validators/common";
 
 export const clientRouter = Router();
@@ -28,6 +35,17 @@ clientRouter.get(
   validate({ params: uuidParamSchema }),
   asyncHandler(clientsController.getReferralStats)
 );
+clientRouter.get("/:id/detail", validate({ params: uuidParamSchema }), asyncHandler(clientsController.getDetail));
+clientRouter.patch(
+  "/:id/rebooking-preference",
+  validate({ params: uuidParamSchema, body: updateClientRebookingPreferenceSchema }),
+  asyncHandler(clientsController.updateRebookingPreference)
+);
+clientRouter.patch(
+  "/:id/avatar",
+  validate({ params: uuidParamSchema, body: updateClientAvatarSchema }),
+  asyncHandler(clientsController.updateAvatar)
+);
 clientRouter.get("/:id", validate({ params: uuidParamSchema }), asyncHandler(clientsController.getById));
 clientRouter.patch(
   "/:id",
@@ -42,7 +60,7 @@ clientRouter.post(
 clientRouter.delete("/:id", validate({ params: uuidParamSchema }), asyncHandler(clientsController.remove));
 clientRouter.get(
   "/:id/appointments",
-  validate({ params: uuidParamSchema }),
+  validate({ params: uuidParamSchema, query: listClientAppointmentsQuerySchema }),
   asyncHandler(appointmentsController.listByClient)
 );
 clientRouter.get(

@@ -58,6 +58,8 @@ type ClientRecord = {
   tags: string[] | null;
   source: "referral" | "instagram" | "walk-in" | "existing-client" | "other" | null;
   reminder_consent: boolean | null;
+  is_vip: boolean;
+  avatar_image_id: string | null;
   total_spend: number | string | null;
   last_visit_at: string | null;
   created_at: string;
@@ -81,6 +83,18 @@ type ClientRecord = {
 - Use `totalCount` for "showing X-Y of Z" and page count.
 - Use `nextCursor !== null` or `page * pageSize < totalCount` to enable the next-page control.
 - Send no `search` param for an empty search box.
+- Read and write VIP status through `is_vip`. Do not infer VIP status from `tags`.
+- `avatar_image_id` is included on list rows for state consistency, but signed avatar URLs are owned by `GET /api/clients/:id/detail`.
+
+## Mutation Notes
+
+Use `PATCH /api/clients/:id` to edit VIP status:
+
+```json
+{ "is_vip": true }
+```
+
+The response returns the updated client row with `is_vip`.
 
 ## Filter Notes
 
@@ -88,7 +102,7 @@ Backend-backed today:
 
 - `all`: all authenticated stylist-owned clients.
 - `active`: same as `all` until a client archive/status field exists.
-- `vip`: clients whose `tags` contains `VIP` or `vip`.
+- `vip`: clients whose persisted `is_vip` flag is `true`. Tags are no longer authoritative for VIP status.
 
 Not yet accepted by `GET /api/clients`:
 

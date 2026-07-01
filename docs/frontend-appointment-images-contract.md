@@ -427,11 +427,15 @@ type Response = ClientVisualHistoryResponse;
 Backend behavior:
 
 - Verifies the client belongs to the authenticated stylist.
+- Returns `{ data, photo_count, history_available }`.
+- `photo_count` counts ready images for the client and remains available when the full visual history list is plan-gated.
+- Returns `history_available: false` and `data: []` when the current plan cannot access full appointment photo history.
 - Returns ready `appointment_images` rows for that client, newest `created_at` first.
 - Includes `image_source` and `image_role` so client reference photos can be distinguished from stylist appointment photos.
+- Includes UI-ready `source_label`, `service_label`, `appointment_id`, `caption`, `thumbnail_url`, `full_url`, and `created_at`.
 - Includes appointment context as `appointment.appointment_id`, `appointment.appointment_date`, `appointment.service_name`, and `appointment.status`.
 - Includes signed `thumbnail_url` values when thumbnail Storage paths exist.
-- Does not include signed display URLs by default; `display_url` is `null` unless `include_display_urls=true`.
+- Does not include signed display URLs by default; `display_url` and `full_url` are `null` unless `include_display_urls=true`.
 - Omits raw `storage_path` and `thumbnail_path` from visual-history responses.
 
 Important frontend notes:

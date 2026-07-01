@@ -76,6 +76,8 @@ create table if not exists public.clients (
   tags text[],
   source text check (source in ('referral', 'instagram', 'walk-in', 'existing-client', 'other')),
   reminder_consent boolean,
+  is_vip boolean not null default false,
+  avatar_image_id uuid,
   total_spend numeric(10, 2) not null default 0,
   last_visit_at timestamptz,
   deleted_at timestamptz,
@@ -466,6 +468,22 @@ create table if not exists public.rebook_nudges (
     check (custom_message_block_snapshot is null or char_length(custom_message_block_snapshot) <= 4000)
 );
 
+create table if not exists public.client_rebooking_preferences (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid not null references public.clients(id) on delete cascade,
+  preferred_interval_days integer not null,
+  source text not null default 'manual',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint client_rebooking_preferences_interval_check
+    check (preferred_interval_days between 1 and 730),
+  constraint client_rebooking_preferences_source_check
+    check (source in ('manual')),
+  constraint client_rebooking_preferences_user_client_unique
+    unique (user_id, client_id)
+);
+
 alter table public.appointment_email_events
   add constraint appointment_email_events_rebook_nudge_id_fkey
   foreign key (rebook_nudge_id)
@@ -838,6 +856,8 @@ create index if not exists clients_user_updated_at_idx on public.clients(user_id
 create index if not exists clients_user_name_idx on public.clients(user_id, last_name, first_name, id);
 create index if not exists clients_user_total_spend_idx on public.clients(user_id, total_spend desc, id);
 create index if not exists clients_user_last_visit_at_idx on public.clients(user_id, last_visit_at desc, id);
+create index if not exists clients_user_is_vip_idx on public.clients(user_id, is_vip, id);
+create index if not exists clients_avatar_image_id_idx on public.clients(avatar_image_id);
 create index if not exists clients_user_active_updated_at_idx
   on public.clients(user_id, updated_at desc, id)
   where deleted_at is null;
@@ -884,6 +904,21 @@ create index if not exists appointment_images_user_created_idx
   on public.appointment_images(user_id, created_at desc);
 create index if not exists appointment_images_user_status_expires_idx
   on public.appointment_images(user_id, upload_status, upload_expires_at);
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'clients_avatar_image_id_fkey'
+  ) then
+    alter table public.clients
+      add constraint clients_avatar_image_id_fkey
+      foreign key (avatar_image_id)
+      references public.appointment_images(id)
+      on delete set null;
+  end if;
+end $$;
 create index if not exists reminders_user_id_due_date_idx on public.reminders(user_id, due_date);
 create index if not exists reminders_user_id_sent_at_idx on public.reminders(user_id, sent_at);
 create index if not exists booking_rules_user_id_idx on public.booking_rules(user_id);
@@ -971,6 +1006,10 @@ create index if not exists rebook_nudges_last_appointment_id_idx
 create unique index if not exists rebook_nudges_active_last_appointment_idx
   on public.rebook_nudges(user_id, client_id, last_appointment_id)
   where status in ('pending_approval', 'queued', 'sending', 'failed');
+create index if not exists client_rebooking_preferences_user_id_idx
+  on public.client_rebooking_preferences(user_id);
+create index if not exists client_rebooking_preferences_client_id_idx
+  on public.client_rebooking_preferences(client_id);
 create unique index if not exists client_communication_preferences_user_email_idx
   on public.client_communication_preferences(user_id, email_normalized)
   where email_normalized is not null;
@@ -1017,6 +1056,7 @@ alter table public.account_deletion_requests enable row level security;
 alter table public.account_deletion_audit_events enable row level security;
 alter table public.rebook_nudge_settings enable row level security;
 alter table public.rebook_nudges enable row level security;
+alter table public.client_rebooking_preferences enable row level security;
 alter table public.client_communication_preferences enable row level security;
 alter table public.communication_events enable row level security;
 alter table public.communication_consent_events enable row level security;
@@ -1030,6 +1070,79 @@ alter table public.availability enable row level security;
 alter table public.stylist_off_days enable row level security;
 alter table public.waitlist_entries enable row level security;
 alter table public.appointment_action_links enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'client_rebooking_preferences'
+      and policyname = 'client_rebooking_preferences_select_own'
+  ) then
+    create policy client_rebooking_preferences_select_own
+      on public.client_rebooking_preferences
+      for select
+      using (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'client_rebooking_preferences'
+      and policyname = 'client_rebooking_preferences_insert_own'
+  ) then
+    create policy client_rebooking_preferences_insert_own
+      on public.client_rebooking_preferences
+      for insert
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'client_rebooking_preferences'
+      and policyname = 'client_rebooking_preferences_update_own'
+  ) then
+    create policy client_rebooking_preferences_update_own
+      on public.client_rebooking_preferences
+      for update
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'client_rebooking_preferences'
+      and policyname = 'client_rebooking_preferences_delete_own'
+  ) then
+    create policy client_rebooking_preferences_delete_own
+      on public.client_rebooking_preferences
+      for delete
+      using (auth.uid() = user_id);
+  end if;
+end
+$$;
+
+create or replace function public.set_client_rebooking_preferences_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_client_rebooking_preferences_updated_at on public.client_rebooking_preferences;
+create trigger set_client_rebooking_preferences_updated_at
+  before update on public.client_rebooking_preferences
+  for each row
+  execute function public.set_client_rebooking_preferences_updated_at();
 
 create or replace function public.set_appointment_images_updated_at()
 returns trigger

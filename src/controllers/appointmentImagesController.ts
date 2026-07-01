@@ -11,12 +11,12 @@ export const appointmentImagesController = {
 
   async listClientVisualHistory(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
-    const images = await appointmentImagesService.listClientVisualHistory(
+    const result = await appointmentImagesService.listClientVisualHistory(
       userId,
       getRequiredParam(req, "id"),
       req.query
     );
-    res.json({ data: images });
+    res.json(result);
   },
 
   async list(req: Request, res: Response) {
