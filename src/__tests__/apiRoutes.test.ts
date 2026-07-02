@@ -3993,6 +3993,7 @@ describe("API handlers", () => {
           bookedRevenueCents: number;
           bookedMinutes: number;
           comparisonVsLastWeekPercent: number | null;
+          workingMinutes: number;
           freeMinutesRemaining: number;
           openGapCount: number;
         };
@@ -4036,6 +4037,7 @@ describe("API handlers", () => {
         bookedRevenueCents: 15000,
         bookedMinutes: 90,
         comparisonVsLastWeekPercent: 50,
+        workingMinutes: 480,
         freeMinutesRemaining: 390,
         openGapCount: 3
       });
@@ -4097,13 +4099,15 @@ describe("API handlers", () => {
 
       assert.equal(pastResponse.statusCode, 200);
       assert.deepEqual((pastResponse.body as { availableSlots: unknown[] }).availableSlots, []);
-      assert.equal((pastResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
-      assert.equal((pastResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
+      assert.equal((pastResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.workingMinutes, 480);
+      assert.equal((pastResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
+      assert.equal((pastResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
 
       assert.equal(offDayResponse.statusCode, 200);
       assert.deepEqual((offDayResponse.body as { availableSlots: unknown[] }).availableSlots, []);
-      assert.equal((offDayResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
-      assert.equal((offDayResponse.body as { summary: { freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
+      assert.equal((offDayResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.workingMinutes, 0);
+      assert.equal((offDayResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.freeMinutesRemaining, 0);
+      assert.equal((offDayResponse.body as { summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number } }).summary.openGapCount, 0);
     } finally {
       supabase.restore();
       mock.timers.reset();
@@ -4143,7 +4147,7 @@ describe("API handlers", () => {
       );
       const payload = response.body as {
         availableSlots: Array<{ id: string; startTime: string; endTime: string; durationMinutes: number; canBook: boolean }>;
-        summary: { freeMinutesRemaining: number; openGapCount: number };
+        summary: { workingMinutes: number; freeMinutesRemaining: number; openGapCount: number };
       };
 
       assert.equal(response.statusCode, 200);
@@ -4156,6 +4160,7 @@ describe("API handlers", () => {
           canBook: true
         }
       ]);
+      assert.equal(payload.summary.workingMinutes, 180);
       assert.equal(payload.summary.freeMinutesRemaining, 105);
       assert.equal(payload.summary.openGapCount, 1);
     } finally {

@@ -368,6 +368,7 @@ export interface CalendarDayResponse {
     bookedRevenueCents: number;
     bookedMinutes: number;
     comparisonVsLastWeekPercent: number | null;
+    workingMinutes: number;
     freeMinutesRemaining: number | null;
     openGapCount: number;
   };

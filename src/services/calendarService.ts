@@ -235,6 +235,9 @@ export const calendarService = {
       start: typeof window.start_time === "string" ? timeToMinutes(window.start_time) : 0,
       end: typeof window.end_time === "string" ? timeToMinutes(window.end_time) : 0
     })));
+    const workingMinutes = isOffDay
+      ? 0
+      : availabilityIntervals.reduce((sum, interval) => sum + interval.end - interval.start, 0);
     const busyIntervals = appointments
       .filter((appointment) => isAppointmentIncludedInMetric(appointment, "busy_time"))
       .map((appointment) => getAppointmentInterval(appointment, timeZone))
@@ -304,6 +307,7 @@ export const calendarService = {
           selectedBookedTotals.revenue,
           previousBookedTotals.revenue
         ),
+        workingMinutes,
         freeMinutesRemaining,
         openGapCount
       }
