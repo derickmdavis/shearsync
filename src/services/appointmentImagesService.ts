@@ -17,6 +17,33 @@ import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { entitlementsService } from "./entitlementsService";
 
+type VisualHistoryErrorContext = {
+  userId: string;
+  clientId: string;
+  stage: string;
+};
+
+const logClientVisualHistoryError = (error: unknown, context: VisualHistoryErrorContext) => {
+  if (!error) {
+    return;
+  }
+
+  const supabaseError = error as {
+    code?: unknown;
+    message?: unknown;
+    details?: unknown;
+    hint?: unknown;
+  };
+
+  logger.error("client_visual_history_error", {
+    ...context,
+    errorCode: supabaseError.code,
+    errorMessage: supabaseError.message,
+    errorDetails: supabaseError.details,
+    errorHint: supabaseError.hint
+  });
+};
+
 const MAX_APPOINTMENT_IMAGES = 10;
 const UPLOAD_INTENT_TTL_MINUTES = 15;
 const SIGNED_THUMBNAIL_URL_TTL_SECONDS = 300;
@@ -477,6 +504,11 @@ export const appointmentImagesService = {
       entitlementsService.isFeatureAllowed(userId, "appointmentPhotos")
     ]);
 
+    logClientVisualHistoryError(countError, {
+      userId,
+      clientId,
+      stage: "count"
+    });
     handleSupabaseError(countError, "Unable to load client visual history count");
     const photoCount = count ?? 0;
 
@@ -500,6 +532,11 @@ export const appointmentImagesService = {
       .order("created_at", { ascending: false })
       .limit(limit);
 
+    logClientVisualHistoryError(imagesError, {
+      userId,
+      clientId,
+      stage: "images"
+    });
     handleSupabaseError(imagesError, "Unable to load client visual history");
     const visualHistoryImages = (images ?? []) as unknown as RowList;
 
@@ -520,6 +557,11 @@ export const appointmentImagesService = {
         .eq("client_id", clientId)
         .in("id", appointmentIds);
 
+      logClientVisualHistoryError(appointmentsError, {
+        userId,
+        clientId,
+        stage: "appointment_context"
+      });
       handleSupabaseError(appointmentsError, "Unable to load visual history appointment context");
 
       for (const appointment of appointments ?? []) {
