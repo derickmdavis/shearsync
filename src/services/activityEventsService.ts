@@ -65,7 +65,7 @@ const ACTIVITY_EVENT_SELECT =
   "id, activity_type, title, description, occurred_at, client_id, appointment_id, metadata";
 
 const PENDING_APPROVAL_SELECT =
-  "id, client_id, appointment_date, service_name, status, created_at";
+  "id, client_id, appointment_date, service_name, notes, status, created_at";
 
 const REBOOK_CLIENT_SELECT =
   "id, first_name, last_name, preferred_name";
@@ -254,6 +254,9 @@ const toPendingApprovalActivityItem = (
   const occurredAt = String(appointment.created_at ?? appointment.appointment_date ?? new Date().toISOString());
   const metadata: BookingCreatedActivityMetadata = {
     ...createBookingCreatedMetadata(clientNames, serviceName, appointmentDate),
+    ...(typeof appointment.notes === "string" && appointment.notes.length > 0
+      ? { appointment_notes: appointment.notes }
+      : {}),
     current_appointment_status: "pending"
   };
 

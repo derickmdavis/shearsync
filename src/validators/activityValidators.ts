@@ -75,6 +75,7 @@ const bookingCreatedMetadataSchema = z.object({
   client_name: z.string().min(1),
   service_name: z.string().min(1),
   appointment_start_time: isoDateTimeSchema,
+  appointment_notes: z.string().optional(),
   current_appointment_status: z.enum(["pending", "scheduled", "completed", "cancelled", "no_show"]).optional()
 });
 
@@ -196,5 +197,6 @@ export const appointmentActivityResponseSchema = z.object({
 });
 
 export const activityDashboardResponseSchema = z.object({
-  customers_reached_last_30_days: z.number().int().nonnegative()
+  customers_reached_last_30_days: z.number().int().nonnegative(),
+  birthdayReminderMode: z.enum(["automatic", "manual_review"])
 }).passthrough();

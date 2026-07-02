@@ -1099,11 +1099,18 @@ export const activityDashboardService = {
     const eligibleRebookNudgeQueue = automationQueue.filter((item) => item.automation_key === "rebook_nudges");
     const eligibleBirthdayReminderQueue = automationQueue.filter((item) => item.automation_key === "birthday_reminders");
     const eligibleThankYouEmailQueue = automationQueue.filter((item) => item.automation_key === "thank_you_emails");
+    const eligibleBirthdayReminderIds = new Set(
+      eligibleBirthdayReminderQueue.map((item) => String(item.birthday_reminder_id ?? item.reminder_id ?? ""))
+    );
+    const eligibleBirthdayReminderApiQueue = birthdayReminderQueue.filter((item) =>
+      eligibleBirthdayReminderIds.has(String(item.reminder_id ?? ""))
+    );
     const rebookNudgeApprovalNeededCount = rebookNudgeCounts.pending_approval;
     const thankYouEmailApprovalNeededCount = thankYouEmailCounts.pending_approval;
     const rebookNudgeAutoSendQueuedCount = eligibleRebookNudgeQueue.length;
     const birthdayReminderAutoSendQueuedCount = eligibleBirthdayReminderQueue.length;
     const thankYouEmailAutoSendQueuedCount = eligibleThankYouEmailQueue.length;
+    const birthdayReminderMode = "automatic" as const;
     const noShowTodayCount = 0;
     const automationControls = [
       {
@@ -1197,7 +1204,8 @@ export const activityDashboardService = {
       outstanding_rebook_nudges: outstandingRebookNudges,
       birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
       queued_birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
-      birthday_reminder_queue: birthdayReminderQueue,
+      birthdayReminderMode,
+      birthday_reminder_queue: eligibleBirthdayReminderApiQueue,
       pending_thank_you_email_count: thankYouEmailApprovalNeededCount,
       queued_thank_you_email_count: thankYouEmailAutoSendQueuedCount,
       cancellation_review_count: cancellationReviewItems.length,

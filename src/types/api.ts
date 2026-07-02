@@ -18,6 +18,7 @@ export interface BookingCreatedActivityMetadata {
   client_name: string;
   service_name: string;
   appointment_start_time: string;
+  appointment_notes?: string;
   current_appointment_status?: AppointmentStatus;
 }
 

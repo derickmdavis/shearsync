@@ -451,7 +451,8 @@ export const birthdayRemindersService = {
       .from("birthday_reminders")
       .select("*")
       .eq("user_id", userId)
-      .in("status", activeStatuses)
+      .eq("status", "queued")
+      .gte("scheduled_send_at", new Date().toISOString())
       .order("scheduled_send_at", { ascending: true })
       .limit(limit);
 

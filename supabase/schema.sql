@@ -326,7 +326,7 @@ create table if not exists public.activity_events (
   metadata jsonb,
   dedupe_key text not null,
   created_at timestamptz not null default now(),
-  check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent', 'waitlist_joined'))
+  check (activity_type in ('booking_created', 'appointment_cancelled', 'appointment_rescheduled', 'reminder_sent', 'waitlist_joined', 'client_rebook_needed'))
 );
 
 create table if not exists public.appointment_email_events (
@@ -711,7 +711,7 @@ create table if not exists public.automation_settings (
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   constraint automation_settings_key_check
-    check (key in ('rebook_nudges', 'appointment_reminders', 'email_confirmations', 'no_show_follow_up', 'waitlist_match', 'birthday_reminders')),
+    check (key in ('rebook_nudges', 'appointment_reminders', 'email_confirmations', 'no_show_follow_up', 'waitlist_match', 'birthday_reminders', 'thank_you_emails')),
   constraint automation_settings_user_key_unique unique (user_id, key)
 );
 

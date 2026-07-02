@@ -141,6 +141,7 @@ Value fallback chain:
 dashboard.needs_attention.birthday_reminder_count
 dashboard.birthday_reminder_count
 dashboard.queued_birthday_reminder_count
+dashboard.birthdayReminderMode
 dashboard.birthday_reminder_queue.length
 ```
 
@@ -158,8 +159,10 @@ Backend calculation for `birthday_reminder_count` and `queued_birthday_reminder_
 Backend calculation for `birthday_reminder_queue.length`:
 
 - If the stylist is not entitled to `birthdayReminders`, the queue is empty.
-- Otherwise loads up to 50 active birthday reminders from `birthday_reminders`, ordered by `scheduled_send_at`.
-- Active statuses come from the birthday reminder service and may include records beyond the eligible auto-send queue.
+- Otherwise loads up to 50 upcoming queued birthday reminders from `birthday_reminders`, ordered by `scheduled_send_at`.
+- Dashboard birthday reminder queue rows use `status = "queued"` only. The dedicated birthday reminder endpoint may expose broader cancelable active statuses.
+
+`dashboard.birthdayReminderMode` is currently `"automatic"`. Use this field, not count placement heuristics, when deciding whether birthday reminders belong in Reminder Queue or Needs Attention.
 
 ### Review requests queued
 

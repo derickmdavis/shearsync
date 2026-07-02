@@ -1263,6 +1263,7 @@ describe("Activity handlers", () => {
           client_id: clientId,
           appointment_date: "2026-05-14T15:00:00.000Z",
           service_name: "Balayage",
+          notes: "Please keep volume low.",
           status: "pending",
           created_at: "2026-05-12T18:00:00.000Z"
         },
@@ -1339,6 +1340,7 @@ describe("Activity handlers", () => {
                   client_name: "Sarah Miller",
                   service_name: "Balayage",
                   appointment_start_time: "2026-05-14T15:00:00.000Z",
+                  appointment_notes: "Please keep volume low.",
                   current_appointment_status: "pending"
                 }
               }
@@ -1858,6 +1860,7 @@ describe("Activity handlers", () => {
           automation_health: { score: number; status: string };
           automation_impact_this_week: { booked_count: number; reminders_sent_count: number };
           customers_reached_last_30_days: number;
+          birthdayReminderMode: "automatic" | "manual_review";
           automation_controls: Array<{ key: string; enabled: boolean; status_label: string }>;
         };
       }).data;
@@ -1893,6 +1896,7 @@ describe("Activity handlers", () => {
       assert.equal(payload.automation_impact_this_week.booked_count, 0);
       assert.equal(payload.automation_impact_this_week.reminders_sent_count, 1);
       assert.equal(payload.customers_reached_last_30_days, 1);
+      assert.equal(payload.birthdayReminderMode, "automatic");
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.enabled, true);
       assert.equal(payload.automation_controls.find((control) => control.key === "email_confirmations")?.status_label, "On for bookings");
       assert.equal(payload.automation_controls.find((control) => control.key === "waitlist_match")?.enabled, false);
@@ -2430,6 +2434,7 @@ describe("Activity handlers", () => {
           queued_thank_you_email_count: number;
           pending_rebook_nudge_count: number;
           pending_thank_you_email_count: number;
+          birthday_reminder_queue: Array<{ reminder_id: string; status: string; scheduled_send_at: string }>;
           reminder_queue: Array<{ reminder_id: string; reminder_type: string; send_at: string; channel: string; appointment_id: string | null }>;
           automation_controls: Array<{ key: string; enabled: boolean; feature_available: boolean; queued_count?: number; scheduled_count?: number }>;
         };
@@ -2460,6 +2465,10 @@ describe("Activity handlers", () => {
       assert.equal(payload.pending_reminder_count, 5);
       assert.equal(payload.queued_rebook_nudge_count, 1);
       assert.equal(payload.queued_birthday_reminder_count, 1);
+      assert.deepEqual(payload.birthday_reminder_queue.map((item) => [item.reminder_id, item.status, item.scheduled_send_at]), [
+        [birthdayReminderId, "queued", "2026-06-06T18:00:00.000Z"]
+      ]);
+      assert.equal(payload.birthday_reminder_queue.some((item) => item.reminder_id === "birthday-failed"), false);
       assert.equal(payload.queued_thank_you_email_count, 1);
       assert.equal(payload.pending_rebook_nudge_count, 1);
       assert.equal(payload.pending_thank_you_email_count, 1);
