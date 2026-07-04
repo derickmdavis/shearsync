@@ -56,7 +56,8 @@ export const recentCancellationsQuerySchema = z.object({
 
 export const listBirthdayRemindersQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(50),
-  cursor: z.string().min(1).optional()
+  cursor: z.string().min(1).optional(),
+  status: z.enum(["pending_approval", "queued"]).optional()
 });
 
 export const birthdayReminderParamSchema = z.object({

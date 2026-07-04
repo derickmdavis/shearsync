@@ -28,6 +28,7 @@ const { authController } = require("../controllers/authController") as typeof im
 const { settingsController } = require("../controllers/settingsController") as typeof import("../controllers/settingsController");
 const { birthdayRemindersController } =
   require("../controllers/birthdayRemindersController") as typeof import("../controllers/birthdayRemindersController");
+const { rebookNudgesController } = require("../controllers/rebookNudgesController") as typeof import("../controllers/rebookNudgesController");
 const { thankYouEmailsController } = require("../controllers/thankYouEmailsController") as typeof import("../controllers/thankYouEmailsController");
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
 const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
@@ -8737,6 +8738,156 @@ describe("API handlers", () => {
         })
       );
       assert.equal(approveResponse.statusCode, 403);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("filters rebook and thank you lists into review and scheduled outreach buckets", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      rebook_nudges: [
+        {
+          id: "rebook-pending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-10T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "rebook-auto-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-11T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "rebook-auto-failed",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-12T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "rebook-review-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-13T12:00:00.000Z",
+          rebook_interval_days: 90
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "thank-you-pending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-10T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-auto-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-11T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-auto-failed",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-12T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-review-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-13T12:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const rebookReviewResponse = await runWithErrorHandler(
+        (request, res) => rebookNudgesController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { status: "pending_approval", limit: "25" }
+        })
+      );
+      const rebookScheduledResponse = await runWithErrorHandler(
+        (request, res) => rebookNudgesController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { status: "queued", limit: "25" }
+        })
+      );
+      const thankYouReviewResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { status: "pending_approval", limit: "25" }
+        })
+      );
+      const thankYouScheduledResponse = await runWithErrorHandler(
+        (request, res) => thankYouEmailsController.list(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: { status: "queued", limit: "25" }
+        })
+      );
+
+      assert.equal(rebookReviewResponse.statusCode, 200);
+      assert.equal(rebookScheduledResponse.statusCode, 200);
+      assert.equal(thankYouReviewResponse.statusCode, 200);
+      assert.equal(thankYouScheduledResponse.statusCode, 200);
+
+      assert.deepEqual((rebookReviewResponse.body as { data: Array<{ id: string }> }).data.map((item) => item.id), [
+        "rebook-pending"
+      ]);
+      assert.deepEqual((rebookScheduledResponse.body as { data: Array<{ id: string }> }).data.map((item) => item.id), [
+        "rebook-auto-failed",
+        "rebook-auto-queued"
+      ]);
+      assert.deepEqual((thankYouReviewResponse.body as { data: Array<{ id: string }> }).data.map((item) => item.id), [
+        "thank-you-pending"
+      ]);
+      assert.deepEqual((thankYouScheduledResponse.body as { data: Array<{ id: string }> }).data.map((item) => item.id), [
+        "thank-you-auto-failed",
+        "thank-you-auto-queued"
+      ]);
     } finally {
       supabase.restore();
     }

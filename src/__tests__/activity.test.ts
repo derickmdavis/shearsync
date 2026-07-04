@@ -22,6 +22,7 @@ const { updateReminderSchema } =
   require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
 const {
   listActivityQuerySchema,
+  listBirthdayRemindersQuerySchema,
   activityFeedResponseSchema,
   appointmentActivityResponseSchema,
   activityDashboardResponseSchema,
@@ -119,6 +120,131 @@ describe("Activity handlers", () => {
   it("accepts client_rebook_needed as a valid activity_type filter", () => {
     const query = listActivityQuerySchema.parse({ activity_type: "client_rebook_needed" });
     assert.equal(query.activity_type, "client_rebook_needed");
+  });
+
+  it("filters activity birthday reminders to pending review rows", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      birthday_reminders: [
+        {
+          id: "birthday-pending-one",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "one@example.com",
+          birthday: "10/06",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "pending_approval",
+          template_data: {}
+        },
+        {
+          id: "birthday-pending-two",
+          user_id: userId,
+          client_id: secondClientId,
+          recipient_email: "two@example.com",
+          birthday: "11/06",
+          birthday_occurrence_date: "2026-06-11",
+          scheduled_send_at: "2026-06-11T09:00:00.000Z",
+          status: "pending_approval",
+          template_data: {}
+        },
+        {
+          id: "birthday-queued",
+          user_id: userId,
+          client_id: thirdClientId,
+          recipient_email: "queued@example.com",
+          birthday: "12/06",
+          birthday_occurrence_date: "2026-06-12",
+          scheduled_send_at: "2026-06-12T09:00:00.000Z",
+          status: "queued",
+          template_data: {}
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => activityController.listBirthdayReminders(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: listBirthdayRemindersQuerySchema.parse({ status: "pending_approval", limit: "50" }) as unknown as Request["query"]
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      const payload = response.body as { data: Array<{ reminder_id: string; status: string }> };
+      assert.deepEqual(payload.data.map((item) => [item.reminder_id, item.status]), [
+        ["birthday-pending-one", "pending_approval"],
+        ["birthday-pending-two", "pending_approval"]
+      ]);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("filters activity birthday reminders to future queued rows", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      birthday_reminders: [
+        {
+          id: "birthday-future-queued",
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "future@example.com",
+          birthday: "10/06",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "queued",
+          template_data: {}
+        },
+        {
+          id: "birthday-past-queued",
+          user_id: userId,
+          client_id: secondClientId,
+          recipient_email: "past@example.com",
+          birthday: "05/06",
+          birthday_occurrence_date: "2026-06-05",
+          scheduled_send_at: "2026-06-05T09:00:00.000Z",
+          status: "queued",
+          template_data: {}
+        },
+        {
+          id: "birthday-pending",
+          user_id: userId,
+          client_id: thirdClientId,
+          recipient_email: "pending@example.com",
+          birthday: "11/06",
+          birthday_occurrence_date: "2026-06-11",
+          scheduled_send_at: "2026-06-11T09:00:00.000Z",
+          status: "pending_approval",
+          template_data: {}
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => activityController.listBirthdayReminders(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: listBirthdayRemindersQuerySchema.parse({ status: "queued", limit: "50" }) as unknown as Request["query"]
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      const payload = response.body as { data: Array<{ reminder_id: string; status: string }> };
+      assert.deepEqual(payload.data.map((item) => [item.reminder_id, item.status]), [
+        ["birthday-future-queued", "queued"]
+      ]);
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
   });
 
   it("defaults recent cancellation queries to a 24-hour window", () => {

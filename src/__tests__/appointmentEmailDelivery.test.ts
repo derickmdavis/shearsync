@@ -2196,6 +2196,82 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("counts only automatic queued thank you emails in the queued total", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "automatic-queued",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "automatic-failed",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "manual-review-queued",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "manual-review-pending",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "sending-thank-you",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      const counts = await thankYouEmailsService.getCountsForUser(TEST_USER_ID);
+
+      assert.deepEqual(counts, {
+        pending_approval: 1,
+        queued: 2
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("skips linked queued rebook email events when a nudge is cancelled", async () => {
     const supabase = installMockSupabase({
       users: [

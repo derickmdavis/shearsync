@@ -452,7 +452,11 @@ export const thankYouEmailsService = {
       .select("*")
       .eq("user_id", userId);
 
-    if (filters.status) {
+    if (filters.status === "queued") {
+      query = query
+        .in("status", ["queued", "failed"])
+        .eq("approval_required", false);
+    } else if (filters.status) {
       query = query.eq("status", filters.status);
     }
 
@@ -497,6 +501,7 @@ export const thankYouEmailsService = {
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .in("status", ["queued", "failed"])
+        .eq("approval_required", false)
     ]);
 
     handleSupabaseError(pendingResult.error, "Unable to load pending thank you email count");

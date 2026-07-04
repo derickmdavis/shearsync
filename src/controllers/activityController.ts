@@ -37,10 +37,11 @@ export const activityController = {
 
   async listBirthdayReminders(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
-    const query = req.query as unknown as { limit: number; cursor?: string };
+    const query = req.query as unknown as { limit: number; cursor?: string; status?: "pending_approval" | "queued" };
     const response = await birthdayRemindersService.listForUser(userId, {
       limit: query.limit,
-      cursor: query.cursor
+      cursor: query.cursor,
+      status: query.status
     });
 
     res.json({

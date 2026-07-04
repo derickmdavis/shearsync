@@ -427,7 +427,11 @@ export const rebookNudgesService = {
       .select("*")
       .eq("user_id", userId);
 
-    if (filters.status) {
+    if (filters.status === "queued") {
+      query = query
+        .in("status", ["queued", "failed"])
+        .eq("approval_required", false);
+    } else if (filters.status) {
       query = query.eq("status", filters.status);
     }
 

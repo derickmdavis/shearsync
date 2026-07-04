@@ -24,6 +24,7 @@ type BirthdayReminderStatus =
 interface ListBirthdayReminderFilters {
   limit: number;
   cursor?: string;
+  status?: "pending_approval" | "queued";
 }
 
 interface ProcessQueuedBirthdayEmailOptions {
@@ -427,8 +428,17 @@ export const birthdayRemindersService = {
     let query = supabaseAdmin
       .from("birthday_reminders")
       .select("*")
-      .eq("user_id", userId)
-      .in("status", activeStatuses);
+      .eq("user_id", userId);
+
+    if (filters.status === "pending_approval") {
+      query = query.eq("status", "pending_approval");
+    } else if (filters.status === "queued") {
+      query = query
+        .eq("status", "queued")
+        .gte("scheduled_send_at", new Date().toISOString());
+    } else {
+      query = query.in("status", activeStatuses);
+    }
 
     if (cursor) {
       query = query.or(`scheduled_send_at.gt.${cursor.scheduled_send_at},and(scheduled_send_at.eq.${cursor.scheduled_send_at},id.gt.${cursor.id})`);

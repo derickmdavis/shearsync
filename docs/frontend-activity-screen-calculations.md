@@ -183,6 +183,19 @@ Backend calculation for `birthday_reminder_queue.length`:
 - Otherwise loads up to 50 upcoming queued birthday reminders from `birthday_reminders`, ordered by `scheduled_send_at`.
 - Dashboard birthday reminder queue rows use `status = "queued"` only. The dedicated birthday reminder endpoint may expose broader cancelable active statuses.
 
+Birthday reminder click-through lists:
+
+- Needs Attention birthday reminder rows must call `GET /api/activity/birthday-reminders?status=pending_approval`.
+- Scheduled Outreach birthday reminder rows must call `GET /api/activity/birthday-reminders?status=queued`.
+- Omitting `status` keeps the legacy broader list of active birthday reminders and should not be used for count-matched Needs Attention or Scheduled Outreach drawers.
+
+Rebook and thank-you click-through lists:
+
+- Needs Attention rebook rows must call `GET /api/rebook-nudges?status=pending_approval`.
+- Scheduled Outreach rebook rows must call `GET /api/rebook-nudges?status=queued`; the backend returns automatic queued/failed rows only, with `approval_required = false`.
+- Needs Attention thank-you rows must call `GET /api/thank-you-emails?status=pending_approval`.
+- Scheduled Outreach thank-you rows must call `GET /api/thank-you-emails?status=queued`; the backend returns automatic queued/failed rows only, with `approval_required = false`.
+
 Approval setting side effects:
 
 - Turning review on moves future unsent queued birthday reminders into Needs Attention.
