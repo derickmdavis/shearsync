@@ -26,6 +26,8 @@ const { profileController } = require("../controllers/profileController") as typ
 const { accountController } = require("../controllers/accountController") as typeof import("../controllers/accountController");
 const { authController } = require("../controllers/authController") as typeof import("../controllers/authController");
 const { settingsController } = require("../controllers/settingsController") as typeof import("../controllers/settingsController");
+const { birthdayRemindersController } =
+  require("../controllers/birthdayRemindersController") as typeof import("../controllers/birthdayRemindersController");
 const { thankYouEmailsController } = require("../controllers/thankYouEmailsController") as typeof import("../controllers/thankYouEmailsController");
 const { clientsController } = require("../controllers/clientsController") as typeof import("../controllers/clientsController");
 const { calendarController } = require("../controllers/calendarController") as typeof import("../controllers/calendarController");
@@ -8804,6 +8806,65 @@ describe("API handlers", () => {
     }
   });
 
+  it("allows Pro users to get and update birthday reminder settings", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      birthday_reminder_settings: [],
+      birthday_reminders: []
+    });
+
+    try {
+      const initialResponse = await runWithErrorHandler(
+        (request, res) => settingsController.getBirthdayReminderSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"]
+        })
+      );
+      assert.equal(initialResponse.statusCode, 200);
+      assert.deepEqual((initialResponse.body as { data: Record<string, unknown> }).data, {
+        approvalRequired: true,
+        configured: false
+      });
+
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => settingsController.updateBirthdayReminderSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: {
+            approvalRequired: false
+          }
+        })
+      );
+      assert.equal(updateResponse.statusCode, 200);
+      assert.deepEqual((updateResponse.body as { data: Record<string, unknown> }).data, {
+        approvalRequired: false,
+        configured: true
+      });
+      assert.equal(supabase.state.birthday_reminder_settings.length, 1);
+      assert.equal(supabase.state.birthday_reminder_settings[0]?.approval_required, false);
+
+      const readbackResponse = await runWithErrorHandler(
+        (request, res) => settingsController.getBirthdayReminderSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"]
+        })
+      );
+      assert.deepEqual((readbackResponse.body as { data: Record<string, unknown> }).data, {
+        approvalRequired: false,
+        configured: true
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("allows Premium users to create thank you emails", async () => {
     const previousWebAppUrl = env.WEB_APP_URL;
     env.WEB_APP_URL = "https://dripdesk.example";
@@ -8957,6 +9018,311 @@ describe("API handlers", () => {
     } finally {
       env.WEB_APP_URL = previousWebAppUrl;
       supabase.restore();
+    }
+  });
+
+  it("supports birthday reminder approve and cancel APIs", async () => {
+    const reminderId = "44444444-4444-4444-8444-444444444444";
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      birthday_reminders: [
+        {
+          id: reminderId,
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          birthday: "10/06",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "pending_approval",
+          template_data: {
+            client_name: "Jane Doe",
+            birthday_label: "June 10"
+          },
+          created_at: "2026-06-01T12:00:00.000Z",
+          updated_at: "2026-06-01T12:00:00.000Z"
+        }
+      ],
+      appointment_email_events: []
+    });
+
+    try {
+      const approveResponse = await runWithErrorHandler(
+        (request, res) => birthdayRemindersController.approve(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: reminderId }
+        })
+      );
+
+      assert.equal(approveResponse.statusCode, 200);
+      assert.equal((approveResponse.body as { data: Record<string, unknown> }).data.status, "queued");
+      assert.equal(supabase.state.birthday_reminders[0]?.status, "queued");
+
+      const cancelResponse = await runWithErrorHandler(
+        (request, res) => birthdayRemindersController.cancel(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          params: { id: reminderId },
+          body: { reason: "Client requested no birthday email" }
+        })
+      );
+
+      assert.equal(cancelResponse.statusCode, 200);
+      assert.equal((cancelResponse.body as { data: Record<string, unknown> }).data.status, "cancelled");
+      assert.equal(supabase.state.birthday_reminders[0]?.cancelled_reason, "Client requested no birthday email");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("migrates active outgoing email statuses when approval settings change", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: userId,
+          email: "owner@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      birthday_reminder_settings: [
+        {
+          user_id: userId,
+          approval_required: false
+        }
+      ],
+      rebook_nudge_settings: [
+        {
+          user_id: userId,
+          approval_required: false,
+          default_rebook_interval_days: 90
+        }
+      ],
+      thank_you_email_settings: [
+        {
+          user_id: userId,
+          approval_required: false,
+          send_delay_hours: 0
+        }
+      ],
+      birthday_reminders: [
+        {
+          id: "birthday-future-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          birthday: "10/06",
+          birthday_occurrence_date: "2026-06-10",
+          scheduled_send_at: "2026-06-10T09:00:00.000Z",
+          status: "queued",
+          template_data: {}
+        },
+        {
+          id: "birthday-past-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          birthday: "05/06",
+          birthday_occurrence_date: "2026-06-05",
+          scheduled_send_at: "2026-06-05T09:00:00.000Z",
+          status: "queued",
+          template_data: {}
+        },
+        {
+          id: "birthday-pending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          birthday: "11/06",
+          birthday_occurrence_date: "2026-06-11",
+          scheduled_send_at: "2026-06-11T09:00:00.000Z",
+          status: "pending_approval",
+          template_data: {}
+        },
+        {
+          id: "birthday-sending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          birthday: "12/06",
+          birthday_occurrence_date: "2026-06-12",
+          scheduled_send_at: "2026-06-12T09:00:00.000Z",
+          status: "sending",
+          template_data: {}
+        }
+      ],
+      rebook_nudges: [
+        {
+          id: "rebook-auto-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "rebook-pending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "rebook-sending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "rebook-superseded",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          recipient_email: "jane@example.com",
+          status: "superseded",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        }
+      ],
+      thank_you_emails: [
+        {
+          id: "thank-you-auto-queued",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-pending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-sending",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "sending",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        },
+        {
+          id: "thank-you-skipped",
+          user_id: userId,
+          client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          appointment_id: "99999999-9999-4999-8999-999999999999",
+          recipient_email: "jane@example.com",
+          status: "skipped",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z"
+        }
+      ]
+    });
+
+    try {
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateBirthdayReminderSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: { approvalRequired: true }
+        })
+      );
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateRebookNudgeSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: {
+            approvalRequired: true,
+            defaultRebookIntervalDays: 120,
+            subjectTemplate: "Time to rebook, {{client_name}}",
+            customMessageBlock: "Book here: {{rebook_url}}"
+          }
+        })
+      );
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateThankYouEmailSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: { approvalRequired: true }
+        })
+      );
+
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-future-queued")?.status, "pending_approval");
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-past-queued")?.status, "queued");
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-sending")?.status, "sending");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-auto-queued")?.status, "pending_approval");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-auto-queued")?.approval_required, true);
+      assert.equal(supabase.state.rebook_nudge_settings[0]?.default_rebook_interval_days, 120);
+      assert.equal(supabase.state.rebook_nudge_settings[0]?.subject_template, "Time to rebook, {{client_name}}");
+      assert.equal(supabase.state.rebook_nudge_settings[0]?.custom_message_block, "Book here: {{rebook_url}}");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-sending")?.status, "sending");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-superseded")?.status, "superseded");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-auto-queued")?.status, "pending_approval");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-auto-queued")?.approval_required, true);
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-sending")?.status, "sending");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-skipped")?.status, "skipped");
+
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateBirthdayReminderSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: { approvalRequired: false }
+        })
+      );
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateRebookNudgeSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: { approvalRequired: false }
+        })
+      );
+      await runWithErrorHandler(
+        (request, res) => settingsController.updateThankYouEmailSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: { approvalRequired: false }
+        })
+      );
+
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-future-queued")?.status, "queued");
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-pending")?.status, "queued");
+      assert.equal(supabase.state.birthday_reminders.find((row) => row.id === "birthday-sending")?.status, "sending");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-auto-queued")?.status, "queued");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-auto-queued")?.approval_required, false);
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-pending")?.status, "queued");
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-pending")?.approval_required, false);
+      assert.equal(supabase.state.rebook_nudges.find((row) => row.id === "rebook-sending")?.status, "sending");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-auto-queued")?.status, "queued");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-auto-queued")?.approval_required, false);
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-pending")?.status, "queued");
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-pending")?.approval_required, false);
+      assert.equal(supabase.state.thank_you_emails.find((row) => row.id === "thank-you-sending")?.status, "sending");
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
     }
   });
 

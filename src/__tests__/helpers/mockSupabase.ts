@@ -37,6 +37,16 @@ const cloneRow = <T extends TableRow>(row: T): T => ({ ...row });
 const cloneState = (state: TableState): TableState =>
   Object.fromEntries(Object.entries(state).map(([table, rows]) => [table, rows.map((row) => cloneRow(row))]));
 
+const restoreState = (state: TableState, snapshot: TableState): void => {
+  for (const table of Object.keys(state)) {
+    delete state[table];
+  }
+
+  for (const [table, rows] of Object.entries(snapshot)) {
+    state[table] = rows.map((row) => cloneRow(row));
+  }
+};
+
 const splitTopLevel = (value: string): string[] => {
   const parts: string[] = [];
   let depth = 0;
@@ -468,12 +478,171 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 }
 
+const getRows = (state: TableState, table: string): TableRow[] => {
+  if (!state[table]) {
+    state[table] = [];
+  }
+
+  return state[table];
+};
+
+const upsertByUserId = (state: TableState, table: string, row: TableRow): TableRow => {
+  const rows = getRows(state, table);
+  const existing = rows.find((candidate) => candidate.user_id === row.user_id);
+  const timestamp = new Date().toISOString();
+
+  if (existing) {
+    Object.assign(existing, row, { updated_at: timestamp });
+    return existing;
+  }
+
+  const nextRow = {
+    created_at: timestamp,
+    updated_at: timestamp,
+    ...row
+  };
+  rows.push(nextRow);
+  return nextRow;
+};
+
+const executeApprovalSettingsRpc = (state: TableState, functionName: string, args: Record<string, unknown>) => {
+  const snapshot = cloneState(state);
+
+  try {
+    const userId = String(args.p_user_id ?? "");
+    const approvalRequired = args.p_approval_required === true;
+    const timestamp = new Date().toISOString();
+    let settings: TableRow;
+
+    switch (functionName) {
+      case "upsert_birthday_reminder_settings_with_approval_mode":
+        settings = upsertByUserId(state, "birthday_reminder_settings", {
+          user_id: userId,
+          approval_required: approvalRequired
+        });
+
+        for (const row of getRows(state, "birthday_reminders")) {
+          if (row.user_id !== userId) {
+            continue;
+          }
+
+          if (approvalRequired && row.status === "queued" && String(row.scheduled_send_at ?? "") >= timestamp) {
+            Object.assign(row, { status: "pending_approval", error: null, updated_at: timestamp });
+          } else if (!approvalRequired && row.status === "pending_approval") {
+            Object.assign(row, { status: "queued", error: null, updated_at: timestamp });
+          }
+        }
+        return { data: cloneRow(settings), error: null };
+
+      case "upsert_rebook_nudge_settings_with_approval_mode":
+        settings = upsertByUserId(state, "rebook_nudge_settings", {
+          user_id: userId,
+          approval_required: approvalRequired,
+          ...(
+            args.p_has_default_rebook_interval_days
+              ? { default_rebook_interval_days: args.p_default_rebook_interval_days }
+              : {}
+          ),
+          ...(args.p_has_subject_template ? { subject_template: args.p_subject_template } : {}),
+          ...(args.p_has_custom_message_block ? { custom_message_block: args.p_custom_message_block } : {})
+        });
+
+        for (const row of getRows(state, "rebook_nudges")) {
+          if (row.user_id !== userId) {
+            continue;
+          }
+
+          if (approvalRequired && row.status === "queued" && row.approval_required === false) {
+            Object.assign(row, {
+              status: "pending_approval",
+              approval_required: true,
+              error: null,
+              updated_at: timestamp
+            });
+          } else if (!approvalRequired && row.status === "pending_approval") {
+            Object.assign(row, {
+              status: "queued",
+              approval_required: false,
+              approved_at: timestamp,
+              approved_by: userId,
+              error: null,
+              updated_at: timestamp
+            });
+          }
+        }
+        return { data: cloneRow(settings), error: null };
+
+      case "upsert_thank_you_email_settings_with_approval_mode":
+        settings = upsertByUserId(state, "thank_you_email_settings", {
+          user_id: userId,
+          approval_required: approvalRequired,
+          ...(args.p_has_send_delay_hours ? { send_delay_hours: args.p_send_delay_hours } : {}),
+          ...(args.p_has_subject_template ? { subject_template: args.p_subject_template } : {}),
+          ...(args.p_has_custom_message_block ? { custom_message_block: args.p_custom_message_block } : {})
+        });
+
+        for (const row of getRows(state, "thank_you_emails")) {
+          if (row.user_id !== userId) {
+            continue;
+          }
+
+          if (approvalRequired && row.status === "queued" && row.approval_required === false) {
+            Object.assign(row, {
+              status: "pending_approval",
+              approval_required: true,
+              error: null,
+              updated_at: timestamp
+            });
+          } else if (!approvalRequired && row.status === "pending_approval") {
+            Object.assign(row, {
+              status: "queued",
+              approval_required: false,
+              approved_at: timestamp,
+              approved_by: userId,
+              error: null,
+              updated_at: timestamp
+            });
+          }
+        }
+        return { data: cloneRow(settings), error: null };
+
+      default:
+        return {
+          data: null,
+          error: {
+            message: `Unsupported mock RPC: ${functionName}`,
+            details: null,
+            hint: null,
+            code: "MOCK_RPC_UNSUPPORTED"
+          }
+        };
+    }
+  } catch (error) {
+    restoreState(state, snapshot);
+    return {
+      data: null,
+      error: {
+        message: error instanceof Error ? error.message : "Mock RPC failed",
+        details: null,
+        hint: null,
+        code: "MOCK_RPC_FAILED"
+      }
+    };
+  }
+};
+
 export const installMockSupabase = (initialState: TableState, options: MockSupabaseOptions = {}) => {
   const state = cloneState(initialState);
-  const restore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
+  const fromRestore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
+  const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
+    executeApprovalSettingsRpc(state, functionName, args)
+  );
 
   return {
     state,
-    restore: () => restore.mock.restore()
+    restore: () => {
+      rpcRestore.mock.restore();
+      fromRestore.mock.restore();
+    }
   };
 };

@@ -113,6 +113,10 @@ Authenticated routes:
 - `GET /api/settings/rebook-nudges`
 - `PATCH /api/settings/rebook-nudges`
 - `POST /api/settings/rebook-nudges/preview`
+- `GET /api/settings/birthday-reminders`
+- `PATCH /api/settings/birthday-reminders`
+- `POST /api/birthday-reminders/:id/approve`
+- `POST /api/birthday-reminders/:id/cancel`
 - `GET /api/rebook-nudges`
 - `POST /api/rebook-nudges`
 - `POST /api/rebook-nudges/:id/approve`
@@ -130,7 +134,9 @@ Client contract notes:
 - `GET /api/settings/booking` and `PATCH /api/settings/booking` include the stylist's business booking settings. The booking settings payload accepts optional `instagram`; the backend stores the handle without leading `@`.
 - Email template settings support custom subject lines and one custom plain-text message block for `appointment_scheduled`, `appointment_pending`, `appointment_confirmed`, `appointment_cancelled`, `appointment_rescheduled`, `appointment_reminder`, `rebooking_prompt`, `birthday_reminder`, and `thank_you_email`. The custom block is inserted after the standard intro and before email details; the rest of the email remains system-controlled. Legacy `/api/settings/email-confirmations` routes remain available as aliases.
 - Rebook nudge settings are separate from email templates for approval-required mode and default rebook interval. Approval-required nudges are persisted as `pending_approval` until individually approved or cancelled.
+- Birthday reminder settings are separate from email templates for approval-required mode. Turning review on moves future unsent queued birthday reminders into Needs Attention; turning review off moves pending review birthday reminders into Scheduled Outreach.
 - Thank-you email settings are separate from email templates for approval-required mode, send delay, referral URL/code snapshots, and inline QR generation.
+- For rebook nudges and thank-you emails, turning review on moves unsent automatic queued rows to pending review; turning review off moves pending review rows to queued/scheduled outreach. Sending, sent, cancelled, skipped, and superseded rows are not moved back and forth.
 - `GET /api/clients` supports backend search, pagination, sorting, and supported filters. It returns persisted client fields plus list-safe summary metadata including `next_appointment_at`, `has_future_appointment`, `needs_rebook`, and `last_service`. See `docs/frontend-clients-list-contract.md`.
 - `needs_rebook` on `GET /api/clients` uses the same backend-calculated rebook rule as the `rebook` category in `GET /api/activity`.
 - `POST /api/clients` and `PATCH /api/clients/:id` accept optional nullable client profile fields such as `preferred_name`, `instagram`, `birthday` (`DD/MM`), `preferred_contact_method`, `tags`, `source`, `reminder_consent`, `total_spend`, and `last_visit_at` in addition to the original client fields.

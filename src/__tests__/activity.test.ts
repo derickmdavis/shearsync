@@ -1830,6 +1830,12 @@ describe("Activity handlers", () => {
           key: "thank_you_emails",
           enabled: true
         }
+      ],
+      birthday_reminder_settings: [
+        {
+          user_id: userId,
+          approval_required: false
+        }
       ]
     });
 
@@ -1860,7 +1866,7 @@ describe("Activity handlers", () => {
           automation_health: { score: number; status: string };
           automation_impact_this_week: { booked_count: number; reminders_sent_count: number };
           customers_reached_last_30_days: number;
-          birthdayReminderMode: "automatic" | "manual_review";
+          birthdayReminderMode: "automatic" | "approval_required";
           automation_controls: Array<{ key: string; enabled: boolean; status_label: string }>;
         };
       }).data;
@@ -2415,6 +2421,12 @@ describe("Activity handlers", () => {
         { user_id: userId, key: "email_confirmations", enabled: true },
         { user_id: userId, key: "waitlist_match", enabled: true },
         { user_id: userId, key: "no_show_follow_up", enabled: true }
+      ],
+      birthday_reminder_settings: [
+        {
+          user_id: userId,
+          approval_required: false
+        }
       ]
     }, { queryLog });
 
@@ -2487,6 +2499,104 @@ describe("Activity handlers", () => {
         secondClientId,
         thirdClientId
       ].sort());
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("routes approval-required birthday reminders to needs attention without scheduled outreach", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-06-06T16:00:00.000Z") });
+    const pendingBirthdayReminderId = "birthday-needs-review";
+    const queuedBirthdayReminderId = "birthday-stale-queued";
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      clients: [
+        { id: clientId, user_id: userId, first_name: "Sarah", last_name: "Miller", email: "sarah@example.com" }
+      ],
+      reminders: [],
+      appointment_email_events: [],
+      rebook_nudges: [],
+      birthday_reminders: [
+        {
+          id: pendingBirthdayReminderId,
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "10/06",
+          scheduled_send_at: "2026-06-06T18:00:00.000Z",
+          status: "pending_approval",
+          template_data: { client_name: "Sarah Miller" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        },
+        {
+          id: queuedBirthdayReminderId,
+          user_id: userId,
+          client_id: clientId,
+          recipient_email: "sarah@example.com",
+          birthday: "11/06",
+          scheduled_send_at: "2026-06-06T18:30:00.000Z",
+          status: "queued",
+          template_data: { client_name: "Sarah Miller" },
+          created_at: "2026-06-06T12:00:00.000Z",
+          updated_at: "2026-06-06T12:00:00.000Z"
+        }
+      ],
+      thank_you_emails: [],
+      waitlist_entries: [],
+      activity_events: [],
+      automation_settings: [
+        { user_id: userId, key: "appointment_reminders", enabled: false },
+        { user_id: userId, key: "rebook_nudges", enabled: false },
+        { user_id: userId, key: "birthday_reminders", enabled: true },
+        { user_id: userId, key: "thank_you_emails", enabled: false }
+      ],
+      birthday_reminder_settings: [
+        {
+          user_id: userId,
+          approval_required: true
+        }
+      ]
+    });
+
+    try {
+      const dashboardResponse = await runWithErrorHandler(
+        (request, res) => activityController.dashboard(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      assert.equal(dashboardResponse.statusCode, 200);
+
+      const payload = (dashboardResponse.body as {
+        data: {
+          needs_attention: { birthday_reminder_count: number };
+          birthday_reminder_count: number;
+          queued_birthday_reminder_count: number;
+          birthdayReminderMode: "automatic" | "approval_required";
+          birthday_reminder_queue: Array<{ reminder_id: string }>;
+          reminder_queue: Array<{ reminder_id: string; reminder_type: string }>;
+          automation_controls: Array<{
+            key: string;
+            pending_approval_count?: number;
+            queued_count?: number;
+            status_label: string;
+          }>;
+        };
+      }).data;
+
+      activityDashboardResponseSchema.parse(payload);
+      assert.equal(payload.birthdayReminderMode, "approval_required");
+      assert.equal(payload.needs_attention.birthday_reminder_count, 1);
+      assert.equal(payload.birthday_reminder_count, 1);
+      assert.equal(payload.queued_birthday_reminder_count, 0);
+      assert.deepEqual(payload.birthday_reminder_queue, []);
+      assert.equal(payload.reminder_queue.some((item) => item.reminder_type === "birthday_reminder"), false);
+      const birthdayControl = payload.automation_controls.find((control) => control.key === "birthday_reminders");
+      assert.equal(birthdayControl?.pending_approval_count, 1);
+      assert.equal(birthdayControl?.queued_count, 0);
+      assert.equal(birthdayControl?.status_label, "1 need approval");
     } finally {
       supabase.restore();
       mock.timers.reset();

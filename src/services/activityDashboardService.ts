@@ -6,6 +6,7 @@ import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { activityEventsService } from "./activityEventsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
+import { birthdayReminderSettingsService } from "./birthdayReminderSettingsService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
@@ -1020,13 +1021,16 @@ export const activityDashboardService = {
 
   async getDashboard(userId: string): Promise<Row> {
     const timeZone = await businessTimeZoneService.getForUser(userId);
-    const [entitlements, settings] = await Promise.all([
+    const [entitlements, settings, birthdayReminderSettings] = await Promise.all([
       entitlementsService.getEntitlementsForUser(userId),
-      loadAutomationSettings(userId)
+      loadAutomationSettings(userId),
+      birthdayReminderSettingsService.getRawForUser(userId)
     ]);
     const appointmentRemindersEnabled = getEffectiveEnabled(settings, entitlements, "appointment_reminders");
     const rebookNudgesEnabled = getEffectiveEnabled(settings, entitlements, "rebook_nudges");
     const birthdayRemindersEnabled = getEffectiveEnabled(settings, entitlements, "birthday_reminders");
+    const birthdayReminderApprovalRequired = birthdayReminderSettings?.approval_required !== false;
+    const birthdayReminderAutoSendEnabled = birthdayRemindersEnabled && !birthdayReminderApprovalRequired;
     const thankYouEmailsEnabled = getEffectiveEnabled(settings, entitlements, "thank_you_emails");
     const [
       recentActivity,
@@ -1041,6 +1045,7 @@ export const activityDashboardService = {
       feedCounts,
       rebookNudgeCounts,
       outstandingRebookNudges,
+      birthdayReminderCounts,
       birthdayReminderQueue,
       thankYouEmailCounts,
       customersReachedLast30Days
@@ -1050,7 +1055,7 @@ export const activityDashboardService = {
       loadReminderQueue(userId, appointmentRemindersEnabled),
       loadAppointmentEmailReminderQueue(userId, appointmentRemindersEnabled),
       loadRebookNudgeQueue(userId, rebookNudgesEnabled),
-      loadBirthdayReminderAutomationQueue(userId, birthdayRemindersEnabled),
+      loadBirthdayReminderAutomationQueue(userId, birthdayReminderAutoSendEnabled),
       loadThankYouEmailQueue(userId, thankYouEmailsEnabled),
       loadReviewRequestQueue(userId),
       Promise.resolve(
@@ -1061,7 +1066,8 @@ export const activityDashboardService = {
       activityEventsService.getCategoryCounts(userId, {}, timeZone),
       rebookNudgesService.getCountsForUser(userId),
       rebookNudgesEnabled ? rebookNudgesService.getOutstandingForUser(userId, 50) : [],
-      birthdayRemindersEnabled ? birthdayRemindersService.getQueuedForUser(userId, 50) : [],
+      birthdayRemindersEnabled ? birthdayRemindersService.getCountsForUser(userId) : Promise.resolve({ pending_approval: 0, queued: 0 }),
+      birthdayReminderAutoSendEnabled ? birthdayRemindersService.getQueuedForUser(userId, 50) : [],
       thankYouEmailsService.getCountsForUser(userId),
       loadCustomersReachedLast30Days(userId)
     ]);
@@ -1106,11 +1112,16 @@ export const activityDashboardService = {
       eligibleBirthdayReminderIds.has(String(item.reminder_id ?? ""))
     );
     const rebookNudgeApprovalNeededCount = rebookNudgeCounts.pending_approval;
+    const birthdayReminderApprovalNeededCount = birthdayReminderApprovalRequired
+      ? birthdayReminderCounts.pending_approval
+      : 0;
     const thankYouEmailApprovalNeededCount = thankYouEmailCounts.pending_approval;
     const rebookNudgeAutoSendQueuedCount = eligibleRebookNudgeQueue.length;
-    const birthdayReminderAutoSendQueuedCount = eligibleBirthdayReminderQueue.length;
+    const birthdayReminderAutoSendQueuedCount = birthdayReminderApprovalRequired
+      ? 0
+      : eligibleBirthdayReminderQueue.length;
     const thankYouEmailAutoSendQueuedCount = eligibleThankYouEmailQueue.length;
-    const birthdayReminderMode = "automatic" as const;
+    const birthdayReminderMode = birthdayReminderApprovalRequired ? "approval_required" : "automatic";
     const noShowTodayCount = 0;
     const automationControls = [
       {
@@ -1167,9 +1178,12 @@ export const activityDashboardService = {
         label: AUTOMATION_LABELS.birthday_reminders,
         enabled: birthdayRemindersEnabled,
         feature_available: isAutomationAvailable(entitlements, "birthday_reminders"),
-        status_label: isAutomationAvailable(entitlements, "birthday_reminders")
-          ? `${birthdayReminderAutoSendQueuedCount} queued`
-          : "Upgrade required",
+        status_label: !isAutomationAvailable(entitlements, "birthday_reminders")
+          ? "Upgrade required"
+          : birthdayReminderApprovalNeededCount > 0
+          ? `${birthdayReminderApprovalNeededCount} need approval`
+          : `${birthdayReminderAutoSendQueuedCount} queued`,
+        pending_approval_count: birthdayReminderApprovalNeededCount,
         queued_count: birthdayReminderAutoSendQueuedCount
       },
       {
@@ -1195,14 +1209,16 @@ export const activityDashboardService = {
         pending_reminder_count: automationQueue.length,
         queued_review_request_count: reviewRequestQueue.length,
         pending_rebook_nudge_count: rebookNudgeApprovalNeededCount,
-        birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
+        birthday_reminder_count: birthdayReminderApprovalNeededCount,
         pending_thank_you_email_count: thankYouEmailApprovalNeededCount
       },
       pending_approval_count: feedCounts.approvals,
       pending_rebook_nudge_count: rebookNudgeApprovalNeededCount,
       queued_rebook_nudge_count: rebookNudgeAutoSendQueuedCount,
       outstanding_rebook_nudges: outstandingRebookNudges,
-      birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
+      birthday_reminder_count: birthdayReminderApprovalRequired
+        ? birthdayReminderApprovalNeededCount
+        : birthdayReminderAutoSendQueuedCount,
       queued_birthday_reminder_count: birthdayReminderAutoSendQueuedCount,
       birthdayReminderMode,
       birthday_reminder_queue: eligibleBirthdayReminderApiQueue,

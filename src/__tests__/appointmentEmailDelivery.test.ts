@@ -499,6 +499,12 @@ describe("appointment email delivery", () => {
           enabled: true
         }
       ],
+      birthday_reminder_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false
+        }
+      ],
       birthday_reminders: [],
       appointment_email_events: []
     });
@@ -2114,6 +2120,82 @@ describe("appointment email delivery", () => {
     }
   });
 
+  it("counts only automatic queued rebook nudges in the queued total", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        {
+          id: TEST_USER_ID,
+          email: "maya@example.com",
+          plan_tier: "pro",
+          plan_status: "active"
+        }
+      ],
+      rebook_nudges: [
+        {
+          id: "automatic-queued",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "automatic-failed",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          status: "failed",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "manual-review-queued",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          status: "queued",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "manual-review-pending",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          status: "pending_approval",
+          approval_required: true,
+          send_after: "2026-06-07T12:00:00.000Z",
+          rebook_interval_days: 90
+        },
+        {
+          id: "sending-nudge",
+          user_id: TEST_USER_ID,
+          client_id: TEST_CLIENT_ID,
+          recipient_email: "jane@example.com",
+          status: "sending",
+          approval_required: false,
+          send_after: "2026-06-07T12:00:00.000Z",
+          rebook_interval_days: 90
+        }
+      ]
+    });
+
+    try {
+      const counts = await rebookNudgesService.getCountsForUser(TEST_USER_ID);
+
+      assert.deepEqual(counts, {
+        pending_approval: 1,
+        queued: 2
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("skips linked queued rebook email events when a nudge is cancelled", async () => {
     const supabase = installMockSupabase({
       users: [
@@ -2347,6 +2429,12 @@ describe("appointment email delivery", () => {
           user_id: TEST_USER_ID,
           key: "birthday_reminders",
           enabled: true
+        }
+      ],
+      birthday_reminder_settings: [
+        {
+          user_id: TEST_USER_ID,
+          approval_required: false
         }
       ],
       birthday_reminders: [],

@@ -198,5 +198,5 @@ export const appointmentActivityResponseSchema = z.object({
 
 export const activityDashboardResponseSchema = z.object({
   customers_reached_last_30_days: z.number().int().nonnegative(),
-  birthdayReminderMode: z.enum(["automatic", "manual_review"])
+  birthdayReminderMode: z.enum(["automatic", "approval_required"])
 }).passthrough();

@@ -190,6 +190,25 @@ export const rebookNudgeSettingsService = {
       updates.custom_message_block = normalized.customMessageBlock;
     }
 
+    if ("approvalRequired" in normalized) {
+      const { data, error } = await supabaseAdmin.rpc(
+        "upsert_rebook_nudge_settings_with_approval_mode",
+        {
+          p_user_id: userId,
+          p_approval_required: normalized.approvalRequired,
+          p_has_default_rebook_interval_days: "defaultRebookIntervalDays" in normalized,
+          p_default_rebook_interval_days: normalized.defaultRebookIntervalDays ?? null,
+          p_has_subject_template: "subjectTemplate" in normalized,
+          p_subject_template: normalized.subjectTemplate ?? null,
+          p_has_custom_message_block: "customMessageBlock" in normalized,
+          p_custom_message_block: normalized.customMessageBlock ?? null
+        }
+      );
+
+      handleSupabaseError(error, "Unable to update rebook nudge settings");
+      return toApiSettings(requireFound(data as Row | null, "Rebook nudge settings were not saved"));
+    }
+
     const existing = await this.getRawForUser(userId);
 
     if (existing) {

@@ -7,11 +7,19 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { appointmentEmailTemplatesService } from "./appointmentEmailTemplatesService";
+import { birthdayReminderSettingsService } from "./birthdayReminderSettingsService";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { usersService } from "./usersService";
 import { entitlementsService } from "./entitlementsService";
 
-type BirthdayReminderStatus = "queued" | "sending" | "sent" | "cancelled" | "skipped" | "failed";
+type BirthdayReminderStatus =
+  | "pending_approval"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "cancelled"
+  | "skipped"
+  | "failed";
 
 interface ListBirthdayReminderFilters {
   limit: number;
@@ -29,7 +37,7 @@ interface CursorPayload {
 
 const defaultWindowDays = 30;
 const upcomingFlagWindowDays = 7;
-const activeStatuses: BirthdayReminderStatus[] = ["queued", "sending", "failed"];
+const activeStatuses: BirthdayReminderStatus[] = ["pending_approval", "queued", "sending", "failed"];
 const skippableEmailStatuses = ["queued", "failed", "sending"];
 
 const getString = (row: Row | null | undefined, key: string): string | null =>
@@ -284,6 +292,8 @@ export const birthdayRemindersService = {
       return { queued: 0, skipped: 0 };
     }
 
+    const settings = await birthdayReminderSettingsService.getRawForUser(userId);
+    const approvalRequired = settings?.approval_required !== false;
     const timeZone = await businessTimeZoneService.getForUser(userId);
     const today = getCurrentLocalDate(timeZone, now);
     const windowEndDate = addDays(today, windowDays);
@@ -368,7 +378,7 @@ export const birthdayRemindersService = {
           birthday: candidate.birthday,
           birthday_occurrence_date: candidate.occurrenceDate,
           scheduled_send_at: scheduledSendAt,
-          status: "queued",
+          status: approvalRequired ? "pending_approval" : "queued",
           subject_snapshot: getString(emailTemplate, "subject_template"),
           custom_message_block_snapshot: getString(emailTemplate, "custom_message_block"),
           template_data: templateData
@@ -460,23 +470,53 @@ export const birthdayRemindersService = {
     return ((data ?? []) as Row[]).map(toApiReminder);
   },
 
-  async getCountsForUser(userId: string): Promise<{ queued: number }> {
+  async getCountsForUser(userId: string): Promise<{ pending_approval: number; queued: number }> {
     if (!(await entitlementsService.isFeatureAllowed(userId, "birthdayReminders"))) {
       return {
+        pending_approval: 0,
         queued: 0
       };
     }
 
-    const { count, data, error } = await supabaseAdmin
-      .from("birthday_reminders")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .in("status", activeStatuses);
+    const [pendingResult, queuedResult] = await Promise.all([
+      supabaseAdmin
+        .from("birthday_reminders")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("status", "pending_approval"),
+      supabaseAdmin
+        .from("birthday_reminders")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("status", "queued")
+        .gte("scheduled_send_at", new Date().toISOString())
+    ]);
 
-    handleSupabaseError(error, "Unable to load birthday reminder count");
+    handleSupabaseError(pendingResult.error, "Unable to load pending birthday reminder count");
+    handleSupabaseError(queuedResult.error, "Unable to load queued birthday reminder count");
     return {
-      queued: Array.isArray(data) ? data.length : count ?? 0
+      pending_approval: pendingResult.count ?? 0,
+      queued: queuedResult.count ?? 0
     };
+  },
+
+  async approveForUser(userId: string, reminderId: string): Promise<Row> {
+    await entitlementsService.assertFeatureAllowed(userId, "birthdayReminders");
+
+    const { data, error } = await supabaseAdmin
+      .from("birthday_reminders")
+      .update({
+        status: "queued",
+        error: null
+      })
+      .eq("user_id", userId)
+      .eq("id", reminderId)
+      .eq("status", "pending_approval")
+      .select("*")
+      .maybeSingle();
+
+    handleSupabaseError(error, "Unable to approve birthday reminder");
+    return toApiReminder(requireFound(data, "Pending birthday reminder not found"));
   },
 
   async cancelForUser(userId: string, reminderId: string, reason?: string | null): Promise<Row> {

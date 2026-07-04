@@ -44,6 +44,10 @@ export const previewRebookNudgeSettingsSchema = updateRebookNudgeSettingsSchema.
   customMessageBlock: true
 });
 
+export const updateBirthdayReminderSettingsSchema = z.object({
+  approvalRequired: z.boolean().optional()
+});
+
 export const updateThankYouEmailSettingsSchema = z.object({
   approvalRequired: z.boolean().optional(),
   sendDelayHours: z.number().int().min(0).max(720).optional(),

@@ -5,6 +5,7 @@ import { bookingRulesService } from "../services/bookingRulesService";
 import { renderAppointmentEmail } from "../services/appointmentEmailDeliveryService";
 import { appointmentEmailTemplatesService } from "../services/appointmentEmailTemplatesService";
 import { rebookNudgeSettingsService } from "../services/rebookNudgeSettingsService";
+import { birthdayReminderSettingsService } from "../services/birthdayReminderSettingsService";
 import { thankYouEmailSettingsService } from "../services/thankYouEmailSettingsService";
 import { entitlementsService } from "../services/entitlementsService";
 import { stylistsService } from "../services/stylistsService";
@@ -150,6 +151,18 @@ export const settingsController = {
         html: message.html
       }
     });
+  },
+
+  async getBirthdayReminderSettings(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const settings = await birthdayReminderSettingsService.getForUser(userId);
+    res.json({ data: settings });
+  },
+
+  async updateBirthdayReminderSettings(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const settings = await birthdayReminderSettingsService.upsertForUser(userId, req.body);
+    res.json({ data: settings });
   },
 
   async getThankYouEmailSettings(req: Request, res: Response) {

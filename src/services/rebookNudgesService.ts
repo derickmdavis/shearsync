@@ -489,6 +489,7 @@ export const rebookNudgesService = {
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .in("status", ["queued", "failed"])
+        .eq("approval_required", false)
     ]);
 
     handleSupabaseError(pendingResult.error, "Unable to load pending rebook nudge count");

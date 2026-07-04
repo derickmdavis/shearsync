@@ -5,6 +5,7 @@ import { validate } from "../middleware/validate";
 import {
   appointmentEmailTemplateParamSchema,
   previewAppointmentEmailTemplateSchema,
+  updateBirthdayReminderSettingsSchema,
   previewRebookNudgeSettingsSchema,
   previewThankYouEmailSettingsSchema,
   replaceAvailabilitySchema,
@@ -66,6 +67,12 @@ settingsRouter.post(
   "/rebook-nudges/preview",
   validate({ body: previewRebookNudgeSettingsSchema }),
   asyncHandler(settingsController.previewRebookNudgeSettings)
+);
+settingsRouter.get("/birthday-reminders", asyncHandler(settingsController.getBirthdayReminderSettings));
+settingsRouter.patch(
+  "/birthday-reminders",
+  validate({ body: updateBirthdayReminderSettingsSchema }),
+  asyncHandler(settingsController.updateBirthdayReminderSettings)
 );
 settingsRouter.get("/thank-you-emails", asyncHandler(settingsController.getThankYouEmailSettings));
 settingsRouter.patch(

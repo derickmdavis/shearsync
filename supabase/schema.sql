@@ -411,7 +411,7 @@ create table if not exists public.birthday_reminders (
   constraint birthday_reminders_message_length_check
     check (custom_message_block_snapshot is null or char_length(custom_message_block_snapshot) <= 4000),
   constraint birthday_reminders_status_check
-    check (status in ('queued', 'sending', 'sent', 'cancelled', 'skipped', 'failed'))
+    check (status in ('pending_approval', 'queued', 'sending', 'sent', 'cancelled', 'skipped', 'failed'))
 );
 
 alter table public.appointment_email_events
@@ -419,6 +419,13 @@ alter table public.appointment_email_events
   foreign key (birthday_reminder_id)
   references public.birthday_reminders(id)
   on delete set null;
+
+create table if not exists public.birthday_reminder_settings (
+  user_id uuid primary key references public.users(id) on delete cascade,
+  approval_required boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.rebook_nudge_settings (
   user_id uuid primary key references public.users(id) on delete cascade,
@@ -976,7 +983,9 @@ create index if not exists birthday_reminders_email_event_id_idx
   on public.birthday_reminders(email_event_id);
 create unique index if not exists birthday_reminders_active_client_year_idx
   on public.birthday_reminders(user_id, client_id, birthday_occurrence_date)
-  where status in ('queued', 'sending', 'failed');
+  where status in ('pending_approval', 'queued', 'sending', 'failed');
+create index if not exists birthday_reminder_settings_user_id_idx
+  on public.birthday_reminder_settings(user_id);
 create index if not exists plan_usage_events_user_month_idx
   on public.plan_usage_events(user_id, created_at);
 create unique index if not exists account_deletion_requests_user_active_idx
@@ -1051,6 +1060,7 @@ alter table public.activity_events enable row level security;
 alter table public.appointment_email_events enable row level security;
 alter table public.appointment_email_templates enable row level security;
 alter table public.birthday_reminders enable row level security;
+alter table public.birthday_reminder_settings enable row level security;
 alter table public.plan_usage_events enable row level security;
 alter table public.account_deletion_requests enable row level security;
 alter table public.account_deletion_audit_events enable row level security;
@@ -1070,6 +1080,50 @@ alter table public.availability enable row level security;
 alter table public.stylist_off_days enable row level security;
 alter table public.waitlist_entries enable row level security;
 alter table public.appointment_action_links enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'birthday_reminder_settings'
+      and policyname = 'birthday_reminder_settings_select_own'
+  ) then
+    create policy birthday_reminder_settings_select_own
+      on public.birthday_reminder_settings
+      for select
+      using (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'birthday_reminder_settings'
+      and policyname = 'birthday_reminder_settings_insert_own'
+  ) then
+    create policy birthday_reminder_settings_insert_own
+      on public.birthday_reminder_settings
+      for insert
+      with check (auth.uid() = user_id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'birthday_reminder_settings'
+      and policyname = 'birthday_reminder_settings_update_own'
+  ) then
+    create policy birthday_reminder_settings_update_own
+      on public.birthday_reminder_settings
+      for update
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end
+$$;
 
 do $$
 begin
@@ -1143,6 +1197,231 @@ create trigger set_client_rebooking_preferences_updated_at
   before update on public.client_rebooking_preferences
   for each row
   execute function public.set_client_rebooking_preferences_updated_at();
+
+create or replace function public.set_birthday_reminder_settings_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_birthday_reminder_settings_updated_at on public.birthday_reminder_settings;
+create trigger set_birthday_reminder_settings_updated_at
+  before update on public.birthday_reminder_settings
+  for each row
+  execute function public.set_birthday_reminder_settings_updated_at();
+
+create or replace function public.upsert_birthday_reminder_settings_with_approval_mode(
+  p_user_id uuid,
+  p_approval_required boolean
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  v_settings jsonb;
+begin
+  with upserted as (
+    insert into public.birthday_reminder_settings (
+      user_id,
+      approval_required
+    )
+    values (
+      p_user_id,
+      p_approval_required
+    )
+    on conflict (user_id)
+    do update set
+      approval_required = excluded.approval_required,
+      updated_at = now()
+    returning *
+  )
+  select to_jsonb(upserted) into v_settings
+  from upserted;
+
+  if p_approval_required then
+    update public.birthday_reminders
+    set
+      status = 'pending_approval',
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'queued'
+      and scheduled_send_at >= now();
+  else
+    update public.birthday_reminders
+    set
+      status = 'queued',
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'pending_approval';
+  end if;
+
+  return v_settings;
+end;
+$$;
+
+create or replace function public.upsert_rebook_nudge_settings_with_approval_mode(
+  p_user_id uuid,
+  p_approval_required boolean,
+  p_has_default_rebook_interval_days boolean default false,
+  p_default_rebook_interval_days integer default null,
+  p_has_subject_template boolean default false,
+  p_subject_template text default null,
+  p_has_custom_message_block boolean default false,
+  p_custom_message_block text default null
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  v_settings jsonb;
+begin
+  with upserted as (
+    insert into public.rebook_nudge_settings (
+      user_id,
+      approval_required,
+      default_rebook_interval_days,
+      subject_template,
+      custom_message_block
+    )
+    values (
+      p_user_id,
+      p_approval_required,
+      case when p_has_default_rebook_interval_days then p_default_rebook_interval_days else 90 end,
+      case when p_has_subject_template then p_subject_template else null end,
+      case when p_has_custom_message_block then p_custom_message_block else null end
+    )
+    on conflict (user_id)
+    do update set
+      approval_required = excluded.approval_required,
+      default_rebook_interval_days = case
+        when p_has_default_rebook_interval_days then p_default_rebook_interval_days
+        else public.rebook_nudge_settings.default_rebook_interval_days
+      end,
+      subject_template = case
+        when p_has_subject_template then p_subject_template
+        else public.rebook_nudge_settings.subject_template
+      end,
+      custom_message_block = case
+        when p_has_custom_message_block then p_custom_message_block
+        else public.rebook_nudge_settings.custom_message_block
+      end,
+      updated_at = now()
+    returning *
+  )
+  select to_jsonb(upserted) into v_settings
+  from upserted;
+
+  if p_approval_required then
+    update public.rebook_nudges
+    set
+      status = 'pending_approval',
+      approval_required = true,
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'queued'
+      and approval_required = false;
+  else
+    update public.rebook_nudges
+    set
+      status = 'queued',
+      approval_required = false,
+      approved_at = now(),
+      approved_by = p_user_id,
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'pending_approval';
+  end if;
+
+  return v_settings;
+end;
+$$;
+
+create or replace function public.upsert_thank_you_email_settings_with_approval_mode(
+  p_user_id uuid,
+  p_approval_required boolean,
+  p_has_send_delay_hours boolean default false,
+  p_send_delay_hours integer default null,
+  p_has_subject_template boolean default false,
+  p_subject_template text default null,
+  p_has_custom_message_block boolean default false,
+  p_custom_message_block text default null
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  v_settings jsonb;
+begin
+  with upserted as (
+    insert into public.thank_you_email_settings (
+      user_id,
+      approval_required,
+      send_delay_hours,
+      subject_template,
+      custom_message_block
+    )
+    values (
+      p_user_id,
+      p_approval_required,
+      case when p_has_send_delay_hours then p_send_delay_hours else 0 end,
+      case when p_has_subject_template then p_subject_template else null end,
+      case when p_has_custom_message_block then p_custom_message_block else null end
+    )
+    on conflict (user_id)
+    do update set
+      approval_required = excluded.approval_required,
+      send_delay_hours = case
+        when p_has_send_delay_hours then p_send_delay_hours
+        else public.thank_you_email_settings.send_delay_hours
+      end,
+      subject_template = case
+        when p_has_subject_template then p_subject_template
+        else public.thank_you_email_settings.subject_template
+      end,
+      custom_message_block = case
+        when p_has_custom_message_block then p_custom_message_block
+        else public.thank_you_email_settings.custom_message_block
+      end,
+      updated_at = now()
+    returning *
+  )
+  select to_jsonb(upserted) into v_settings
+  from upserted;
+
+  if p_approval_required then
+    update public.thank_you_emails
+    set
+      status = 'pending_approval',
+      approval_required = true,
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'queued'
+      and approval_required = false;
+  else
+    update public.thank_you_emails
+    set
+      status = 'queued',
+      approval_required = false,
+      approved_at = now(),
+      approved_by = p_user_id,
+      error = null,
+      updated_at = now()
+    where user_id = p_user_id
+      and status = 'pending_approval';
+  end if;
+
+  return v_settings;
+end;
+$$;
 
 create or replace function public.set_appointment_images_updated_at()
 returns trigger

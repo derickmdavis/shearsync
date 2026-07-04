@@ -133,7 +133,7 @@ dashboard.scheduled_reminder_count
 dashboard.reminder_queue.length
 ```
 
-### Birthday reminders queued
+### Birthday reminders
 
 Value fallback chain:
 
@@ -145,24 +145,50 @@ dashboard.birthdayReminderMode
 dashboard.birthday_reminder_queue.length
 ```
 
-Backend calculation for `birthday_reminder_count` and `queued_birthday_reminder_count`:
+Mode:
 
-- If birthday reminders are not effectively enabled, the count is `0`.
-- Otherwise loads `birthday_reminders` where:
+```ts
+dashboard.birthdayReminderMode // "automatic" | "approval_required"
+```
+
+Use `dashboard.birthdayReminderMode`, not count placement heuristics, when deciding whether birthday reminders belong in Scheduled Outreach or Needs Attention.
+
+Backend calculation when `birthdayReminderMode = "automatic"`:
+
+- `dashboard.needs_attention.birthday_reminder_count = 0`.
+- Loads future `birthday_reminders` where:
   - `user_id = current user`
   - `status = "queued"`
   - `scheduled_send_at >= now`
 - Converts rows into eligible email queue candidates.
 - Removes rows that cannot be sent because of missing email/entitlement/channel/preference checks.
-- Count is the eligible queued birthday reminder count.
+- `dashboard.queued_birthday_reminder_count` is the eligible queued birthday reminder count.
+- `dashboard.birthday_reminder_count` mirrors the queued count for backward compatibility.
+- `dashboard.birthday_reminder_queue` contains the eligible queued birthday reminder rows.
+
+Backend calculation when `birthdayReminderMode = "approval_required"`:
+
+- `dashboard.needs_attention.birthday_reminder_count` counts rows where:
+  - `user_id = current user`
+  - `status = "pending_approval"`
+- `dashboard.birthday_reminder_count` mirrors the pending review count for backward compatibility.
+- `dashboard.queued_birthday_reminder_count = 0`.
+- `dashboard.birthday_reminder_queue = []`.
+- Pending-review birthday reminders must not be returned in scheduled outreach or `dashboard.reminder_queue`.
 
 Backend calculation for `birthday_reminder_queue.length`:
 
 - If the stylist is not entitled to `birthdayReminders`, the queue is empty.
+- If birthday reminder review is required, the queue is empty.
 - Otherwise loads up to 50 upcoming queued birthday reminders from `birthday_reminders`, ordered by `scheduled_send_at`.
 - Dashboard birthday reminder queue rows use `status = "queued"` only. The dedicated birthday reminder endpoint may expose broader cancelable active statuses.
 
-`dashboard.birthdayReminderMode` is currently `"automatic"`. Use this field, not count placement heuristics, when deciding whether birthday reminders belong in Reminder Queue or Needs Attention.
+Approval setting side effects:
+
+- Turning review on moves future unsent queued birthday reminders into Needs Attention.
+- Turning review off moves pending review birthday reminders into Scheduled Outreach.
+- Rebook nudges and thank-you emails follow the same approval toggle behavior: turning review on moves unsent automatic queued rows to pending review, and turning review off moves pending review rows to queued/scheduled outreach.
+- Sending, sent, cancelled, skipped, and superseded rows are not moved back and forth by approval setting changes.
 
 ### Review requests queued
 
