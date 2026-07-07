@@ -168,11 +168,12 @@ describe("referral endpoints", () => {
       supabase.state.client_referral_links = [];
       const createResponse = await runWithErrorHandler(
         (request, res) => clientsController.createReferralLink(request, res),
-        createMockRequest({ params: { id: CLIENT_ID } })
+        createMockRequest({ params: { id: CLIENT_ID }, body: { source: "manual" } })
       );
 
       assert.equal(createResponse.statusCode, 201);
       assert.match(String((createResponse.body as { data: { referral_code: string } }).data.referral_code), /^rf_[0-9a-f]{12}$/);
+      assert.equal((createResponse.body as { data: { source: string } }).data.source, "manual");
       assert.equal(supabase.state.client_referral_links.length, 1);
     } finally {
       supabase.restore();
@@ -228,6 +229,29 @@ describe("referral endpoints", () => {
       );
       assert.equal(supabase.state.referral_events.length, 1);
       assert.equal(supabase.state.referral_events[0].event_type, "opened");
+      assert.equal(supabase.state.referral_events[0].source, "unknown");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("records a supplied source when resolving a public referral code", async () => {
+    const supabase = installReferralEndpointMockSupabase();
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => publicController.resolveReferral(request, res),
+        createMockRequest({
+          auth: undefined,
+          params: { referralCode: "rf_existing01" },
+          query: { source: "thank_you_email" }
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(supabase.state.referral_events.length, 1);
+      assert.equal(supabase.state.referral_events[0].event_type, "opened");
+      assert.equal(supabase.state.referral_events[0].source, "thank_you_email");
     } finally {
       supabase.restore();
     }

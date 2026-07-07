@@ -10,7 +10,7 @@ import { publicBookingIntakeService } from "../services/publicBookingIntakeServi
 import { publicAppointmentManagementService } from "../services/publicAppointmentManagementService";
 import { publicAppointmentImagesService } from "../services/publicAppointmentImagesService";
 import { publicBookingsService } from "../services/publicBookingsService";
-import { referralLinksService } from "../services/referralLinksService";
+import { referralLinksService, type ReferralSource } from "../services/referralLinksService";
 import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
@@ -70,7 +70,9 @@ export const publicController = {
   },
 
   async resolveReferral(req: Request, res: Response) {
-    const referral = await referralLinksService.resolvePublicCode(getRequiredParam(req, "referralCode"));
+    const referral = await referralLinksService.resolvePublicCode(getRequiredParam(req, "referralCode"), new Date(), {
+      source: typeof req.query.source === "string" ? req.query.source as ReferralSource : undefined
+    });
     res.json({ data: referral });
   },
 

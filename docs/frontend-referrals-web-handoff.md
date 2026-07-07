@@ -2,6 +2,8 @@
 
 This handoff explains the web app changes needed to support client referral links and public booking attribution.
 
+For the complete implementation brief, including Activity referral stats and source tracking, see `docs/frontend-referrals-ui-codex-handoff.md`.
+
 ## Goal
 
 Let stylists create/share a referral link from a client profile, let public visitors enter through that link, and carry the referral code through public booking so the backend can attribute the booking.

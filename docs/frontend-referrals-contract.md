@@ -26,6 +26,7 @@ type ReferralLink = {
   referral_code: string;
   referral_url: string;
   status: "active" | "disabled" | string;
+  source?: "thank_you_email" | "email_campaign" | "direct_share" | "manual" | "client_share" | "unknown" | null;
   created_at: string;
   updated_at: string;
 };
@@ -40,6 +41,16 @@ POST /api/clients/:id/referral-link
 ```
 
 Auth is required. The endpoint is idempotent: if the client already has an active link, the backend returns it instead of creating a duplicate.
+
+Optional request body:
+
+```ts
+type CreateReferralLinkRequest = {
+  source?: "thank_you_email" | "email_campaign" | "direct_share" | "manual" | "client_share" | "unknown";
+};
+```
+
+Use `source: "manual"` when the stylist creates a link from the client profile.
 
 Response:
 
@@ -82,10 +93,12 @@ Counts are lightweight and intended for simple client-detail UI. They are not a 
 ## Public Referral Resolution
 
 ```http
-GET /api/public/referrals/:referralCode
+GET /api/public/referrals/:referralCode?source=direct_share
 ```
 
 Auth is not required.
+
+The optional `source` query param uses the same source values as referral link creation and lets the backend track how the link was opened.
 
 Response:
 

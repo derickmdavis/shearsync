@@ -21,6 +21,7 @@ const { createAppointmentSchema, updateAppointmentSchema } =
 const { updateReminderSchema } =
   require("../validators/reminderValidators") as typeof import("../validators/reminderValidators");
 const {
+  activityReferralStatsQuerySchema,
   listActivityQuerySchema,
   listBirthdayRemindersQuerySchema,
   activityFeedResponseSchema,
@@ -42,6 +43,16 @@ const secondAppointmentId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 const thirdAppointmentId = "99999999-9999-4999-8999-999999999999";
 const foreignAppointmentId = "88888888-8888-4888-8888-888888888888";
 const reminderId = "77777777-7777-4777-8777-777777777777";
+
+const getMonthDate = (day: number, hour = 12): string => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), day, hour, 0, 0)).toISOString();
+};
+
+const getPreviousMonthDate = (day: number, hour = 12): string => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, day, hour, 0, 0)).toISOString();
+};
 
 interface MockResponse {
   statusCode: number;
@@ -120,6 +131,230 @@ describe("Activity handlers", () => {
   it("accepts client_rebook_needed as a valid activity_type filter", () => {
     const query = listActivityQuerySchema.parse({ activity_type: "client_rebook_needed" });
     assert.equal(query.activity_type, "client_rebook_needed");
+  });
+
+  it("accepts this_month as the activity referral stats range", () => {
+    const query = activityReferralStatsQuerySchema.parse({});
+    assert.equal(query.range, "this_month");
+  });
+
+  it("returns this month's referral activity stats from the dedicated endpoint", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      clients: [
+        {
+          id: clientId,
+          user_id: userId,
+          first_name: "Katie",
+          last_name: "Morgan",
+          preferred_name: null,
+          deleted_at: null
+        },
+        {
+          id: secondClientId,
+          user_id: userId,
+          first_name: "Alex",
+          last_name: "Rivera",
+          preferred_name: null,
+          original_referred_by_client_id: clientId,
+          original_referral_attributed_at: getMonthDate(5),
+          deleted_at: null
+        },
+        {
+          id: thirdClientId,
+          user_id: userId,
+          first_name: "Mina",
+          last_name: "Park",
+          preferred_name: null,
+          original_referred_by_client_id: clientId,
+          original_referral_attributed_at: getPreviousMonthDate(20),
+          deleted_at: null
+        }
+      ],
+      client_referral_links: [
+        {
+          id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          user_id: userId,
+          client_id: clientId,
+          referral_code: "rf_thismonth",
+          referral_url: "https://dripdesk.example/r/rf_thismonth",
+          status: "active",
+          created_at: getMonthDate(1)
+        },
+        {
+          id: "aaaaaaaa-2222-4222-8222-aaaaaaaa2222",
+          user_id: userId,
+          client_id: clientId,
+          referral_code: "rf_lastmonth",
+          referral_url: "https://dripdesk.example/r/rf_lastmonth",
+          status: "active",
+          created_at: getPreviousMonthDate(25)
+        },
+        {
+          id: "aaaaaaaa-3333-4333-8333-aaaaaaaa3333",
+          user_id: otherUserId,
+          client_id: foreignClientId,
+          referral_code: "rf_other",
+          referral_url: "https://dripdesk.example/r/rf_other",
+          status: "active",
+          created_at: getMonthDate(2)
+        }
+      ],
+      referral_events: [
+        {
+          id: "bbbbbbbb-1111-4111-8111-bbbbbbbb1111",
+          user_id: userId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referred_by_client_id: clientId,
+          event_type: "opened",
+          created_at: getMonthDate(2)
+        },
+        {
+          id: "bbbbbbbb-2222-4222-8222-bbbbbbbb2222",
+          user_id: userId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referred_by_client_id: clientId,
+          event_type: "opened",
+          created_at: getMonthDate(3)
+        },
+        {
+          id: "bbbbbbbb-3333-4333-8333-bbbbbbbb3333",
+          user_id: userId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referred_by_client_id: clientId,
+          event_type: "opened",
+          created_at: getMonthDate(4)
+        },
+        {
+          id: "bbbbbbbb-4444-4444-8444-bbbbbbbb4444",
+          user_id: userId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referred_by_client_id: clientId,
+          event_type: "opened",
+          created_at: getMonthDate(5)
+        },
+        {
+          id: "bbbbbbbb-5555-4555-8555-bbbbbbbb5555",
+          user_id: userId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referred_by_client_id: clientId,
+          event_type: "booking_attributed",
+          created_at: getMonthDate(5)
+        }
+      ],
+      appointments: [
+        {
+          id: appointmentId,
+          user_id: userId,
+          client_id: secondClientId,
+          referred_by_client_id: clientId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referral_attributed_at: getMonthDate(6),
+          status: "completed",
+          price: 100
+        },
+        {
+          id: secondAppointmentId,
+          user_id: userId,
+          client_id: thirdClientId,
+          referred_by_client_id: clientId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referral_attributed_at: getMonthDate(7),
+          status: "scheduled",
+          price: "75"
+        },
+        {
+          id: thirdAppointmentId,
+          user_id: userId,
+          client_id: thirdClientId,
+          referred_by_client_id: clientId,
+          referral_link_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+          referral_attributed_at: getMonthDate(8),
+          status: "cancelled",
+          price: 50
+        },
+        {
+          id: foreignAppointmentId,
+          user_id: userId,
+          client_id: thirdClientId,
+          referred_by_client_id: clientId,
+          referral_link_id: "aaaaaaaa-2222-4222-8222-aaaaaaaa2222",
+          referral_attributed_at: getPreviousMonthDate(26),
+          status: "completed",
+          price: 300
+        }
+      ]
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => activityController.referralStats(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: activityReferralStatsQuerySchema.parse({ range: "this_month" }) as unknown as Request["query"]
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual((response.body as { data: unknown }).data, {
+        hasReferralData: true,
+        range: "this_month",
+        newClientsFromReferrals: 1,
+        appointmentsBookedFromReferrals: 2,
+        revenueFromReferrals: 100,
+        bookedValueFromReferrals: 175,
+        referralConversionRate: 0.5,
+        linksSent: 1,
+        linksClicked: 4,
+        topReferrer: {
+          clientId,
+          displayName: "Katie Morgan",
+          referralCount: 2
+        }
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns an empty referral activity state when no referral data exists", async () => {
+    const supabase = installMockSupabase({
+      users: [
+        { id: userId, timezone: "UTC", plan_tier: "pro", plan_status: "active" }
+      ],
+      clients: [],
+      client_referral_links: [],
+      referral_events: [],
+      appointments: []
+    });
+
+    try {
+      const response = await runWithErrorHandler(
+        (request, res) => activityController.referralStats(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          query: activityReferralStatsQuerySchema.parse({}) as unknown as Request["query"]
+        })
+      );
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual((response.body as { data: unknown }).data, {
+        hasReferralData: false,
+        range: "this_month",
+        newClientsFromReferrals: 0,
+        appointmentsBookedFromReferrals: 0,
+        revenueFromReferrals: 0,
+        bookedValueFromReferrals: 0,
+        referralConversionRate: 0,
+        linksSent: 0,
+        linksClicked: 0,
+        topReferrer: null
+      });
+    } finally {
+      supabase.restore();
+    }
   });
 
   it("filters activity birthday reminders to pending review rows", async () => {

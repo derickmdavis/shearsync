@@ -3,7 +3,7 @@ import { ApiError } from "../lib/errors";
 import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
-const REQUIRED_SCHEMA_VERSION = "client_avatar_image_contract_2026_06_30";
+const REQUIRED_SCHEMA_VERSION = "referral_foundation_2026_07_07";
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -42,7 +42,117 @@ const REQUIRED_TABLE_COLUMNS = {
     "last_visit_at",
     "deleted_at",
     "deleted_reason",
-    "purge_after"
+    "purge_after",
+    "original_referral_link_id",
+    "original_referred_by_client_id",
+    "original_referral_code",
+    "original_acquisition_source",
+    "original_referral_attributed_at"
+  ],
+  client_referral_links: [
+    "id",
+    "user_id",
+    "client_id",
+    "referral_code",
+    "referral_url",
+    "status",
+    "source",
+    "disabled_at",
+    "created_at",
+    "updated_at"
+  ],
+  appointments: [
+    "id",
+    "user_id",
+    "client_id",
+    "appointment_date",
+    "service_name",
+    "duration_minutes",
+    "price",
+    "notes",
+    "status",
+    "booking_source",
+    "appointment_time_range",
+    "service_id",
+    "referral_link_id",
+    "referred_by_client_id",
+    "referral_code_used",
+    "referral_attributed_at",
+    "acquisition_source",
+    "created_at",
+    "updated_at"
+  ],
+  referral_events: [
+    "id",
+    "referral_link_id",
+    "user_id",
+    "referred_by_client_id",
+    "referred_client_id",
+    "appointment_id",
+    "event_type",
+    "source",
+    "campaign_id",
+    "email_delivery_id",
+    "metadata",
+    "ip_hash",
+    "user_agent",
+    "created_at"
+  ],
+  thank_you_emails: [
+    "id",
+    "user_id",
+    "client_id",
+    "appointment_id",
+    "referral_link_id",
+    "email_event_id",
+    "recipient_email",
+    "status",
+    "approval_required",
+    "send_after",
+    "referral_code_snapshot",
+    "referral_url_snapshot",
+    "qr_code_url_snapshot",
+    "subject_snapshot",
+    "custom_message_block_snapshot",
+    "template_data",
+    "approved_at",
+    "cancelled_at",
+    "cancelled_reason",
+    "sent_at",
+    "error",
+    "created_at",
+    "updated_at"
+  ],
+  thank_you_email_settings: [
+    "user_id",
+    "approval_required",
+    "send_delay_hours",
+    "subject_template",
+    "custom_message_block",
+    "created_at",
+    "updated_at"
+  ],
+  appointment_email_events: [
+    "id",
+    "user_id",
+    "client_id",
+    "appointment_id",
+    "rebook_nudge_id",
+    "birthday_reminder_id",
+    "thank_you_email_id",
+    "email_type",
+    "recipient_email",
+    "status",
+    "idempotency_key",
+    "provider",
+    "provider_message_id",
+    "template_data",
+    "error",
+    "attempt_count",
+    "last_attempt_at",
+    "sent_at",
+    "created_at",
+    "updated_at"
   ],
   payment_methods: [
     "id",

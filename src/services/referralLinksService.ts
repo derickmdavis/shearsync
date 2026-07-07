@@ -3,6 +3,8 @@ import { env } from "../config/env";
 import { ApiError, requireFound } from "../lib/errors";
 import { normalizePhone } from "../lib/phone";
 import { supabaseAdmin } from "../lib/supabase";
+import { getCurrentLocalDate, getStartOfLocalDayUtc } from "../lib/timezone";
+import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
@@ -13,6 +15,14 @@ const REFERRAL_CODE_RANDOM_BYTES = 6;
 const REFERRAL_CODE_MAX_ATTEMPTS = 5;
 const REFERRAL_ATTRIBUTION_WINDOW_DAYS = 30;
 const REFERRAL_BOOKING_SOURCE = "client_referral_link";
+
+export type ReferralSource =
+  | "thank_you_email"
+  | "email_campaign"
+  | "direct_share"
+  | "manual"
+  | "client_share"
+  | "unknown";
 
 type ReferralCodeCollisionError = {
   code?: string;
@@ -58,6 +68,25 @@ export type ClientReferralStats = {
   recentAppointments: RowList;
 };
 
+export type ActivityReferralStatsRange = "this_month";
+
+export type ActivityReferralStats = {
+  hasReferralData: boolean;
+  range: ActivityReferralStatsRange;
+  newClientsFromReferrals: number;
+  appointmentsBookedFromReferrals: number;
+  revenueFromReferrals: number;
+  bookedValueFromReferrals: number;
+  referralConversionRate: number;
+  linksSent: number;
+  linksClicked: number;
+  topReferrer: {
+    clientId: string;
+    displayName: string;
+    referralCount: number;
+  } | null;
+};
+
 const isUniqueViolation = (error: ReferralCodeCollisionError | null): boolean => error?.code === "23505";
 
 const normalizeEmail = (value: unknown): string | null => {
@@ -70,6 +99,67 @@ const normalizeEmail = (value: unknown): string | null => {
 };
 
 const addDays = (date: Date, days: number): Date => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+
+const addMonthsToDateText = (dateText: string, monthsToAdd: number): string => {
+  const [yearText, monthText] = dateText.split("-");
+  const year = Number(yearText);
+  const monthIndex = Number(monthText) - 1 + monthsToAdd;
+  const date = new Date(Date.UTC(year, monthIndex, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
+};
+
+const getThisMonthRange = async (userId: string): Promise<{ startIso: string; endIso: string }> => {
+  const timeZone = await businessTimeZoneService.getForUser(userId);
+  const today = getCurrentLocalDate(timeZone);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const nextMonthStart = addMonthsToDateText(monthStart, 1);
+
+  return {
+    startIso: getStartOfLocalDayUtc(monthStart, timeZone).toISOString(),
+    endIso: getStartOfLocalDayUtc(nextMonthStart, timeZone).toISOString()
+  };
+};
+
+const toNumber = (value: unknown): number => {
+  const numberValue = typeof value === "number" ? value : Number(value ?? 0);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const roundRate = (value: number): number => Math.round(value * 10_000) / 10_000;
+
+const getClientDisplayName = (client: Row | null | undefined): string => {
+  const preferredName = typeof client?.preferred_name === "string" ? client.preferred_name.trim() : "";
+  if (preferredName) {
+    return preferredName;
+  }
+
+  const firstName = typeof client?.first_name === "string" ? client.first_name.trim() : "";
+  const lastName = typeof client?.last_name === "string" ? client.last_name.trim() : "";
+  const fullName = [firstName, lastName].filter(Boolean).join(" ");
+  return fullName || "Client";
+};
+
+const getTopReferrerId = (rows: RowList, referralColumn: string): { clientId: string; referralCount: number } | null => {
+  const counts = new Map<string, number>();
+
+  for (const row of rows) {
+    const clientId = row[referralColumn];
+    if (typeof clientId !== "string" || clientId.length === 0) {
+      continue;
+    }
+
+    counts.set(clientId, (counts.get(clientId) ?? 0) + 1);
+  }
+
+  let topReferrer: { clientId: string; referralCount: number } | null = null;
+  for (const [clientId, referralCount] of counts) {
+    if (!topReferrer || referralCount > topReferrer.referralCount) {
+      topReferrer = { clientId, referralCount };
+    }
+  }
+
+  return topReferrer;
+};
 
 const generateReferralCode = (): string =>
   `${REFERRAL_CODE_PREFIX}${randomBytes(REFERRAL_CODE_RANDOM_BYTES).toString("hex")}`;
@@ -165,7 +255,11 @@ export const referralLinksService = {
     return requireFound(data, "Referral link not found");
   },
 
-  async getOrCreateForClient(userId: string, clientId: string): Promise<Row> {
+  async getOrCreateForClient(
+    userId: string,
+    clientId: string,
+    options: { source?: ReferralSource | null } = {}
+  ): Promise<Row> {
     await clientsService.assertOwned(userId, clientId);
 
     const existing = await this.getActiveLinkForClient(userId, clientId);
@@ -182,7 +276,8 @@ export const referralLinksService = {
           client_id: clientId,
           referral_code: referralCode,
           referral_url: buildReferralUrl(referralCode),
-          status: "active"
+          status: "active",
+          source: options.source ?? "client_share"
         })
         .select("*")
         .single();
@@ -201,7 +296,8 @@ export const referralLinksService = {
         eventSource: "backend",
         dedupeKey: typeof link.id === "string" ? `referral_link_created:${link.id}` : null,
         metadata: {
-          referral_link_id: link.id ?? null
+          referral_link_id: link.id ?? null,
+          source: options.source ?? "client_share"
         }
       });
       return link;
@@ -223,12 +319,18 @@ export const referralLinksService = {
     return (data as Row | null) ?? null;
   },
 
-  async resolvePublicCode(referralCode: string, now = new Date()): Promise<PublicReferralResolution> {
+  async resolvePublicCode(
+    referralCode: string,
+    now = new Date(),
+    options: { source?: ReferralSource | null } = {}
+  ): Promise<PublicReferralResolution> {
     const context = await this.loadReferralContext(referralCode, { requireBookingEnabled: true });
     await this.recordEvent({
       eventType: "opened",
       context,
+      source: options.source ?? "unknown",
       metadata: {
+        source: options.source ?? "unknown",
         expires_at: addDays(now, REFERRAL_ATTRIBUTION_WINDOW_DAYS).toISOString()
       }
     });
@@ -240,7 +342,8 @@ export const referralLinksService = {
       stylistSlug: typeof context.stylist.slug === "string" ? context.stylist.slug : null,
       metadata: {
         referral_link_id: context.link.id ?? null,
-        stylist_slug: context.stylist.slug ?? null
+        stylist_slug: context.stylist.slug ?? null,
+        source: options.source ?? "unknown"
       }
     });
 
@@ -330,6 +433,108 @@ export const referralLinksService = {
     };
   },
 
+  async getActivityReferralStats(
+    userId: string,
+    options: { range?: ActivityReferralStatsRange } = {}
+  ): Promise<ActivityReferralStats> {
+    const range = options.range ?? "this_month";
+    const { startIso, endIso } = await getThisMonthRange(userId);
+
+    const [linksResult, clicksResult, clientsResult, appointmentsResult] = await Promise.all([
+      supabaseAdmin
+        .from("client_referral_links")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .gte("created_at", startIso)
+        .lt("created_at", endIso),
+      supabaseAdmin
+        .from("referral_events")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("event_type", "opened")
+        .gte("created_at", startIso)
+        .lt("created_at", endIso),
+      supabaseAdmin
+        .from("clients")
+        .select("id, original_referred_by_client_id, original_referral_attributed_at")
+        .eq("user_id", userId)
+        .not("original_referral_attributed_at", "is", null)
+        .gte("original_referral_attributed_at", startIso)
+        .lt("original_referral_attributed_at", endIso),
+      supabaseAdmin
+        .from("appointments")
+        .select("id, client_id, referred_by_client_id, referral_link_id, referral_attributed_at, status, price")
+        .eq("user_id", userId)
+        .not("referral_attributed_at", "is", null)
+        .neq("status", "cancelled")
+        .gte("referral_attributed_at", startIso)
+        .lt("referral_attributed_at", endIso)
+    ]);
+
+    handleSupabaseError(linksResult.error, "Unable to load referral links sent");
+    handleSupabaseError(clicksResult.error, "Unable to load referral link clicks");
+    handleSupabaseError(clientsResult.error, "Unable to load referred clients");
+    handleSupabaseError(appointmentsResult.error, "Unable to load referred appointments");
+
+    const referredClients = (clientsResult.data ?? []) as RowList;
+    const referredAppointments = (appointmentsResult.data ?? []) as RowList;
+    const completedAppointments = referredAppointments.filter((appointment) => appointment.status === "completed");
+    const linksSent = linksResult.count ?? 0;
+    const linksClicked = clicksResult.count ?? 0;
+    const appointmentsBookedFromReferrals = referredAppointments.length;
+    const bookedValueFromReferrals = referredAppointments.reduce(
+      (total, appointment) => total + toNumber(appointment.price),
+      0
+    );
+    const revenueFromReferrals = completedAppointments.reduce(
+      (total, appointment) => total + toNumber(appointment.price),
+      0
+    );
+    const fallbackTopReferrer = getTopReferrerId(referredClients, "original_referred_by_client_id");
+    const topReferrerCandidate = getTopReferrerId(referredAppointments, "referred_by_client_id") ?? fallbackTopReferrer;
+    let topReferrer: ActivityReferralStats["topReferrer"] = null;
+
+    if (topReferrerCandidate) {
+      const { data, error } = await supabaseAdmin
+        .from("clients")
+        .select("id, first_name, last_name, preferred_name")
+        .eq("user_id", userId)
+        .eq("id", topReferrerCandidate.clientId)
+        .maybeSingle();
+
+      handleSupabaseError(error, "Unable to load top referral client");
+
+      topReferrer = {
+        clientId: topReferrerCandidate.clientId,
+        displayName: getClientDisplayName((data as Row | null) ?? null),
+        referralCount: topReferrerCandidate.referralCount
+      };
+    }
+
+    return {
+      hasReferralData: Boolean(
+        linksSent
+        || linksClicked
+        || referredClients.length
+        || appointmentsBookedFromReferrals
+        || revenueFromReferrals
+        || bookedValueFromReferrals
+        || topReferrer
+      ),
+      range,
+      newClientsFromReferrals: referredClients.length,
+      appointmentsBookedFromReferrals,
+      revenueFromReferrals,
+      bookedValueFromReferrals,
+      referralConversionRate: linksClicked > 0
+        ? roundRate(appointmentsBookedFromReferrals / linksClicked)
+        : 0,
+      linksSent,
+      linksClicked,
+      topReferrer
+    };
+  },
+
   async recordBookingAttributed(referralCode: string, appointmentId: string, metadata: Row = {}): Promise<void> {
     const context = await this.loadReferralContext(referralCode, { requireBookingEnabled: false });
 
@@ -351,6 +556,37 @@ export const referralLinksService = {
         is_existing_client: metadata.is_existing_client ?? null
       }
     });
+  },
+
+  async recordAppointmentCompleted(appointment: Row): Promise<void> {
+    const referralLinkId = typeof appointment.referral_link_id === "string" ? appointment.referral_link_id : null;
+    const userId = typeof appointment.user_id === "string" ? appointment.user_id : null;
+    const referredByClientId = typeof appointment.referred_by_client_id === "string"
+      ? appointment.referred_by_client_id
+      : null;
+
+    if (!referralLinkId || !userId || !referredByClientId) {
+      return;
+    }
+
+    const { error } = await supabaseAdmin
+      .from("referral_events")
+      .insert({
+        referral_link_id: referralLinkId,
+        user_id: userId,
+        referred_by_client_id: referredByClientId,
+        referred_client_id: typeof appointment.client_id === "string" ? appointment.client_id : null,
+        appointment_id: typeof appointment.id === "string" ? appointment.id : null,
+        event_type: "appointment_completed",
+        source: typeof appointment.acquisition_source === "string" ? appointment.acquisition_source : null,
+        metadata: {
+          status: appointment.status ?? null,
+          price: appointment.price ?? null,
+          referral_code_used: appointment.referral_code_used ?? null
+        }
+      });
+
+    handleSupabaseError(error, "Unable to record referral completion event");
   },
 
   async loadReferralContext(
@@ -403,6 +639,7 @@ export const referralLinksService = {
     eventType: "opened" | "booking_attributed" | "self_referral_blocked" | "expired_attribution";
     context: ReferralContext;
     appointmentId?: string | null;
+    source?: string | null;
     metadata?: Row;
   }): Promise<void> {
     const { error } = await supabaseAdmin
@@ -413,6 +650,7 @@ export const referralLinksService = {
         referred_by_client_id: input.context.referrerClient.id,
         appointment_id: input.appointmentId ?? null,
         event_type: input.eventType,
+        source: input.source ?? null,
         metadata: input.metadata ?? {}
       });
 

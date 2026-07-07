@@ -9,6 +9,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
 import { activityEventsService } from "./activityEventsService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
+import { referralLinksService } from "./referralLinksService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { servicesService } from "./servicesService";
 import { recordProductTelemetry } from "./productTelemetry";
@@ -515,6 +516,10 @@ export const appointmentsService = {
       existingAppointment.status !== updatedAppointment.status &&
       (updatedAppointment.status === "completed" || updatedAppointment.status === "no_show")
     ) {
+      if (updatedAppointment.status === "completed") {
+        await referralLinksService.recordAppointmentCompleted(updatedAppointment);
+      }
+
       await recordProductTelemetry({
         accountUserId: userId,
         actorUserId: userId,

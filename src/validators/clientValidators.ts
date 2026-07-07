@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isValidBirthday } from "../lib/birthday";
-import { optionalEmailSchema } from "./common";
+import { optionalEmailSchema, referralSourceSchema } from "./common";
 
 const preferredContactMethodSchema = z.enum(["text", "call", "email", "instagram"]);
 const clientSourceSchema = z.enum(["referral", "instagram", "walk-in", "existing-client", "other"]);
@@ -44,4 +44,8 @@ export const listClientsQuerySchema = z.object({
   sort: listClientSortSchema.default("updated_at"),
   direction: z.enum(["asc", "desc"]).default("desc"),
   filter: listClientFilterSchema.default("all")
+});
+
+export const createClientReferralLinkSchema = z.object({
+  source: referralSourceSchema.optional()
 });

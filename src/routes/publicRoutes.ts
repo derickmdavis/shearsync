@@ -15,6 +15,7 @@ import { validate } from "../middleware/validate";
 import {
   appointmentActionShortCodeParamSchema,
   publicAppointmentManagementTokenParamSchema,
+  publicReferralQuerySchema,
   referralCodeParamSchema,
   slugParamSchema
 } from "../validators/common";
@@ -38,7 +39,7 @@ export const publicRouter = Router();
 publicRouter.get(
   "/referrals/:referralCode",
   publicReadRateLimiter,
-  validate({ params: referralCodeParamSchema }),
+  validate({ params: referralCodeParamSchema, query: publicReferralQuerySchema }),
   asyncHandler(publicController.resolveReferral)
 );
 publicRouter.get(

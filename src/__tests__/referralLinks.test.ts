@@ -9,6 +9,8 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ??
 process.env.WEB_APP_URL = "https://dripdesk.example";
 
 const { installMockSupabase } = require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
+const { appointmentsService } =
+  require("../services/appointmentsService") as typeof import("../services/appointmentsService");
 const { referralLinksService } =
   require("../services/referralLinksService") as typeof import("../services/referralLinksService");
 
@@ -88,9 +90,13 @@ const baseState = () => ({
       client_id: REFERRED_CLIENT_ID,
       service_name: "Cut",
       appointment_date: "2026-06-21T18:00:00.000Z",
+      duration_minutes: 60,
+      price: 95,
       status: "scheduled",
       referred_by_client_id: REFERRER_CLIENT_ID,
       referral_link_id: REFERRAL_LINK_ID,
+      referral_code_used: "rf_existing01",
+      acquisition_source: "client_referral_link",
       referral_attributed_at: "2026-06-20T18:30:00.000Z"
     },
     {
@@ -99,6 +105,8 @@ const baseState = () => ({
       client_id: REFERRER_CLIENT_ID,
       service_name: "Color",
       appointment_date: "2026-06-22T18:00:00.000Z",
+      duration_minutes: 90,
+      price: 125,
       status: "scheduled",
       referred_by_client_id: REFERRER_CLIENT_ID,
       referral_link_id: REFERRAL_LINK_ID,
@@ -135,7 +143,25 @@ describe("referral links service", () => {
       assert.match(String(link.referral_code), /^rf_[0-9a-f]{12}$/);
       assert.equal(link.referral_url, `https://dripdesk.example/r/${link.referral_code}`);
       assert.equal(link.status, "active");
+      assert.equal(link.source, "client_share");
       assert.equal(supabase.state.client_referral_links.length, 1);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("stores the requested source when creating a referral link", async () => {
+    const state = baseState();
+    state.client_referral_links = [];
+    const supabase = installMockSupabase(state);
+
+    try {
+      const link = await referralLinksService.getOrCreateForClient(USER_ID, REFERRER_CLIENT_ID, {
+        source: "thank_you_email"
+      });
+
+      assert.equal(link.source, "thank_you_email");
+      assert.equal(supabase.state.client_referral_links[0]?.source, "thank_you_email");
     } finally {
       supabase.restore();
     }
@@ -173,6 +199,45 @@ describe("referral links service", () => {
       });
       assert.equal(supabase.state.referral_events.length, 1);
       assert.equal(supabase.state.referral_events[0].event_type, "opened");
+      assert.equal(supabase.state.referral_events[0].source, "unknown");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("records public referral source when supplied by the frontend", async () => {
+    const supabase = installMockSupabase(baseState());
+
+    try {
+      await referralLinksService.resolvePublicCode(
+        "rf_existing01",
+        new Date("2026-06-20T18:30:00.000Z"),
+        { source: "thank_you_email" }
+      );
+
+      assert.equal(supabase.state.referral_events.length, 1);
+      assert.equal(supabase.state.referral_events[0].event_type, "opened");
+      assert.equal(supabase.state.referral_events[0].source, "thank_you_email");
+      assert.equal(
+        (supabase.state.referral_events[0].metadata as Record<string, unknown>).source,
+        "thank_you_email"
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("does not resolve disabled referral links", async () => {
+    const state = baseState();
+    state.client_referral_links[0].status = "disabled";
+    const supabase = installMockSupabase(state);
+
+    try {
+      await assert.rejects(
+        () => referralLinksService.resolvePublicCode("rf_existing01"),
+        /Referral link not found/
+      );
+      assert.equal(supabase.state.referral_events.length, 0);
     } finally {
       supabase.restore();
     }
@@ -252,6 +317,35 @@ describe("referral links service", () => {
       assert.equal(stats.newClientConversions, 1);
       assert.equal(stats.existingClientUses, 1);
       assert.equal(stats.recentAppointments.length, 2);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("records a referral completion event when an attributed appointment is completed", async () => {
+    const supabase = installMockSupabase({
+      ...baseState(),
+      product_events: [],
+      rebook_nudges: [],
+      appointment_email_events: [],
+      activity_events: [],
+      services: []
+    });
+
+    try {
+      const appointment = await appointmentsService.update(
+        USER_ID,
+        "88888888-8888-4888-8888-888888888888",
+        { status: "completed" }
+      );
+
+      assert.equal(appointment.status, "completed");
+      assert.equal(supabase.state.referral_events.length, 1);
+      assert.equal(supabase.state.referral_events[0].event_type, "appointment_completed");
+      assert.equal(supabase.state.referral_events[0].referral_link_id, REFERRAL_LINK_ID);
+      assert.equal(supabase.state.referral_events[0].referred_by_client_id, REFERRER_CLIENT_ID);
+      assert.equal(supabase.state.referral_events[0].referred_client_id, REFERRED_CLIENT_ID);
+      assert.equal(supabase.state.referral_events[0].appointment_id, "88888888-8888-4888-8888-888888888888");
     } finally {
       supabase.restore();
     }

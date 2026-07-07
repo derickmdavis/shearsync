@@ -4,6 +4,7 @@ import { getAuthUserId, getRequiredParam } from "../lib/request";
 import { activityDashboardService } from "../services/activityDashboardService";
 import { activityEventsService } from "../services/activityEventsService";
 import { birthdayRemindersService } from "../services/birthdayRemindersService";
+import { referralLinksService, type ActivityReferralStatsRange } from "../services/referralLinksService";
 
 export const activityController = {
   async dashboard(req: Request, res: Response) {
@@ -30,6 +31,15 @@ export const activityController = {
     const userId = await getAuthUserId(req);
     const response = await activityEventsService.getRecentCancellations(userId, {
       windowHours: Number(req.query.window_hours)
+    });
+
+    res.json({ data: response });
+  },
+
+  async referralStats(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const response = await referralLinksService.getActivityReferralStats(userId, {
+      range: req.query.range as ActivityReferralStatsRange | undefined
     });
 
     res.json({ data: response });

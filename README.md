@@ -92,6 +92,7 @@ Authenticated routes:
 - `GET /api/clients/:id/photos`
 - `POST /api/photos`
 - `GET /api/activity`
+- `GET /api/activity/referrals`
 - `GET /api/activity/cancellations`
 - `GET /api/reminders`
 - `POST /api/reminders`
@@ -248,6 +249,7 @@ Authenticated client referral endpoints:
 - `GET /api/clients/:id/referral-link` returns the active referral link for a stylist-owned client, or `null`.
 - `POST /api/clients/:id/referral-link` creates or returns the active referral link for a stylist-owned client.
 - `GET /api/clients/:id/referral-stats` returns lightweight counts for referral link opens and attributed bookings.
+- `GET /api/activity/referrals?range=this_month` returns account-level referral activity stats for the Activity surface.
 
 Public referral endpoint:
 
@@ -255,7 +257,7 @@ Public referral endpoint:
 
 Final public bookings accept optional `referral_code`. Invalid, wrong-stylist, or self-referral codes do not block booking; they simply do not write attribution. Valid referral bookings write referral fields on the appointment, and new referred clients get original referral source fields.
 
-Frontend handoff details are documented in [docs/frontend-referrals-contract.md](docs/frontend-referrals-contract.md).
+Frontend handoff details are documented in [docs/frontend-referrals-ui-codex-handoff.md](docs/frontend-referrals-ui-codex-handoff.md), [docs/frontend-referrals-contract.md](docs/frontend-referrals-contract.md), and [docs/frontend-activity-referrals-contract.md](docs/frontend-activity-referrals-contract.md).
 
 Authenticated Pro and Premium stylists can enable thank-you emails that include the client's referral link and an inline QR code after completed appointments. The authenticated API surface is:
 

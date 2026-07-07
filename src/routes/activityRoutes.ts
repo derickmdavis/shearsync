@@ -3,6 +3,7 @@ import { activityController } from "../controllers/activityController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import {
+  activityReferralStatsQuerySchema,
   automationSettingParamSchema,
   birthdayReminderParamSchema,
   listBirthdayRemindersQuerySchema,
@@ -14,6 +15,11 @@ import {
 export const activityRouter = Router();
 
 activityRouter.get("/dashboard", asyncHandler(activityController.dashboard));
+activityRouter.get(
+  "/referrals",
+  validate({ query: activityReferralStatsQuerySchema }),
+  asyncHandler(activityController.referralStats)
+);
 activityRouter.get(
   "/cancellations",
   validate({ query: recentCancellationsQuerySchema }),

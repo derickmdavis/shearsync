@@ -21,6 +21,19 @@ export const referralCodeParamSchema = z.object({
   referralCode: z.string().regex(/^rf_[A-Za-z0-9]{8,24}$/)
 });
 
+export const referralSourceSchema = z.enum([
+  "thank_you_email",
+  "email_campaign",
+  "direct_share",
+  "manual",
+  "client_share",
+  "unknown"
+]);
+
+export const publicReferralQuerySchema = z.object({
+  source: referralSourceSchema.optional()
+});
+
 export const isoDateTimeSchema = z.string().datetime({ offset: true });
 
 export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");

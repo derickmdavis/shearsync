@@ -8,6 +8,7 @@ import { validate } from "../middleware/validate";
 import { clientVisualHistoryQuerySchema } from "../validators/appointmentImageValidators";
 import { listClientAppointmentsQuerySchema } from "../validators/appointmentValidators";
 import {
+  createClientReferralLinkSchema,
   createClientSchema,
   listClientsQuerySchema,
   updateClientAvatarSchema,
@@ -27,7 +28,7 @@ clientRouter.get(
 );
 clientRouter.post(
   "/:id/referral-link",
-  validate({ params: uuidParamSchema }),
+  validate({ params: uuidParamSchema, body: createClientReferralLinkSchema }),
   asyncHandler(clientsController.createReferralLink)
 );
 clientRouter.get(

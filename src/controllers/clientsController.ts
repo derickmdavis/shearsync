@@ -3,7 +3,7 @@ import { getAuthUserId, getRequiredParam } from "../lib/request";
 import { clientRebookingPreferencesService } from "../services/clientRebookingPreferencesService";
 import { clientsDetailService } from "../services/clientsDetailService";
 import { clientsService } from "../services/clientsService";
-import { referralLinksService } from "../services/referralLinksService";
+import { referralLinksService, type ReferralSource } from "../services/referralLinksService";
 
 export const clientsController = {
   async list(req: Request, res: Response) {
@@ -72,7 +72,9 @@ export const clientsController = {
 
   async createReferralLink(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
-    const link = await referralLinksService.getOrCreateForClient(userId, getRequiredParam(req, "id"));
+    const link = await referralLinksService.getOrCreateForClient(userId, getRequiredParam(req, "id"), {
+      source: typeof req.body.source === "string" ? req.body.source as ReferralSource : undefined
+    });
     res.status(201).json({ data: link });
   },
 

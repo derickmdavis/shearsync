@@ -54,6 +54,10 @@ export const recentCancellationsQuerySchema = z.object({
   window_hours: z.coerce.number().int().positive().max(168).default(24)
 });
 
+export const activityReferralStatsQuerySchema = z.object({
+  range: z.enum(["this_month"]).default("this_month")
+});
+
 export const listBirthdayRemindersQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(50),
   cursor: z.string().min(1).optional(),
