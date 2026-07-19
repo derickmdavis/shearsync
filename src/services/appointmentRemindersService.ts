@@ -2,6 +2,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
+import { appointmentReminderSuppressionsService } from "./appointmentReminderSuppressionsService";
 
 const reminderOffsetMs = 24 * 60 * 60 * 1000;
 const defaultWindowMinutes = 15;
@@ -117,6 +118,16 @@ const hasReminderEmailEvent = async (appointment: Row): Promise<boolean> => {
 };
 
 const queueAppointmentReminder = async (userId: string, appointment: Row): Promise<"queued" | "skipped"> => {
+  const appointmentId = String(appointment.id ?? "");
+  const appointmentStartAt = String(appointment.appointment_date ?? "");
+  if (
+    !appointmentId
+    || !appointmentStartAt
+    || await appointmentReminderSuppressionsService.isSuppressed(userId, appointmentId, appointmentStartAt)
+  ) {
+    return "skipped";
+  }
+
   if (await hasReminderEmailEvent(appointment)) {
     return "skipped";
   }

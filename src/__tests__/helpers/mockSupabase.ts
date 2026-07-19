@@ -515,6 +515,339 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
     let settings: TableRow;
 
     switch (functionName) {
+      case "create_campaign_draft": {
+        const templateId = typeof args.p_template_id === "string" ? args.p_template_id : null;
+        const template = templateId
+          ? getRows(state, "campaign_templates").find((row) => row.id === templateId && row.active === true)
+          : undefined;
+        if (templateId && !template) throw new Error("campaign_template_not_found");
+        const campaign = {
+          id: randomUUID(),
+          user_id: userId,
+          name: null,
+          status: "draft",
+          campaign_kind: "one_time",
+          send_mode: "now",
+          scheduled_for: null,
+          timezone_snapshot: args.p_timezone,
+          link_type: template?.link_type ?? null,
+          template_id: template?.id ?? null,
+          template_version: template?.version ?? null,
+          subject_snapshot: template?.subject ?? null,
+          message_snapshot: template?.message ?? null,
+          audience_mode: "everyone",
+          revision: 1,
+          created_at: timestamp,
+          updated_at: timestamp
+        };
+        getRows(state, "campaigns").push(campaign);
+        getRows(state, "campaign_runs").push({
+          id: randomUUID(), campaign_id: campaign.id, user_id: userId,
+          sequence_number: 1, status: "draft", scheduled_for: null,
+          created_at: timestamp, updated_at: timestamp
+        });
+        return { data: cloneRow(campaign), error: null };
+      }
+
+      case "update_campaign_draft": {
+        const campaign = getRows(state, "campaigns").find((row) =>
+          row.id === args.p_campaign_id && row.user_id === userId && row.status === "draft"
+        );
+        if (!campaign) throw new Error("campaign_draft_not_found");
+        if (campaign.revision !== args.p_expected_revision) {
+          return {
+            data: null,
+            error: {
+              message: "campaign_revision_conflict",
+              details: JSON.stringify({ current_revision: campaign.revision }),
+              hint: null,
+              code: "P0001"
+            }
+          };
+        }
+        const templateId = args.p_has_template && typeof args.p_template_id === "string" ? args.p_template_id : null;
+        const template = templateId
+          ? getRows(state, "campaign_templates").find((row) => row.id === templateId && row.active === true)
+          : undefined;
+        if (templateId && !template) throw new Error("campaign_template_not_found");
+
+        if (args.p_has_name) campaign.name = typeof args.p_name === "string" && args.p_name.trim() ? args.p_name.trim() : null;
+        if (args.p_has_send_mode) {
+          campaign.send_mode = args.p_send_mode;
+          if (args.p_send_mode === "now") campaign.scheduled_for = null;
+        }
+        if (args.p_has_scheduled_for) campaign.scheduled_for = args.p_scheduled_for;
+        if (args.p_has_timezone) campaign.timezone_snapshot = args.p_timezone;
+        if (args.p_has_template) {
+          campaign.template_id = template?.id ?? null;
+          campaign.template_version = template?.version ?? null;
+          if (template) {
+            campaign.link_type = template.link_type;
+            campaign.subject_snapshot = template.subject;
+            campaign.message_snapshot = template.message;
+          }
+        }
+        if (args.p_has_link_type) campaign.link_type = args.p_link_type;
+        if (args.p_has_subject) campaign.subject_snapshot = args.p_subject;
+        if (args.p_has_message) campaign.message_snapshot = args.p_message;
+        if (args.p_has_audience) {
+          campaign.audience_mode = args.p_audience_mode;
+          state.campaign_audience_selections = getRows(state, "campaign_audience_selections")
+            .filter((row) => row.campaign_id !== campaign.id || row.user_id !== userId);
+          if (args.p_audience_mode === "specific") {
+            for (const clientId of (args.p_client_ids as unknown[] ?? [])) {
+              const owned = getRows(state, "clients").some((row) => row.id === clientId && row.user_id === userId);
+              if (!owned) throw new Error("campaign_audience_client_not_owned");
+              getRows(state, "campaign_audience_selections").push({
+                campaign_id: campaign.id, user_id: userId, client_id: clientId, created_at: timestamp
+              });
+            }
+          }
+        }
+        campaign.revision = Number(campaign.revision) + 1;
+        campaign.updated_at = timestamp;
+        campaign.validated_at = null;
+        campaign.validation_nonce_hash = null;
+        return { data: cloneRow(campaign), error: null };
+      }
+
+      case "submit_campaign": {
+        const idempotencyKey = String(args.p_idempotency_key ?? "");
+        const requestHash = String(args.p_request_hash ?? "");
+        const existing = getRows(state, "campaign_idempotency_records").find((row) =>
+          row.user_id === userId && row.scope === "campaign_submit" && row.idempotency_key === idempotencyKey
+        );
+        if (existing) {
+          if (existing.request_hash !== requestHash) throw new Error("campaign_idempotency_key_reused");
+          return { data: cloneRow(existing.response_body as TableRow), error: null };
+        }
+        const campaign = getRows(state, "campaigns").find((row) => row.id === args.p_campaign_id && row.user_id === userId);
+        if (!campaign || campaign.status !== "draft") throw new Error("campaign_not_draft");
+        if (campaign.revision !== args.p_expected_revision) throw new Error("campaign_revision_conflict");
+        if (campaign.validation_nonce_hash !== args.p_validation_nonce_hash) throw new Error("campaign_validation_invalid");
+        const recipients = Array.isArray(args.p_recipients) ? args.p_recipients as TableRow[] : [];
+        const eligibleCount = recipients.filter((recipient) => recipient.eligibility_status === "eligible").length;
+        if (eligibleCount === 0) throw new Error("campaign_has_no_eligible_recipients");
+        const run = getRows(state, "campaign_runs").find((row) => row.campaign_id === campaign.id && row.sequence_number === 1);
+        if (!run) throw new Error("campaign_initial_run_required");
+        campaign.status = "scheduled";
+        campaign.scheduled_at = timestamp;
+        campaign.validation_nonce_hash = null;
+        campaign.updated_at = timestamp;
+        run.status = "scheduled";
+        run.scheduled_for = campaign.send_mode === "now" ? timestamp : campaign.scheduled_for;
+        run.recipient_total = recipients.length;
+        run.eligible_count = eligibleCount;
+        run.excluded_count = recipients.length - eligibleCount;
+        run.pending_count = 0;
+        run.updated_at = timestamp;
+        for (const recipient of recipients) {
+          getRows(state, "campaign_recipients").push({
+            id: randomUUID(), campaign_id: campaign.id, campaign_run_id: run.id, user_id: userId,
+            ...recipient,
+            status: recipient.eligibility_status === "eligible" ? "queued" : "skipped",
+            created_at: timestamp, updated_at: timestamp
+          });
+        }
+        const response = {
+          campaign_id: campaign.id, run_id: run.id, status: "scheduled", send_mode: campaign.send_mode,
+          scheduled_for: campaign.scheduled_for ?? run.scheduled_for,
+          recipient_total: recipients.length, eligible_count: eligibleCount, excluded_count: recipients.length - eligibleCount
+        };
+        getRows(state, "campaign_idempotency_records").push({
+          id: randomUUID(), user_id: userId, scope: "campaign_submit", idempotency_key: idempotencyKey,
+          request_hash: requestHash, response_body: response, response_status: 200,
+          completed_at: timestamp, created_at: timestamp, updated_at: timestamp
+        });
+        return { data: response, error: null };
+      }
+
+      case "cancel_campaign_submission": {
+        const campaign = getRows(state, "campaigns").find((row) => row.id === args.p_campaign_id && row.user_id === userId);
+        if (!campaign) throw new Error("campaign_not_found");
+        if (campaign.status === "sending") throw new Error("campaign_already_sending");
+        if (campaign.status === "cancelled") return { data: { campaign_id: campaign.id, status: "cancelled", cancelled_recipients: 0 }, error: null };
+        if (campaign.status !== "scheduled") throw new Error("campaign_not_cancellable");
+        campaign.status = "cancelled";
+        campaign.cancelled_at = timestamp;
+        const run = getRows(state, "campaign_runs").find((row) => row.campaign_id === campaign.id && row.sequence_number === 1);
+        if (run) { run.status = "cancelled"; run.cancelled_at = timestamp; }
+        let cancelled = 0;
+        for (const recipient of getRows(state, "campaign_recipients")) {
+          if (recipient.campaign_id === campaign.id && (recipient.status === "queued" || recipient.status === "pending")) {
+            recipient.status = "cancelled";
+            recipient.cancelled_at = timestamp;
+            cancelled += 1;
+          }
+        }
+        return { data: { campaign_id: campaign.id, status: "cancelled", cancelled_recipients: cancelled }, error: null };
+      }
+
+      case "claim_campaign_recipients": {
+        const limit = Math.max(1, Math.min(Number(args.p_limit ?? 25), 100));
+        const staleBefore = String(args.p_stale_before ?? "");
+        const claimed = getRows(state, "campaign_recipients")
+          .filter((recipient) => {
+            const campaign = getRows(state, "campaigns").find((row) => row.id === recipient.campaign_id);
+            const run = getRows(state, "campaign_runs").find((row) => row.id === recipient.campaign_run_id);
+            const due = !run?.scheduled_for || String(run.scheduled_for) <= timestamp;
+            return Boolean(campaign && run && due)
+              && (campaign?.status === "scheduled" || campaign?.status === "sending")
+              && (run?.status === "scheduled" || run?.status === "sending")
+              && (recipient.status === "queued"
+                || (recipient.status === "failed" && Number(recipient.attempt_count ?? 0) < Number(args.p_max_attempts ?? 3))
+                || (recipient.status === "sending" && String(recipient.sending_started_at ?? "") < staleBefore));
+          })
+          .slice(0, limit);
+        for (const recipient of claimed) {
+          recipient.status = "sending";
+          recipient.attempt_count = Number(recipient.attempt_count ?? 0) + 1;
+          recipient.last_attempt_at = timestamp;
+          recipient.sending_started_at = timestamp;
+          recipient.error_code = null;
+          recipient.error_message = null;
+          const campaign = getRows(state, "campaigns").find((row) => row.id === recipient.campaign_id);
+          const run = getRows(state, "campaign_runs").find((row) => row.id === recipient.campaign_run_id);
+          if (campaign?.status === "scheduled") {
+            campaign.status = "sending";
+            campaign.sending_started_at = campaign.sending_started_at ?? timestamp;
+          }
+          if (run?.status === "scheduled") {
+            run.status = "sending";
+            run.started_at = run.started_at ?? timestamp;
+          }
+        }
+        return { data: claimed.map((row) => cloneRow(row)), error: null };
+      }
+
+      case "finalize_campaign_runs": {
+        const runIds = Array.isArray(args.p_run_ids) ? args.p_run_ids.map(String) : [];
+        for (const run of getRows(state, "campaign_runs").filter((row) => runIds.includes(String(row.id)))) {
+          const recipients = getRows(state, "campaign_recipients").filter((row) => row.campaign_run_id === run.id);
+          const pending = recipients.some((row) =>
+            ["pending", "queued", "sending"].includes(String(row.status))
+            || (row.status === "failed" && Number(row.attempt_count ?? 0) < Number(args.p_max_attempts ?? 3))
+          );
+          if (pending) continue;
+          const failed = recipients.filter((row) => row.status === "failed").length;
+          const sent = recipients.filter((row) => row.status === "sent" || row.status === "delivered").length;
+          const status = sent === 0 && failed > 0 ? "failed" : failed > 0 ? "partially_failed" : "completed";
+          Object.assign(run, { status, completed_at: timestamp, pending_count: 0, sending_count: 0, sent_count: sent, failed_count: failed });
+          const campaign = getRows(state, "campaigns").find((row) => row.id === run.campaign_id);
+          if (campaign) Object.assign(campaign, { status, completed_at: timestamp, failure_summary: { sent_count: sent, failed_count: failed } });
+        }
+        return { data: null, error: null };
+      }
+
+      case "get_campaign_reporting_summaries_v2": {
+        const campaignIds = Array.isArray(args.p_campaign_ids) ? args.p_campaign_ids.map(String) : [];
+        const summaries = getRows(state, "campaigns")
+          .filter((campaign) => campaign.user_id === userId && campaignIds.includes(String(campaign.id)))
+          .map((campaign) => {
+            const recipients = getRows(state, "campaign_recipients").filter((row) => row.campaign_id === campaign.id && row.user_id === userId);
+            const count = (predicate: (row: TableRow) => boolean): number => recipients.filter(predicate).length;
+            const appointments = getRows(state, "appointments").filter((row) =>
+              row.campaign_id === campaign.id && row.user_id === userId && row.status !== "cancelled"
+            );
+            const events = getRows(state, "campaign_delivery_events").filter((row) => row.campaign_id === campaign.id && row.user_id === userId);
+            const eventCount = (type: string, predicate: (row: TableRow) => boolean = () => true) => events.filter((row) => row.event_type === type && predicate(row)).length;
+            const uniqueEventCount = (type: string) => new Set(events.filter((row) => row.event_type === type).map((row) => row.campaign_recipient_id)).size;
+            return {
+              campaign_id: campaign.id,
+              recipient_total: recipients.length,
+              eligible_count: count((row) => row.eligibility_status === "eligible"),
+              excluded_count: count((row) => row.eligibility_status === "excluded"),
+              pending_count: count((row) => row.status === "pending"),
+              queued_count: count((row) => row.status === "queued"),
+              sending_count: count((row) => row.status === "sending"),
+              sent_count: count((row) => row.status === "sent"),
+              delivered_count: count((row) => row.status === "delivered"),
+              failed_count: count((row) => row.status === "failed"),
+              skipped_count: count((row) => row.status === "skipped"),
+              cancelled_count: count((row) => row.status === "cancelled"),
+              attributed_booking_count: appointments.length,
+              booked_revenue_cents: appointments.reduce((sum, row) => sum + Math.round(Number(row.price ?? 0) * 100), 0),
+              delivered_raw: eventCount("delivered"), opens_raw: eventCount("opened"), opens_unique: uniqueEventCount("opened"),
+              opens_automated: eventCount("opened", (row) => row.is_automated === true), opens_privacy_limited: eventCount("opened", (row) => row.privacy_limited === true),
+              clicks_raw: eventCount("clicked"), clicks_unique: uniqueEventCount("clicked"),
+              clicks_automated: eventCount("clicked", (row) => row.is_automated === true), clicks_privacy_limited: eventCount("clicked", (row) => row.privacy_limited === true)
+            };
+          });
+        return { data: summaries, error: null };
+      }
+
+      case "cancel_appointment_reminder_occurrence": {
+        const appointmentId = String(args.p_appointment_id ?? "");
+        const appointmentStartAt = String(args.p_appointment_start_at ?? "");
+        const appointment = getRows(state, "appointments").find((row) =>
+          row.user_id === userId
+          && row.id === appointmentId
+          && row.appointment_date === appointmentStartAt
+          && (row.status === "pending" || row.status === "scheduled")
+        );
+        if (!appointment) {
+          throw new Error("appointment_reminder_occurrence_not_found");
+        }
+
+        const event = getRows(state, "appointment_email_events").find((row) => {
+          const templateData = (row.template_data ?? {}) as TableRow;
+          return row.user_id === userId
+            && row.appointment_id === appointmentId
+            && row.email_type === "appointment_reminder"
+            && templateData.appointment_start_time === appointmentStartAt;
+        });
+        if (event?.status === "sending") {
+          throw new Error("appointment_reminder_already_sending");
+        }
+        if (event?.status === "sent") {
+          throw new Error("appointment_reminder_already_sent");
+        }
+
+        const suppressions = getRows(state, "appointment_reminder_suppressions");
+        let suppression = suppressions.find((row) =>
+          row.user_id === userId
+          && row.appointment_id === appointmentId
+          && row.appointment_start_at === appointmentStartAt
+        );
+        const reason = typeof args.p_reason === "string" && args.p_reason.trim()
+          ? args.p_reason.trim()
+          : null;
+        if (!suppression) {
+          suppression = {
+            id: randomUUID(),
+            user_id: userId,
+            appointment_id: appointmentId,
+            appointment_start_at: appointmentStartAt,
+            reason,
+            created_by: userId,
+            created_at: timestamp
+          };
+          suppressions.push(suppression);
+        } else if (reason) {
+          suppression.reason = reason;
+        }
+
+        if (event && (event.status === "queued" || event.status === "failed")) {
+          Object.assign(event, {
+            status: "skipped",
+            error: "Appointment reminder cancelled by stylist",
+            updated_at: timestamp
+          });
+        }
+
+        return {
+          data: {
+            id: suppression.id,
+            appointment_id: appointmentId,
+            appointment_start_at: appointmentStartAt,
+            status: "cancelled",
+            reason: suppression.reason ?? null,
+            created_at: suppression.created_at
+          },
+          error: null
+        };
+      }
+
       case "upsert_birthday_reminder_settings_with_approval_mode":
         settings = upsertByUserId(state, "birthday_reminder_settings", {
           user_id: userId,

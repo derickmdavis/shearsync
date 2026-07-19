@@ -23,6 +23,7 @@ import {
 } from "../lib/publicAppointmentImageUpload";
 import { bookingErrorEventsService } from "./bookingErrorEventsService";
 import { recordProductTelemetry } from "./productTelemetry";
+import { campaignAttributionService } from "./campaignAttributionService";
 
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -364,7 +365,8 @@ export const publicBookingsService = {
         notes: payload.notes,
         status: slotEvaluation.status,
         booking_source: "public",
-        ...toAppointmentReferralFields(referralAttribution)
+        ...toAppointmentReferralFields(referralAttribution),
+        ...campaignAttributionService.toAppointmentFields(bookingContext)
       });
 
       if (referralAttribution) {

@@ -5,6 +5,7 @@ import { requireInternalApiSecret } from "../middleware/internalAuth";
 import { validate } from "../middleware/validate";
 import {
   cleanupAppointmentImagesQuerySchema,
+  processCampaignDeliveriesQuerySchema,
   processAppointmentEmailsQuerySchema,
   processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
@@ -29,6 +30,12 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processAppointmentEmailsQuerySchema }),
   asyncHandler(internalController.processAppointmentEmails)
+);
+internalRouter.post(
+  "/campaign-deliveries/process",
+  requireInternalApiSecret,
+  validate({ query: processCampaignDeliveriesQuerySchema }),
+  asyncHandler(internalController.processCampaignDeliveries)
 );
 internalRouter.post(
   "/rebook-nudges/queue",

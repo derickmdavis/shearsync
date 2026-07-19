@@ -6,6 +6,7 @@ import { recordProductTelemetry } from "./productTelemetry";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
+import { campaignAudienceEligibilityService } from "./campaignAudienceEligibilityService";
 
 const CLIENT_LIST_SELECT =
   "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, is_vip, avatar_image_id, total_spend, last_visit_at, deleted_at, deleted_reason, purge_after, created_at, updated_at";
@@ -19,6 +20,7 @@ type ListClientsOptions = {
   sort?: "updated" | "updated_at" | "name" | "spend" | "total_spend" | "last_visit" | "last_visit_at";
   direction?: "asc" | "desc";
   filter?: "all" | "active" | "vip";
+  campaign_eligibility?: "email_marketing";
 };
 
 type ListClientsResult = {
@@ -154,19 +156,22 @@ const buildClientSearchFilter = (search: string): string => {
   ].join(",");
 };
 
-const normalizeListOptions = (options: ListClientsOptions = {}): Required<ListClientsOptions> => ({
+const normalizeListOptions = (options: ListClientsOptions = {}) => ({
   search: options.search?.trim() ?? "",
   page: options.page ?? 1,
   pageSize: options.pageSize ?? 25,
   sort: options.sort ?? "updated_at",
   direction: options.direction ?? "desc",
-  filter: options.filter ?? "all"
+  filter: options.filter ?? "all",
+  campaign_eligibility: options.campaign_eligibility
 });
+
+type NormalizedListClientsOptions = ReturnType<typeof normalizeListOptions>;
 
 const applyClientListFilters = <T extends {
   or: (filters: string) => T;
   eq: (column: string, value: unknown) => T;
-}>(query: T, options: Required<ListClientsOptions>): T => {
+}>(query: T, options: NormalizedListClientsOptions): T => {
   let nextQuery = query;
 
   if (options.search) {
@@ -182,7 +187,7 @@ const applyClientListFilters = <T extends {
 
 const applyClientListSort = <T extends {
   order: (column: string, options?: { ascending?: boolean }) => T;
-}>(query: T, options: Required<ListClientsOptions>): T => {
+}>(query: T, options: NormalizedListClientsOptions): T => {
   const ascending = options.direction === "asc";
 
   switch (options.sort) {
@@ -290,8 +295,19 @@ export const clientsService = {
     ]);
 
     handleSupabaseError(appointmentsResult.error, "Unable to load client summary metadata");
+    const enriched = enrichClients(clients, appointmentsResult.data ?? [], timeZone, now);
+    const eligibility = normalizedOptions.campaign_eligibility
+      ? await campaignAudienceEligibilityService.evaluateClients(userId, enriched, { applyDuplicateExclusions: false })
+      : [];
+    const eligibilityByClientId = new Map(eligibility.map((result) => [result.client_id, result]));
     return {
-      data: enrichClients(clients, appointmentsResult.data ?? [], timeZone, now),
+      data: enriched.map((client) => {
+        const result = eligibilityByClientId.get(String(client.id));
+        return result ? {
+          ...client,
+          campaign_eligibility: { eligible: result.eligible, reason: result.reason }
+        } : client;
+      }),
       page: normalizedOptions.page,
       pageSize: normalizedOptions.pageSize,
       totalCount,

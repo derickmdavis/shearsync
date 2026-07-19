@@ -33,6 +33,7 @@ import {
   reschedulePublicAppointmentSchema
 } from "../validators/publicBookingValidators";
 import { createPublicWaitlistEntrySchema } from "../validators/waitlistValidators";
+import { campaignTrackingTokenParamSchema } from "../validators/campaignAttributionValidators";
 
 export const publicRouter = Router();
 
@@ -41,6 +42,12 @@ publicRouter.get(
   publicReadRateLimiter,
   validate({ params: referralCodeParamSchema, query: publicReferralQuerySchema }),
   asyncHandler(publicController.resolveReferral)
+);
+publicRouter.get(
+  "/campaign-links/:token",
+  publicReadRateLimiter,
+  validate({ params: campaignTrackingTokenParamSchema }),
+  asyncHandler(publicController.resolveCampaignLink)
 );
 publicRouter.get(
   "/stylists/:slug",

@@ -15,6 +15,8 @@ import { servicesService } from "../services/servicesService";
 import { stylistsService } from "../services/stylistsService";
 import { waitlistService } from "../services/waitlistService";
 import { recordProductTelemetry } from "../services/productTelemetry";
+import { campaignAttributionService } from "../services/campaignAttributionService";
+import { campaignDeliveryAnalyticsService } from "../services/campaignDeliveryAnalyticsService";
 
 const setLiveInventoryHeaders = (res: Response) => {
   if (typeof res.set === "function") {
@@ -74,6 +76,16 @@ export const publicController = {
       source: typeof req.query.source === "string" ? req.query.source as ReferralSource : undefined
     });
     res.json({ data: referral });
+  },
+
+  async resolveCampaignLink(req: Request, res: Response) {
+    const token = getRequiredParam(req, "token");
+    const campaignLink = await campaignAttributionService.resolvePublicLink(token);
+    await campaignDeliveryAnalyticsService.recordTrackedClick(
+      token,
+      req.header("user-agent") ?? null
+    );
+    res.redirect(302, campaignLink.redirect_url);
   },
 
   async getServices(req: Request, res: Response) {

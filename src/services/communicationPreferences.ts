@@ -27,6 +27,7 @@ interface CanSendCommunicationOptions {
   channel: CommunicationChannel;
   to?: string | null;
   messageType: MessageType;
+  requireExplicitMarketingConsent?: boolean;
   globalEmailUnsubscribeCache?: Map<string, boolean>;
 }
 
@@ -43,6 +44,7 @@ interface CommunicationEligibilityCandidate {
   channel: CommunicationChannel;
   to?: string | null;
   messageType: MessageType;
+  requireExplicitMarketingConsent?: boolean;
 }
 
 interface OptInSmsOptions {
@@ -59,6 +61,39 @@ interface OptInSmsOptions {
 
 const isTruthy = (value: unknown): boolean => value === true;
 const isMissing = (value: unknown): boolean => value === null || value === undefined || value === "";
+const CONTACT_LOOKUP_BATCH_SIZE = 200;
+
+const chunkValues = (values: string[]): string[][] => {
+  const uniqueValues = [...new Set(values)];
+  const chunks: string[][] = [];
+
+  for (let index = 0; index < uniqueValues.length; index += CONTACT_LOOKUP_BATCH_SIZE) {
+    chunks.push(uniqueValues.slice(index, index + CONTACT_LOOKUP_BATCH_SIZE));
+  }
+
+  return chunks;
+};
+
+const loadPreferenceRowsByContact = async (
+  userId: string,
+  column: "email_normalized" | "phone_normalized",
+  values: string[]
+): Promise<Row[]> => {
+  const results = await Promise.all(
+    chunkValues(values).map((batch) =>
+      supabaseAdmin
+        .from("client_communication_preferences")
+        .select("*")
+        .eq("user_id", userId)
+        .in(column, batch)
+    )
+  );
+
+  return results.flatMap((result) => {
+    handleSupabaseError(result.error, "Unable to load communication preferences");
+    return (result.data ?? []) as Row[];
+  });
+};
 
 const findPreferenceByContact = async (
   userId: string,
@@ -202,36 +237,21 @@ const loadPreferencesByNormalizedContact = async (
   byEmail: Map<string, Row>;
   byPhone: Map<string, Row>;
 }> => {
-  const [emailResult, phoneResult] = await Promise.all([
-    emailNormalizedValues.length > 0
-      ? supabaseAdmin
-        .from("client_communication_preferences")
-        .select("*")
-        .eq("user_id", userId)
-        .in("email_normalized", emailNormalizedValues)
-      : Promise.resolve({ data: [], error: null }),
-    phoneNormalizedValues.length > 0
-      ? supabaseAdmin
-        .from("client_communication_preferences")
-        .select("*")
-        .eq("user_id", userId)
-        .in("phone_normalized", phoneNormalizedValues)
-      : Promise.resolve({ data: [], error: null })
+  const [emailPreferences, phonePreferences] = await Promise.all([
+    loadPreferenceRowsByContact(userId, "email_normalized", emailNormalizedValues),
+    loadPreferenceRowsByContact(userId, "phone_normalized", phoneNormalizedValues)
   ]);
-
-  handleSupabaseError(emailResult.error, "Unable to load communication preferences");
-  handleSupabaseError(phoneResult.error, "Unable to load communication preferences");
 
   const byEmail = new Map<string, Row>();
   const byPhone = new Map<string, Row>();
 
-  for (const preference of (emailResult.data ?? []) as Row[]) {
+  for (const preference of emailPreferences) {
     if (typeof preference.email_normalized === "string") {
       byEmail.set(preference.email_normalized, preference);
     }
   }
 
-  for (const preference of (phoneResult.data ?? []) as Row[]) {
+  for (const preference of phonePreferences) {
     if (typeof preference.phone_normalized === "string") {
       byPhone.set(preference.phone_normalized, preference);
     }
@@ -245,14 +265,22 @@ const loadGlobalUnsubscribedEmails = async (emailNormalizedValues: string[]): Pr
     return new Set();
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("global_email_unsubscribes")
-    .select("email_normalized")
-    .in("email_normalized", emailNormalizedValues);
+  const results = await Promise.all(
+    chunkValues(emailNormalizedValues).map((batch) =>
+      supabaseAdmin
+        .from("global_email_unsubscribes")
+        .select("email_normalized")
+        .in("email_normalized", batch)
+    )
+  );
 
-  handleSupabaseError(error, "Unable to load global email unsubscribes");
+  const rows = results.flatMap((result) => {
+    handleSupabaseError(result.error, "Unable to load global email unsubscribes");
+    return (result.data ?? []) as Row[];
+  });
+
   return new Set(
-    ((data ?? []) as Row[])
+    rows
       .map((row) => (typeof row.email_normalized === "string" ? row.email_normalized : null))
       .filter((value): value is string => value !== null)
   );
@@ -316,6 +344,10 @@ export const communicationPreferencesService = {
     if (!preference) {
       if (options.channel === "sms") {
         return { canSend: false, reason: "missing_sms_consent", toNormalized: normalized };
+      }
+
+      if (options.messageType === "marketing" && options.requireExplicitMarketingConsent) {
+        return { canSend: false, reason: "disabled", toNormalized: normalized };
       }
 
       const createdPreference = await this.getOrCreateCommunicationPreference({
@@ -399,6 +431,11 @@ export const communicationPreferencesService = {
               candidate.id,
               { canSend: false, reason: "missing_sms_consent", toNormalized: candidate.toNormalized }
             ]
+            : candidate.messageType === "marketing" && candidate.requireExplicitMarketingConsent
+              ? [
+                candidate.id,
+                { canSend: false, reason: "disabled", toNormalized: candidate.toNormalized }
+              ]
             : [
               candidate.id,
               { canSend: true, toNormalized: candidate.toNormalized }

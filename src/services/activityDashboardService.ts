@@ -15,6 +15,7 @@ import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
 import { communicationPreferencesService } from "./communicationPreferences";
 import type { MessageType } from "../lib/communications";
 import { recordProductTelemetry } from "./productTelemetry";
+import { outreachScheduledSendsService } from "./outreachScheduledSendsService";
 
 const AUTOMATION_KEYS = [
   "rebook_nudges",
@@ -1057,6 +1058,8 @@ export const activityDashboardService = {
       loadRebookNudgeQueue(userId, rebookNudgesEnabled),
       loadBirthdayReminderAutomationQueue(userId, birthdayReminderAutoSendEnabled),
       loadThankYouEmailQueue(userId, thankYouEmailsEnabled),
+      // Legacy Activity consumers still receive this field during migration. The
+      // new Outreach bootstrap intentionally does not expose it as an automation.
       loadReviewRequestQueue(userId),
       Promise.resolve(
         isAutomationAvailable(entitlements, "waitlist_match")
@@ -1121,6 +1124,7 @@ export const activityDashboardService = {
       ? 0
       : eligibleBirthdayReminderQueue.length;
     const thankYouEmailAutoSendQueuedCount = eligibleThankYouEmailQueue.length;
+    const scheduledOutreach = outreachScheduledSendsService.fromLegacyDashboardQueue(automationQueue, 3);
     const birthdayReminderMode = birthdayReminderApprovalRequired ? "approval_required" : "automatic";
     const noShowTodayCount = 0;
     const automationControls = [
@@ -1231,6 +1235,7 @@ export const activityDashboardService = {
       pending_reminder_count: automationQueue.length,
       scheduled_reminder_count: automationQueue.length,
       reminder_queue: automationQueue,
+      scheduled_outreach: scheduledOutreach,
       queued_review_request_count: reviewRequestQueue.length,
       review_request_queue: reviewRequestQueue,
       automation_health: automationHealth,

@@ -8,6 +8,7 @@ import { clientPurgeService } from "../services/clientPurgeService";
 import { apiRequestLogRetentionService } from "../services/apiRequestLogRetentionService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
 import { thankYouEmailsService } from "../services/thankYouEmailsService";
+import { campaignDeliveryWorkerService } from "../services/campaignDeliveryWorkerService";
 
 export const internalController = {
   async processAppointmentEmails(req: Request, res: Response) {
@@ -33,6 +34,13 @@ export const internalController = {
       queue: afterMetrics
     });
 
+    res.json({ data: result });
+  },
+
+  async processCampaignDeliveries(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await campaignDeliveryWorkerService.processDueCampaigns({ limit: query.limit });
+    logger.info("campaign_delivery_processing_completed", { requestId: req.requestId, ...result });
     res.json({ data: result });
   },
 

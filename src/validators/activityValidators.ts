@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ACTIVITY_CATEGORIES, ACTIVITY_TYPES } from "../lib/activityTypes";
 import { isoDateSchema, isoDateTimeSchema } from "./common";
+import { scheduledOutreachListSchema } from "./outreachValidators";
 
 export const activityTypeSchema = z.enum(ACTIVITY_TYPES);
 export const activityCategorySchema = z.enum(ACTIVITY_CATEGORIES);
@@ -203,5 +204,6 @@ export const appointmentActivityResponseSchema = z.object({
 
 export const activityDashboardResponseSchema = z.object({
   customers_reached_last_30_days: z.number().int().nonnegative(),
-  birthdayReminderMode: z.enum(["automatic", "approval_required"])
+  birthdayReminderMode: z.enum(["automatic", "approval_required"]),
+  scheduled_outreach: scheduledOutreachListSchema
 }).passthrough();

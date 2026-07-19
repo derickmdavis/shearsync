@@ -436,6 +436,20 @@ create table if not exists public.appointment_email_templates (
   constraint appointment_email_templates_user_email_type_unique unique (user_id, email_type)
 );
 
+create table if not exists public.appointment_reminder_suppressions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  appointment_start_at timestamptz not null,
+  reason text,
+  created_by uuid references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint appointment_reminder_suppressions_reason_length_check
+    check (reason is null or char_length(reason) <= 500),
+  constraint appointment_reminder_suppressions_occurrence_unique
+    unique (user_id, appointment_id, appointment_start_at)
+);
+
 create table if not exists public.thank_you_email_settings (
   user_id uuid primary key references public.users(id) on delete cascade,
   approval_required boolean not null default true,
@@ -1152,6 +1166,10 @@ create index if not exists appointment_email_events_thank_you_email_id_idx
   on public.appointment_email_events(thank_you_email_id);
 create index if not exists appointment_email_templates_user_id_idx
   on public.appointment_email_templates(user_id);
+create index if not exists appointment_reminder_suppressions_user_start_idx
+  on public.appointment_reminder_suppressions(user_id, appointment_start_at);
+create index if not exists appointment_reminder_suppressions_appointment_idx
+  on public.appointment_reminder_suppressions(appointment_id);
 create index if not exists thank_you_email_settings_user_id_idx
   on public.thank_you_email_settings(user_id);
 create index if not exists thank_you_emails_user_status_send_after_idx
@@ -1255,6 +1273,7 @@ alter table public.reminders enable row level security;
 alter table public.activity_events enable row level security;
 alter table public.appointment_email_events enable row level security;
 alter table public.appointment_email_templates enable row level security;
+alter table public.appointment_reminder_suppressions enable row level security;
 alter table public.thank_you_email_settings enable row level security;
 alter table public.thank_you_emails enable row level security;
 alter table public.birthday_reminders enable row level security;
@@ -1271,6 +1290,20 @@ alter table public.communication_consent_events enable row level security;
 alter table public.communication_preference_tokens enable row level security;
 alter table public.global_email_unsubscribes enable row level security;
 alter table public.automation_settings enable row level security;
+
+drop policy if exists appointment_reminder_suppressions_select_own
+  on public.appointment_reminder_suppressions;
+create policy appointment_reminder_suppressions_select_own
+  on public.appointment_reminder_suppressions
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists appointment_reminder_suppressions_insert_own
+  on public.appointment_reminder_suppressions;
+create policy appointment_reminder_suppressions_insert_own
+  on public.appointment_reminder_suppressions
+  for insert
+  with check (auth.uid() = user_id and auth.uid() = created_by);
 alter table public.stylists enable row level security;
 alter table public.booking_rules enable row level security;
 alter table public.services enable row level security;
@@ -1447,6 +1480,76 @@ begin
       using (auth.uid() = user_id);
   end if;
 end
+$$;
+
+create or replace function public.cancel_appointment_reminder_occurrence(
+  p_user_id uuid,
+  p_appointment_id uuid,
+  p_appointment_start_at timestamptz,
+  p_reason text default null
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  v_appointment public.appointments%rowtype;
+  v_event public.appointment_email_events%rowtype;
+  v_suppression public.appointment_reminder_suppressions%rowtype;
+begin
+  select * into v_appointment
+  from public.appointments
+  where id = p_appointment_id
+    and user_id = p_user_id
+    and appointment_date = p_appointment_start_at
+    and status in ('pending', 'scheduled')
+  for update;
+
+  if not found then
+    raise exception using errcode = 'P0002', message = 'appointment_reminder_occurrence_not_found';
+  end if;
+
+  select * into v_event
+  from public.appointment_email_events
+  where user_id = p_user_id
+    and appointment_id = p_appointment_id
+    and email_type = 'appointment_reminder'
+    and (template_data->>'appointment_start_time')::timestamptz = p_appointment_start_at
+  for update;
+
+  if found and v_event.status = 'sending' then
+    raise exception using errcode = 'P0001', message = 'appointment_reminder_already_sending';
+  end if;
+
+  if found and v_event.status = 'sent' then
+    raise exception using errcode = 'P0001', message = 'appointment_reminder_already_sent';
+  end if;
+
+  insert into public.appointment_reminder_suppressions (
+    user_id, appointment_id, appointment_start_at, reason, created_by
+  ) values (
+    p_user_id, p_appointment_id, p_appointment_start_at, nullif(trim(p_reason), ''), p_user_id
+  )
+  on conflict (user_id, appointment_id, appointment_start_at)
+  do update set reason = coalesce(excluded.reason, public.appointment_reminder_suppressions.reason)
+  returning * into v_suppression;
+
+  update public.appointment_email_events
+  set status = 'skipped', error = 'Appointment reminder cancelled by stylist', updated_at = now()
+  where user_id = p_user_id
+    and appointment_id = p_appointment_id
+    and email_type = 'appointment_reminder'
+    and (template_data->>'appointment_start_time')::timestamptz = p_appointment_start_at
+    and status in ('queued', 'failed');
+
+  return jsonb_build_object(
+    'id', v_suppression.id,
+    'appointment_id', v_suppression.appointment_id,
+    'appointment_start_at', v_suppression.appointment_start_at,
+    'status', 'cancelled',
+    'reason', v_suppression.reason,
+    'created_at', v_suppression.created_at
+  );
+end;
 $$;
 
 create or replace function public.set_client_rebooking_preferences_updated_at()
@@ -2028,3 +2131,1012 @@ begin
   end if;
 end
 $$;
+
+-- Campaign schema foundation (2026-07-18).
+create extension if not exists pgcrypto;
+
+create table public.campaign_templates (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  description text,
+  link_type text not null,
+  subject text not null,
+  message text not null,
+  version integer not null default 1,
+  active boolean not null default true,
+  sort_order integer not null default 0,
+  icon_key text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint campaign_templates_name_length_check check (char_length(trim(name)) between 1 and 60),
+  constraint campaign_templates_description_length_check check (description is null or char_length(description) <= 500),
+  constraint campaign_templates_link_type_check check (link_type in ('booking_link', 'referral_link')),
+  constraint campaign_templates_subject_length_check check (char_length(trim(subject)) between 1 and 100),
+  constraint campaign_templates_message_length_check check (char_length(trim(message)) between 1 and 2000),
+  constraint campaign_templates_version_check check (version > 0),
+  constraint campaign_templates_sort_order_check check (sort_order >= 0),
+  constraint campaign_templates_icon_key_length_check check (icon_key is null or char_length(icon_key) <= 80),
+  constraint campaign_templates_id_version_unique unique (id, version)
+);
+
+create table public.campaigns (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  name text,
+  status text not null default 'draft',
+  campaign_kind text not null default 'one_time',
+  send_mode text not null default 'now',
+  scheduled_for timestamptz,
+  timezone_snapshot text not null default 'UTC',
+  link_type text,
+  template_id uuid,
+  template_version integer,
+  subject_snapshot text,
+  message_snapshot text,
+  audience_mode text not null default 'everyone',
+  revision integer not null default 1,
+  validated_at timestamptz,
+  validation_nonce_hash text,
+  scheduled_at timestamptz,
+  sending_started_at timestamptz,
+  completed_at timestamptz,
+  cancelled_at timestamptz,
+  cancelled_reason text,
+  failure_summary jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint campaigns_id_user_unique unique (id, user_id),
+  constraint campaigns_name_length_check check (name is null or char_length(trim(name)) between 1 and 60),
+  constraint campaigns_status_check check (
+    status in ('draft', 'scheduled', 'sending', 'completed', 'partially_failed', 'failed', 'cancelled')
+  ),
+  constraint campaigns_kind_check check (campaign_kind = 'one_time'),
+  constraint campaigns_send_mode_check check (send_mode in ('now', 'scheduled')),
+  constraint campaigns_timezone_length_check check (char_length(trim(timezone_snapshot)) between 1 and 64),
+  constraint campaigns_link_type_check check (link_type is null or link_type in ('booking_link', 'referral_link')),
+  constraint campaigns_template_pair_check check (
+    (template_id is null and template_version is null)
+    or (template_id is not null and template_version is not null and template_version > 0)
+  ),
+  constraint campaigns_template_fkey foreign key (template_id, template_version)
+    references public.campaign_templates(id, version) on delete restrict,
+  constraint campaigns_subject_length_check check (
+    subject_snapshot is null or char_length(trim(subject_snapshot)) between 1 and 100
+  ),
+  constraint campaigns_message_length_check check (
+    message_snapshot is null or char_length(trim(message_snapshot)) between 1 and 2000
+  ),
+  constraint campaigns_audience_mode_check check (audience_mode in ('everyone', 'specific')),
+  constraint campaigns_revision_check check (revision > 0),
+  constraint campaigns_validation_hash_length_check check (
+    validation_nonce_hash is null or char_length(validation_nonce_hash) between 32 and 128
+  ),
+  constraint campaigns_cancelled_reason_length_check check (
+    cancelled_reason is null or char_length(cancelled_reason) <= 1000
+  ),
+  constraint campaigns_schedule_mode_check check (
+    send_mode = 'scheduled' or scheduled_for is null
+  ),
+  constraint campaigns_submitted_fields_check check (
+    status in ('draft', 'cancelled')
+    or (
+      name is not null
+      and link_type is not null
+      and subject_snapshot is not null
+      and message_snapshot is not null
+      and (send_mode = 'now' or scheduled_for is not null)
+    )
+  ),
+  constraint campaigns_lifecycle_timestamps_check check (
+    (status <> 'scheduled' or scheduled_at is not null)
+    and (status <> 'sending' or sending_started_at is not null)
+    and (status not in ('completed', 'partially_failed', 'failed') or completed_at is not null)
+    and (status <> 'cancelled' or cancelled_at is not null)
+  )
+);
+
+create table public.campaign_runs (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid not null,
+  user_id uuid not null,
+  sequence_number integer not null,
+  status text not null default 'draft',
+  scheduled_for timestamptz,
+  started_at timestamptz,
+  completed_at timestamptz,
+  cancelled_at timestamptz,
+  recipient_total integer not null default 0,
+  eligible_count integer not null default 0,
+  excluded_count integer not null default 0,
+  pending_count integer not null default 0,
+  sending_count integer not null default 0,
+  sent_count integer not null default 0,
+  failed_count integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint campaign_runs_campaign_user_fkey foreign key (campaign_id, user_id)
+    references public.campaigns(id, user_id) on delete cascade,
+  constraint campaign_runs_id_campaign_user_unique unique (id, campaign_id, user_id),
+  constraint campaign_runs_campaign_sequence_unique unique (campaign_id, sequence_number),
+  constraint campaign_runs_sequence_check check (sequence_number > 0),
+  constraint campaign_runs_status_check check (
+    status in ('draft', 'scheduled', 'queued', 'sending', 'completed', 'partially_failed', 'failed', 'cancelled')
+  ),
+  constraint campaign_runs_counts_check check (
+    recipient_total >= 0 and eligible_count >= 0 and excluded_count >= 0
+    and pending_count >= 0 and sending_count >= 0 and sent_count >= 0 and failed_count >= 0
+    and eligible_count + excluded_count <= recipient_total
+    and pending_count <= recipient_total and sending_count <= recipient_total
+    and sent_count <= recipient_total and failed_count <= recipient_total
+  ),
+  constraint campaign_runs_lifecycle_timestamps_check check (
+    (status <> 'sending' or started_at is not null)
+    and (status not in ('completed', 'partially_failed', 'failed') or completed_at is not null)
+    and (status <> 'cancelled' or cancelled_at is not null)
+  )
+);
+
+create unique index clients_id_user_id_unique on public.clients(id, user_id);
+create unique index client_referral_links_id_user_id_unique on public.client_referral_links(id, user_id);
+
+create table public.campaign_audience_selections (
+  campaign_id uuid not null,
+  user_id uuid not null,
+  client_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key (campaign_id, client_id),
+  constraint campaign_audience_selections_campaign_user_fkey foreign key (campaign_id, user_id)
+    references public.campaigns(id, user_id) on delete cascade,
+  constraint campaign_audience_selections_client_user_fkey foreign key (client_id, user_id)
+    references public.clients(id, user_id) on delete cascade
+);
+
+create table public.campaign_recipients (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid not null,
+  campaign_run_id uuid not null,
+  user_id uuid not null,
+  client_id uuid,
+  recipient_email_snapshot text,
+  first_name_snapshot text,
+  eligibility_status text not null,
+  exclusion_reason text,
+  subject_snapshot text,
+  rendered_text_snapshot text,
+  rendered_html_snapshot text,
+  render_version integer not null default 1,
+  booking_tracking_token_hash text,
+  referral_link_id uuid,
+  status text not null default 'pending',
+  idempotency_key text not null,
+  provider text,
+  provider_message_id text,
+  attempt_count integer not null default 0,
+  last_attempt_at timestamptz,
+  queued_at timestamptz,
+  sending_started_at timestamptz,
+  sent_at timestamptz,
+  delivered_at timestamptz,
+  failed_at timestamptz,
+  skipped_at timestamptz,
+  cancelled_at timestamptz,
+  error_code text,
+  error_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint campaign_recipients_run_campaign_user_fkey foreign key (campaign_run_id, campaign_id, user_id)
+    references public.campaign_runs(id, campaign_id, user_id) on delete cascade,
+  constraint campaign_recipients_client_user_fkey foreign key (client_id, user_id)
+    references public.clients(id, user_id) on delete set null (client_id),
+  constraint campaign_recipients_referral_link_user_fkey foreign key (referral_link_id, user_id)
+    references public.client_referral_links(id, user_id) on delete set null (referral_link_id),
+  constraint campaign_recipients_run_idempotency_unique unique (campaign_run_id, idempotency_key),
+  constraint campaign_recipients_email_length_check check (
+    recipient_email_snapshot is null or char_length(trim(recipient_email_snapshot)) between 3 and 320
+  ),
+  constraint campaign_recipients_first_name_length_check check (
+    first_name_snapshot is null or char_length(first_name_snapshot) <= 100
+  ),
+  constraint campaign_recipients_eligibility_check check (eligibility_status in ('eligible', 'excluded')),
+  constraint campaign_recipients_exclusion_reason_check check (
+    (eligibility_status = 'eligible' and exclusion_reason is null)
+    or (
+      eligibility_status = 'excluded'
+      and exclusion_reason in (
+        'missing_email', 'invalid_email', 'email_marketing_disabled', 'globally_unsubscribed',
+        'client_deleted', 'duplicate_recipient', 'not_owned_or_not_found'
+      )
+    )
+  ),
+  constraint campaign_recipients_eligible_email_check check (
+    eligibility_status = 'excluded' or recipient_email_snapshot is not null
+  ),
+  constraint campaign_recipients_subject_length_check check (
+    subject_snapshot is null or char_length(trim(subject_snapshot)) between 1 and 100
+  ),
+  constraint campaign_recipients_rendered_text_length_check check (
+    rendered_text_snapshot is null or char_length(rendered_text_snapshot) <= 20000
+  ),
+  constraint campaign_recipients_rendered_html_length_check check (
+    rendered_html_snapshot is null or char_length(rendered_html_snapshot) <= 100000
+  ),
+  constraint campaign_recipients_render_version_check check (render_version > 0),
+  constraint campaign_recipients_tracking_hash_length_check check (
+    booking_tracking_token_hash is null or char_length(booking_tracking_token_hash) between 32 and 128
+  ),
+  constraint campaign_recipients_status_check check (
+    status in ('pending', 'queued', 'sending', 'sent', 'delivered', 'failed', 'skipped', 'cancelled')
+  ),
+  constraint campaign_recipients_excluded_status_check check (
+    eligibility_status = 'eligible' or status in ('skipped', 'cancelled')
+  ),
+  constraint campaign_recipients_idempotency_length_check check (
+    char_length(trim(idempotency_key)) between 1 and 200
+  ),
+  constraint campaign_recipients_attempt_count_check check (attempt_count >= 0),
+  constraint campaign_recipients_provider_length_check check (provider is null or char_length(provider) <= 80),
+  constraint campaign_recipients_provider_message_length_check check (
+    provider_message_id is null or char_length(provider_message_id) <= 255
+  ),
+  constraint campaign_recipients_error_length_check check (
+    (error_code is null or char_length(error_code) <= 120)
+    and (error_message is null or char_length(error_message) <= 2000)
+  )
+);
+
+create unique index campaign_recipients_run_client_unique
+  on public.campaign_recipients(campaign_run_id, client_id) where client_id is not null;
+create unique index campaign_recipients_run_email_unique
+  on public.campaign_recipients(campaign_run_id, lower(recipient_email_snapshot))
+  where recipient_email_snapshot is not null and eligibility_status = 'eligible';
+
+create table public.campaign_idempotency_records (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  scope text not null,
+  idempotency_key text not null,
+  request_hash text not null,
+  response_status integer,
+  response_body jsonb,
+  resource_type text,
+  resource_id uuid,
+  locked_at timestamptz,
+  completed_at timestamptz,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint campaign_idempotency_user_scope_key_unique unique (user_id, scope, idempotency_key),
+  constraint campaign_idempotency_scope_length_check check (char_length(trim(scope)) between 1 and 80),
+  constraint campaign_idempotency_key_length_check check (char_length(trim(idempotency_key)) between 1 and 200),
+  constraint campaign_idempotency_request_hash_check check (char_length(request_hash) between 32 and 128),
+  constraint campaign_idempotency_response_status_check check (
+    response_status is null or response_status between 100 and 599
+  ),
+  constraint campaign_idempotency_resource_type_length_check check (
+    resource_type is null or char_length(resource_type) <= 80
+  ),
+  constraint campaign_idempotency_expiry_check check (expires_at > created_at),
+  constraint campaign_idempotency_completion_check check (
+    (completed_at is null and response_status is null and response_body is null)
+    or (completed_at is not null and response_status is not null)
+  )
+);
+
+create index campaign_templates_active_sort_idx
+  on public.campaign_templates(active, sort_order, created_at, id);
+create index campaigns_user_status_relevance_idx
+  on public.campaigns(user_id, status, scheduled_for, updated_at desc, id);
+create index campaigns_user_created_idx on public.campaigns(user_id, created_at desc, id);
+create index campaign_runs_due_idx
+  on public.campaign_runs(scheduled_for, id) where status in ('scheduled', 'queued');
+create index campaign_runs_user_status_idx
+  on public.campaign_runs(user_id, status, scheduled_for, id);
+create index campaign_audience_selections_campaign_idx
+  on public.campaign_audience_selections(campaign_id, created_at, client_id);
+create index campaign_audience_selections_user_client_idx
+  on public.campaign_audience_selections(user_id, client_id);
+create index campaign_recipients_run_status_idx
+  on public.campaign_recipients(campaign_run_id, status, id);
+create index campaign_recipients_user_status_idx
+  on public.campaign_recipients(user_id, status, updated_at, id);
+create index campaign_recipients_provider_message_idx
+  on public.campaign_recipients(provider, provider_message_id)
+  where provider_message_id is not null;
+create index campaign_recipients_campaign_idx on public.campaign_recipients(campaign_id, id);
+create index campaign_recipients_client_idx on public.campaign_recipients(user_id, client_id);
+create index campaign_idempotency_expiry_idx on public.campaign_idempotency_records(expires_at);
+
+create or replace function public.set_campaign_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create or replace function public.validate_campaign_status_transition()
+returns trigger language plpgsql as $$
+begin
+  if new.status = old.status then return new; end if;
+  if not (
+    (old.status = 'draft' and new.status in ('scheduled', 'sending', 'cancelled'))
+    or (old.status = 'scheduled' and new.status in ('sending', 'cancelled'))
+    or (old.status = 'sending' and new.status in ('completed', 'partially_failed', 'failed'))
+  ) then
+    raise exception using errcode = '23514', message = 'invalid_campaign_status_transition';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.validate_campaign_run_status_transition()
+returns trigger language plpgsql as $$
+begin
+  if new.status = old.status then return new; end if;
+  if not (
+    (old.status = 'draft' and new.status in ('scheduled', 'queued', 'sending', 'cancelled'))
+    or (old.status = 'scheduled' and new.status in ('queued', 'sending', 'cancelled'))
+    or (old.status = 'queued' and new.status in ('sending', 'cancelled'))
+    or (old.status = 'sending' and new.status in ('completed', 'partially_failed', 'failed'))
+  ) then
+    raise exception using errcode = '23514', message = 'invalid_campaign_run_status_transition';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.validate_campaign_recipient_status_transition()
+returns trigger language plpgsql as $$
+begin
+  if new.status = old.status then return new; end if;
+  if not (
+    (old.status = 'pending' and new.status in ('queued', 'skipped', 'cancelled'))
+    or (old.status = 'queued' and new.status in ('sending', 'skipped', 'cancelled'))
+    or (old.status = 'sending' and new.status in ('sent', 'failed'))
+    or (old.status = 'sent' and new.status in ('delivered', 'failed'))
+    or (old.status = 'failed' and new.status in ('queued', 'skipped', 'cancelled'))
+  ) then
+    raise exception using errcode = '23514', message = 'invalid_campaign_recipient_status_transition';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.create_initial_campaign_run()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.campaign_runs (campaign_id, user_id, sequence_number, status, scheduled_for)
+  values (new.id, new.user_id, 1, new.status, new.scheduled_for);
+  return new;
+end;
+$$;
+
+create or replace function public.sync_initial_campaign_run()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.campaign_runs
+  set
+    status = new.status,
+    scheduled_for = new.scheduled_for,
+    started_at = case when new.status = 'sending' then new.sending_started_at else started_at end,
+    completed_at = case when new.status in ('completed', 'partially_failed', 'failed') then new.completed_at else completed_at end,
+    cancelled_at = case when new.status = 'cancelled' then new.cancelled_at else cancelled_at end
+  where campaign_id = new.id and user_id = new.user_id and sequence_number = 1;
+  return new;
+end;
+$$;
+
+create or replace function public.ensure_initial_campaign_run_exists()
+returns trigger language plpgsql as $$
+declare
+  checked_campaign_id uuid;
+begin
+  checked_campaign_id = case when tg_op = 'DELETE' then old.campaign_id else new.campaign_id end;
+
+  if exists (select 1 from public.campaigns where id = checked_campaign_id)
+    and not exists (
+      select 1 from public.campaign_runs where campaign_id = checked_campaign_id and sequence_number = 1
+    ) then
+    raise exception using errcode = '23514', message = 'campaign_initial_run_required';
+  end if;
+
+  if tg_op = 'UPDATE' and old.campaign_id <> new.campaign_id
+    and exists (select 1 from public.campaigns where id = old.campaign_id)
+    and not exists (
+      select 1 from public.campaign_runs where campaign_id = old.campaign_id and sequence_number = 1
+    ) then
+    raise exception using errcode = '23514', message = 'campaign_initial_run_required';
+  end if;
+
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end;
+$$;
+
+create trigger campaign_templates_set_updated_at before update on public.campaign_templates
+  for each row execute function public.set_campaign_updated_at();
+create trigger campaigns_validate_status before update of status on public.campaigns
+  for each row execute function public.validate_campaign_status_transition();
+create trigger campaigns_set_updated_at before update on public.campaigns
+  for each row execute function public.set_campaign_updated_at();
+create trigger campaign_runs_validate_status before update of status on public.campaign_runs
+  for each row execute function public.validate_campaign_run_status_transition();
+create trigger campaign_runs_set_updated_at before update on public.campaign_runs
+  for each row execute function public.set_campaign_updated_at();
+create trigger campaign_recipients_validate_status before update of status on public.campaign_recipients
+  for each row execute function public.validate_campaign_recipient_status_transition();
+create trigger campaign_recipients_set_updated_at before update on public.campaign_recipients
+  for each row execute function public.set_campaign_updated_at();
+create trigger campaign_idempotency_set_updated_at before update on public.campaign_idempotency_records
+  for each row execute function public.set_campaign_updated_at();
+create trigger campaigns_create_initial_run after insert on public.campaigns
+  for each row execute function public.create_initial_campaign_run();
+create trigger campaigns_sync_initial_run after update of status, scheduled_for on public.campaigns
+  for each row execute function public.sync_initial_campaign_run();
+create constraint trigger campaign_runs_require_initial
+  after insert or update or delete on public.campaign_runs
+  deferrable initially deferred
+  for each row execute function public.ensure_initial_campaign_run_exists();
+
+alter table public.campaign_templates enable row level security;
+alter table public.campaigns enable row level security;
+alter table public.campaign_runs enable row level security;
+alter table public.campaign_audience_selections enable row level security;
+alter table public.campaign_recipients enable row level security;
+alter table public.campaign_idempotency_records enable row level security;
+
+create policy campaign_templates_select_authenticated on public.campaign_templates
+  for select to authenticated using (active = true);
+create policy campaigns_select_own on public.campaigns for select using (auth.uid() = user_id);
+create policy campaigns_insert_own on public.campaigns for insert with check (auth.uid() = user_id);
+create policy campaigns_update_own on public.campaigns for update
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy campaigns_delete_own on public.campaigns for delete using (auth.uid() = user_id);
+create policy campaign_runs_select_own on public.campaign_runs for select using (auth.uid() = user_id);
+create policy campaign_runs_insert_own on public.campaign_runs for insert with check (auth.uid() = user_id);
+create policy campaign_runs_update_own on public.campaign_runs for update
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy campaign_runs_delete_own on public.campaign_runs for delete using (auth.uid() = user_id);
+create policy campaign_audience_selections_select_own on public.campaign_audience_selections
+  for select using (auth.uid() = user_id);
+create policy campaign_audience_selections_insert_own on public.campaign_audience_selections
+  for insert with check (auth.uid() = user_id);
+create policy campaign_audience_selections_delete_own on public.campaign_audience_selections
+  for delete using (auth.uid() = user_id);
+create policy campaign_recipients_select_own on public.campaign_recipients
+  for select using (auth.uid() = user_id);
+create policy campaign_recipients_insert_own on public.campaign_recipients
+  for insert with check (auth.uid() = user_id);
+create policy campaign_recipients_update_own on public.campaign_recipients for update
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy campaign_idempotency_select_own on public.campaign_idempotency_records
+  for select using (auth.uid() = user_id);
+create policy campaign_idempotency_insert_own on public.campaign_idempotency_records
+  for insert with check (auth.uid() = user_id);
+create policy campaign_idempotency_update_own on public.campaign_idempotency_records for update
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+comment on table public.campaign_templates is 'Product-managed one-time outreach campaign templates.';
+comment on table public.campaign_runs is 'Delivery occurrences; sequence 1 is created atomically with every campaign.';
+comment on table public.campaign_audience_selections is 'Editable specific-audience draft selections, not final recipient snapshots.';
+comment on table public.campaign_recipients is 'Immutable recipient and rendered-content snapshots for a campaign run.';
+comment on table public.campaign_idempotency_records is 'Reusable request idempotency records for campaign mutations.';
+
+-- Campaign templates and immediate drafts (2026-07-18).
+insert into public.campaign_templates (
+  id, name, description, link_type, subject, message, version, active, sort_order, icon_key
+)
+values
+  (
+    '10000000-0000-4000-8000-000000000001',
+    'Booking Boost',
+    'Invite clients to book their next appointment.',
+    'booking_link',
+    'Ready for your next appointment?',
+    E'Hi {{first_name}},\n\nI would love to see you again. Choose a time that works for you below.',
+    1, true, 10, 'calendar'
+  ),
+  (
+    '10000000-0000-4000-8000-000000000002',
+    'Seasonal Special',
+    'Share a timely service or seasonal promotion.',
+    'booking_link',
+    'A seasonal update, just for you',
+    E'Hi {{first_name}},\n\nI have something special available for a limited time. Book your next visit below.',
+    1, true, 20, 'sun'
+  ),
+  (
+    '10000000-0000-4000-8000-000000000003',
+    'Share With a Friend',
+    'Invite existing clients to share their personal referral link.',
+    'referral_link',
+    'Know someone who would love this?',
+    E'Hi {{first_name}},\n\nIf someone comes to mind, you can share your personal referral link below.',
+    1, true, 30, 'users'
+  )
+on conflict (id) do nothing;
+
+create or replace function public.create_campaign_draft(
+  p_user_id uuid,
+  p_timezone text,
+  p_template_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_template public.campaign_templates%rowtype;
+  v_campaign public.campaigns%rowtype;
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then
+    raise exception using errcode = '42501', message = 'campaign_owner_mismatch';
+  end if;
+
+  if not exists (select 1 from public.users where id = p_user_id) then
+    raise exception using errcode = 'P0002', message = 'campaign_owner_not_found';
+  end if;
+
+  if p_template_id is not null then
+    select * into v_template
+    from public.campaign_templates
+    where id = p_template_id and active = true;
+
+    if not found then
+      raise exception using errcode = 'P0002', message = 'campaign_template_not_found';
+    end if;
+  end if;
+
+  insert into public.campaigns (
+    user_id,
+    status,
+    campaign_kind,
+    send_mode,
+    timezone_snapshot,
+    link_type,
+    template_id,
+    template_version,
+    subject_snapshot,
+    message_snapshot,
+    audience_mode
+  ) values (
+    p_user_id,
+    'draft',
+    'one_time',
+    'now',
+    p_timezone,
+    v_template.link_type,
+    v_template.id,
+    v_template.version,
+    v_template.subject,
+    v_template.message,
+    'everyone'
+  )
+  returning * into v_campaign;
+
+  return to_jsonb(v_campaign);
+end;
+$$;
+
+create or replace function public.update_campaign_draft(
+  p_user_id uuid,
+  p_campaign_id uuid,
+  p_expected_revision integer,
+  p_has_name boolean default false,
+  p_name text default null,
+  p_has_send_mode boolean default false,
+  p_send_mode text default null,
+  p_has_scheduled_for boolean default false,
+  p_scheduled_for timestamptz default null,
+  p_has_timezone boolean default false,
+  p_timezone text default null,
+  p_has_link_type boolean default false,
+  p_link_type text default null,
+  p_has_template boolean default false,
+  p_template_id uuid default null,
+  p_has_subject boolean default false,
+  p_subject text default null,
+  p_has_message boolean default false,
+  p_message text default null,
+  p_has_audience boolean default false,
+  p_audience_mode text default null,
+  p_client_ids uuid[] default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_campaign public.campaigns%rowtype;
+  v_template public.campaign_templates%rowtype;
+  v_client_ids uuid[];
+  v_owned_count integer;
+  v_effective_send_mode text;
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then
+    raise exception using errcode = '42501', message = 'campaign_owner_mismatch';
+  end if;
+
+  select * into v_campaign
+  from public.campaigns
+  where id = p_campaign_id and user_id = p_user_id
+  for update;
+
+  if not found or v_campaign.status <> 'draft' then
+    raise exception using errcode = 'P0002', message = 'campaign_draft_not_found';
+  end if;
+
+  if v_campaign.revision <> p_expected_revision then
+    raise exception using
+      errcode = 'P0001',
+      message = 'campaign_revision_conflict',
+      detail = jsonb_build_object('current_revision', v_campaign.revision)::text;
+  end if;
+
+  if p_has_template and p_template_id is not null then
+    select * into v_template
+    from public.campaign_templates
+    where id = p_template_id and active = true;
+
+    if not found then
+      raise exception using errcode = 'P0002', message = 'campaign_template_not_found';
+    end if;
+  end if;
+
+  v_effective_send_mode = case when p_has_send_mode then p_send_mode else v_campaign.send_mode end;
+  if v_effective_send_mode = 'now' and p_has_scheduled_for and p_scheduled_for is not null then
+    raise exception using errcode = '23514', message = 'campaign_send_time_not_allowed';
+  end if;
+
+  if p_has_audience then
+    v_client_ids = coalesce(p_client_ids, array[]::uuid[]);
+
+    if p_audience_mode not in ('everyone', 'specific') then
+      raise exception using errcode = '23514', message = 'campaign_audience_mode_invalid';
+    end if;
+    if p_audience_mode = 'everyone' and cardinality(v_client_ids) > 0 then
+      raise exception using errcode = '23514', message = 'campaign_everyone_client_ids_not_allowed';
+    end if;
+    if cardinality(v_client_ids) <> cardinality(array(select distinct unnest(v_client_ids))) then
+      raise exception using errcode = '23505', message = 'campaign_audience_duplicate_client';
+    end if;
+
+    select count(*) into v_owned_count
+    from public.clients
+    where user_id = p_user_id and id = any(v_client_ids);
+
+    if v_owned_count <> cardinality(v_client_ids) then
+      raise exception using errcode = '42501', message = 'campaign_audience_client_not_owned';
+    end if;
+  end if;
+
+  update public.campaigns
+  set
+    name = case when p_has_name then nullif(trim(p_name), '') else name end,
+    send_mode = case when p_has_send_mode then p_send_mode else send_mode end,
+    scheduled_for = case
+      when p_has_send_mode and p_send_mode = 'now' then null
+      when p_has_scheduled_for then p_scheduled_for
+      else scheduled_for
+    end,
+    timezone_snapshot = case when p_has_timezone then p_timezone else timezone_snapshot end,
+    link_type = case
+      when p_has_link_type then p_link_type
+      when p_has_template and p_template_id is not null then v_template.link_type
+      else link_type
+    end,
+    template_id = case when p_has_template then p_template_id else template_id end,
+    template_version = case
+      when p_has_template and p_template_id is not null then v_template.version
+      when p_has_template then null
+      else template_version
+    end,
+    subject_snapshot = case
+      when p_has_subject then nullif(trim(p_subject), '')
+      when p_has_template and p_template_id is not null then v_template.subject
+      else subject_snapshot
+    end,
+    message_snapshot = case
+      when p_has_message then nullif(trim(p_message), '')
+      when p_has_template and p_template_id is not null then v_template.message
+      else message_snapshot
+    end,
+    audience_mode = case when p_has_audience then p_audience_mode else audience_mode end,
+    revision = revision + 1,
+    validated_at = null,
+    validation_nonce_hash = null
+  where id = p_campaign_id and user_id = p_user_id
+  returning * into v_campaign;
+
+  if p_has_audience then
+    delete from public.campaign_audience_selections
+    where campaign_id = p_campaign_id and user_id = p_user_id;
+
+    if p_audience_mode = 'specific' then
+      insert into public.campaign_audience_selections (campaign_id, user_id, client_id)
+      select p_campaign_id, p_user_id, client_id
+      from unnest(v_client_ids) as client_id;
+    end if;
+  end if;
+
+  return to_jsonb(v_campaign);
+end;
+$$;
+
+revoke all on function public.create_campaign_draft(uuid, text, uuid) from public;
+revoke all on function public.update_campaign_draft(
+  uuid, uuid, integer, boolean, text, boolean, text, boolean, timestamptz,
+  boolean, text, boolean, text, boolean, uuid, boolean, text, boolean, text,
+  boolean, text, uuid[]
+) from public;
+grant execute on function public.create_campaign_draft(uuid, text, uuid) to authenticated, service_role;
+grant execute on function public.update_campaign_draft(
+  uuid, uuid, integer, boolean, text, boolean, text, boolean, timestamptz,
+  boolean, text, boolean, text, boolean, uuid, boolean, text, boolean, text,
+  boolean, text, uuid[]
+) to authenticated, service_role;
+
+-- Migration 202607180004_outreach_corrective_pass.sql
+update public.campaign_templates
+set message = case id
+  when '10000000-0000-4000-8000-000000000001'::uuid then
+    E'Hi {{first_name}},\n\nI would love to see you again. Choose a time that works for you below.'
+  when '10000000-0000-4000-8000-000000000002'::uuid then
+    E'Hi {{first_name}},\n\nI have something special available for a limited time. Book your next visit below.'
+  when '10000000-0000-4000-8000-000000000003'::uuid then
+    E'Hi {{first_name}},\n\nIf someone comes to mind, you can share your personal referral link below.'
+  else message
+end
+where id in (
+  '10000000-0000-4000-8000-000000000001'::uuid,
+  '10000000-0000-4000-8000-000000000002'::uuid,
+  '10000000-0000-4000-8000-000000000003'::uuid
+);
+
+create table if not exists public.outreach_schema_versions (
+  component text primary key,
+  version text not null,
+  applied_at timestamptz not null default now(),
+  constraint outreach_schema_versions_component_not_blank check (btrim(component) <> ''),
+  constraint outreach_schema_versions_version_not_blank check (btrim(version) <> '')
+);
+
+alter table public.outreach_schema_versions enable row level security;
+
+insert into public.outreach_schema_versions (component, version, applied_at)
+values ('campaign_authoring', 'outreach_corrective_pass_2026_07_18', now())
+on conflict (component) do update
+set version = excluded.version,
+    applied_at = excluded.applied_at;
+
+revoke all on table public.outreach_schema_versions from anon, authenticated;
+grant select on table public.outreach_schema_versions to service_role;
+
+-- Migration 202607180005_campaign_submission_and_cancellation.sql
+create or replace function public.sync_initial_campaign_run()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.campaign_runs set
+    status = new.status,
+    scheduled_for = case when new.send_mode = 'now' and new.status = 'scheduled'
+      then coalesce(campaign_runs.scheduled_for, new.scheduled_at, now()) else new.scheduled_for end,
+    started_at = case when new.status = 'sending' then new.sending_started_at else started_at end,
+    completed_at = case when new.status in ('completed', 'partially_failed', 'failed') then new.completed_at else completed_at end,
+    cancelled_at = case when new.status = 'cancelled' then new.cancelled_at else cancelled_at end
+  where campaign_id = new.id and user_id = new.user_id and sequence_number = 1;
+  return new;
+end;
+$$;
+
+create or replace function public.submit_campaign(
+  p_user_id uuid, p_campaign_id uuid, p_expected_revision integer, p_expected_send_mode text,
+  p_validation_nonce_hash text, p_idempotency_key text, p_request_hash text, p_recipients jsonb
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_campaign public.campaigns%rowtype; v_run public.campaign_runs%rowtype;
+  v_idempotency public.campaign_idempotency_records%rowtype; v_response jsonb;
+  v_total integer; v_eligible integer; v_excluded integer;
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then raise exception using errcode = '42501', message = 'campaign_owner_mismatch'; end if;
+  if p_expected_send_mode not in ('now', 'scheduled') then raise exception using errcode = '22023', message = 'invalid_campaign_send_mode'; end if;
+  if p_idempotency_key is null or char_length(trim(p_idempotency_key)) = 0 then raise exception using errcode = '22023', message = 'campaign_idempotency_key_required'; end if;
+  select * into v_idempotency from public.campaign_idempotency_records
+    where user_id = p_user_id and scope = 'campaign_submit' and idempotency_key = p_idempotency_key for update;
+  if found then
+    if v_idempotency.request_hash <> p_request_hash then raise exception using errcode = 'P0001', message = 'campaign_idempotency_key_reused'; end if;
+    if v_idempotency.completed_at is not null then return v_idempotency.response_body; end if;
+    raise exception using errcode = 'P0001', message = 'campaign_idempotency_in_progress';
+  end if;
+  insert into public.campaign_idempotency_records (user_id, scope, idempotency_key, request_hash, locked_at, expires_at)
+    values (p_user_id, 'campaign_submit', p_idempotency_key, p_request_hash, now(), now() + interval '24 hours');
+  select * into v_campaign from public.campaigns where id = p_campaign_id and user_id = p_user_id for update;
+  if not found then raise exception using errcode = 'P0002', message = 'campaign_draft_not_found'; end if;
+  if v_campaign.status <> 'draft' then raise exception using errcode = 'P0001', message = 'campaign_not_draft'; end if;
+  if v_campaign.revision <> p_expected_revision then raise exception using errcode = 'P0001', message = 'campaign_revision_conflict', detail = json_build_object('current_revision', v_campaign.revision)::text; end if;
+  if v_campaign.send_mode <> p_expected_send_mode then raise exception using errcode = 'P0001', message = 'campaign_send_mode_mismatch'; end if;
+  if v_campaign.validation_nonce_hash is null or v_campaign.validation_nonce_hash <> p_validation_nonce_hash then raise exception using errcode = 'P0001', message = 'campaign_validation_invalid'; end if;
+  if v_campaign.name is null or v_campaign.link_type is null or v_campaign.subject_snapshot is null or v_campaign.message_snapshot is null or (v_campaign.send_mode = 'scheduled' and v_campaign.scheduled_for is null) then raise exception using errcode = 'P0001', message = 'campaign_submission_incomplete'; end if;
+  if jsonb_typeof(p_recipients) <> 'array' or jsonb_array_length(p_recipients) = 0 then raise exception using errcode = 'P0001', message = 'campaign_has_no_eligible_recipients'; end if;
+  select count(*), count(*) filter (where value->>'eligibility_status' = 'eligible'), count(*) filter (where value->>'eligibility_status' = 'excluded')
+    into v_total, v_eligible, v_excluded from jsonb_array_elements(p_recipients);
+  if v_eligible = 0 then raise exception using errcode = 'P0001', message = 'campaign_has_no_eligible_recipients'; end if;
+  update public.campaigns set status = 'scheduled', scheduled_at = now(), validation_nonce_hash = null where id = v_campaign.id and user_id = p_user_id returning * into v_campaign;
+  select * into v_run from public.campaign_runs where campaign_id = v_campaign.id and user_id = p_user_id and sequence_number = 1 for update;
+  insert into public.campaign_recipients (campaign_id, campaign_run_id, user_id, client_id, recipient_email_snapshot, first_name_snapshot, eligibility_status, exclusion_reason, subject_snapshot, rendered_text_snapshot, rendered_html_snapshot, render_version, status, idempotency_key, queued_at, skipped_at)
+  select v_campaign.id, v_run.id, p_user_id, nullif(value->>'client_id', '')::uuid, nullif(value->>'recipient_email_snapshot', ''), nullif(value->>'first_name_snapshot', ''), value->>'eligibility_status', nullif(value->>'exclusion_reason', ''), nullif(value->>'subject_snapshot', ''), nullif(value->>'rendered_text_snapshot', ''), nullif(value->>'rendered_html_snapshot', ''), coalesce((value->>'render_version')::integer, 1), case when value->>'eligibility_status' = 'eligible' then 'queued' else 'skipped' end, value->>'idempotency_key', case when value->>'eligibility_status' = 'eligible' then now() else null end, case when value->>'eligibility_status' = 'excluded' then now() else null end from jsonb_array_elements(p_recipients);
+  update public.campaign_runs set status = 'scheduled', scheduled_for = case when v_campaign.send_mode = 'now' then coalesce(scheduled_for, v_campaign.scheduled_at, now()) else v_campaign.scheduled_for end, recipient_total = v_total, eligible_count = v_eligible, excluded_count = v_excluded, pending_count = 0, sending_count = 0, sent_count = 0, failed_count = 0 where id = v_run.id and campaign_id = v_campaign.id and user_id = p_user_id returning * into v_run;
+  v_response = jsonb_build_object('campaign_id', v_campaign.id, 'run_id', v_run.id, 'status', v_campaign.status, 'send_mode', v_campaign.send_mode, 'scheduled_for', coalesce(v_campaign.scheduled_for, v_run.scheduled_for), 'recipient_total', v_total, 'eligible_count', v_eligible, 'excluded_count', v_excluded);
+  update public.campaign_idempotency_records set response_status = 200, response_body = v_response, resource_type = 'campaign_run', resource_id = v_run.id, completed_at = now() where user_id = p_user_id and scope = 'campaign_submit' and idempotency_key = p_idempotency_key;
+  return v_response;
+end;
+$$;
+
+create or replace function public.cancel_campaign_submission(p_user_id uuid, p_campaign_id uuid, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_campaign public.campaigns%rowtype; v_cancelled integer;
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then raise exception using errcode = '42501', message = 'campaign_owner_mismatch'; end if;
+  select * into v_campaign from public.campaigns where id = p_campaign_id and user_id = p_user_id for update;
+  if not found then raise exception using errcode = 'P0002', message = 'campaign_not_found'; end if;
+  if v_campaign.status = 'cancelled' then return jsonb_build_object('campaign_id', v_campaign.id, 'status', 'cancelled', 'cancelled_recipients', 0); end if;
+  if v_campaign.status = 'sending' then raise exception using errcode = 'P0001', message = 'campaign_already_sending'; end if;
+  if v_campaign.status <> 'scheduled' then raise exception using errcode = 'P0001', message = 'campaign_not_cancellable'; end if;
+  update public.campaigns set status = 'cancelled', cancelled_at = now(), cancelled_reason = nullif(left(trim(coalesce(p_reason, '')), 1000), '') where id = v_campaign.id and user_id = p_user_id;
+  update public.campaign_recipients set status = 'cancelled', cancelled_at = now() where campaign_id = v_campaign.id and user_id = p_user_id and status in ('pending', 'queued'); get diagnostics v_cancelled = row_count;
+  return jsonb_build_object('campaign_id', v_campaign.id, 'status', 'cancelled', 'cancelled_recipients', v_cancelled);
+end;
+$$;
+
+insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_submission_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+revoke all on function public.submit_campaign(uuid, uuid, integer, text, text, text, text, jsonb) from public;
+revoke all on function public.cancel_campaign_submission(uuid, uuid, text) from public;
+grant execute on function public.submit_campaign(uuid, uuid, integer, text, text, text, text, jsonb) to authenticated, service_role;
+grant execute on function public.cancel_campaign_submission(uuid, uuid, text) to authenticated, service_role;
+
+-- Migration 202607180006_campaign_booking_attribution.sql
+alter table public.appointments
+  add column if not exists campaign_id uuid,
+  add column if not exists campaign_run_id uuid,
+  add column if not exists campaign_recipient_id uuid,
+  add column if not exists campaign_attributed_at timestamptz;
+alter table public.appointments
+  add constraint appointments_campaign_fkey foreign key (campaign_id) references public.campaigns(id) on delete set null,
+  add constraint appointments_campaign_run_fkey foreign key (campaign_run_id) references public.campaign_runs(id) on delete set null,
+  add constraint appointments_campaign_recipient_fkey foreign key (campaign_recipient_id) references public.campaign_recipients(id) on delete set null;
+create index appointments_campaign_attribution_idx on public.appointments(campaign_id, campaign_attributed_at desc) where campaign_id is not null and status <> 'cancelled';
+create index campaign_recipients_tracking_token_idx on public.campaign_recipients(booking_tracking_token_hash) where booking_tracking_token_hash is not null;
+insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_booking_attribution_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+
+-- Migration 202607180007_campaign_delivery_worker.sql
+create or replace function public.claim_campaign_recipients(p_limit integer, p_stale_before timestamptz, p_max_attempts integer default 3)
+returns setof public.campaign_recipients language plpgsql security definer set search_path = public as $$
+begin
+  return query
+  with candidates as (
+    select r.id from public.campaign_recipients r
+    join public.campaigns c on c.id = r.campaign_id and c.user_id = r.user_id
+    join public.campaign_runs run on run.id = r.campaign_run_id and run.campaign_id = r.campaign_id
+    where c.status in ('scheduled', 'sending') and run.status in ('scheduled', 'sending')
+      and (run.scheduled_for is null or run.scheduled_for <= now())
+      and (r.status = 'queued' or (r.status = 'failed' and r.attempt_count < greatest(1, least(p_max_attempts, 10))) or (r.status = 'sending' and r.sending_started_at < p_stale_before))
+    order by coalesce(r.queued_at, r.created_at), r.id
+    limit greatest(1, least(p_limit, 100)) for update of r, c, run skip locked
+  ), claimed as (
+    update public.campaign_recipients r set status = 'sending', attempt_count = attempt_count + 1,
+      last_attempt_at = now(), sending_started_at = now(), error_code = null, error_message = null
+    from candidates where r.id = candidates.id returning r.*
+  ), runs as (
+    update public.campaign_runs run set status = 'sending', started_at = coalesce(started_at, now())
+    where run.id in (select campaign_run_id from claimed) and run.status = 'scheduled'
+  ), campaigns as (
+    update public.campaigns c set status = 'sending', sending_started_at = coalesce(sending_started_at, now())
+    where c.id in (select campaign_id from claimed) and c.status = 'scheduled'
+  ) select * from claimed;
+end;
+$$;
+create or replace function public.validate_campaign_recipient_status_transition()
+returns trigger language plpgsql as $$
+begin
+  if new.status = old.status then return new; end if;
+  if not ((old.status = 'pending' and new.status in ('queued', 'skipped', 'cancelled'))
+    or (old.status = 'queued' and new.status in ('sending', 'skipped', 'cancelled'))
+    or (old.status = 'sending' and new.status in ('sent', 'failed', 'skipped'))
+    or (old.status = 'sent' and new.status in ('delivered', 'failed'))
+    or (old.status = 'failed' and new.status in ('queued', 'sending', 'skipped', 'cancelled'))) then
+    raise exception using errcode = '23514', message = 'invalid_campaign_recipient_status_transition';
+  end if;
+  return new;
+end;
+$$;
+create or replace function public.finalize_campaign_runs(p_run_ids uuid[], p_max_attempts integer default 3)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_run record; v_pending integer; v_failed integer; v_sent integer; v_status text;
+begin
+  for v_run in select id, campaign_id, user_id from public.campaign_runs where id = any(p_run_ids) for update loop
+    select count(*) filter (where status in ('pending','queued','sending') or (status = 'failed' and attempt_count < greatest(1, least(p_max_attempts, 10)))), count(*) filter (where status = 'failed'), count(*) filter (where status in ('sent','delivered')) into v_pending, v_failed, v_sent from public.campaign_recipients where campaign_run_id = v_run.id;
+    if v_pending > 0 then continue; end if;
+    v_status := case when v_sent = 0 and v_failed > 0 then 'failed' when v_failed > 0 then 'partially_failed' else 'completed' end;
+    update public.campaign_runs set status = v_status, completed_at = now(), pending_count = 0, sending_count = 0, sent_count = v_sent, failed_count = v_failed where id = v_run.id;
+    update public.campaigns set status = v_status, completed_at = now(), failure_summary = jsonb_build_object('sent_count', v_sent, 'failed_count', v_failed) where id = v_run.campaign_id and user_id = v_run.user_id;
+  end loop;
+end;
+$$;
+insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_delivery_worker_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+grant execute on function public.claim_campaign_recipients(integer, timestamptz, integer) to service_role;
+grant execute on function public.finalize_campaign_runs(uuid[], integer) to service_role;
+
+-- Migration 202607180008_campaign_reporting.sql
+create or replace function public.get_campaign_reporting_summaries(p_user_id uuid, p_campaign_ids uuid[])
+returns table (campaign_id uuid, recipient_total bigint, eligible_count bigint, excluded_count bigint,
+  pending_count bigint, queued_count bigint, sending_count bigint, sent_count bigint, delivered_count bigint,
+  failed_count bigint, skipped_count bigint, cancelled_count bigint, attributed_booking_count bigint, booked_revenue_cents bigint)
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then
+    raise exception using errcode = '42501', message = 'campaign_owner_mismatch';
+  end if;
+  return query
+  select c.id, coalesce(r.recipient_total, 0), coalesce(r.eligible_count, 0), coalesce(r.excluded_count, 0),
+    coalesce(r.pending_count, 0), coalesce(r.queued_count, 0), coalesce(r.sending_count, 0), coalesce(r.sent_count, 0),
+    coalesce(r.delivered_count, 0), coalesce(r.failed_count, 0), coalesce(r.skipped_count, 0), coalesce(r.cancelled_count, 0),
+    coalesce(a.attributed_booking_count, 0), coalesce(a.booked_revenue_cents, 0)
+  from public.campaigns c
+  left join lateral (
+    select count(*)::bigint as recipient_total, count(*) filter (where eligibility_status = 'eligible')::bigint as eligible_count,
+      count(*) filter (where eligibility_status = 'excluded')::bigint as excluded_count, count(*) filter (where status = 'pending')::bigint as pending_count,
+      count(*) filter (where status = 'queued')::bigint as queued_count, count(*) filter (where status = 'sending')::bigint as sending_count,
+      count(*) filter (where status = 'sent')::bigint as sent_count, count(*) filter (where status = 'delivered')::bigint as delivered_count,
+      count(*) filter (where status = 'failed')::bigint as failed_count, count(*) filter (where status = 'skipped')::bigint as skipped_count,
+      count(*) filter (where status = 'cancelled')::bigint as cancelled_count
+    from public.campaign_recipients r where r.campaign_id = c.id and r.user_id = p_user_id
+  ) r on true
+  left join lateral (
+    select count(*)::bigint as attributed_booking_count, coalesce(sum(round(coalesce(a.price, 0) * 100))::bigint, 0)::bigint as booked_revenue_cents
+    from public.appointments a where a.campaign_id = c.id and a.user_id = p_user_id and a.status <> 'cancelled'
+  ) a on true
+  where c.user_id = p_user_id and c.id = any(p_campaign_ids);
+end;
+$$;
+insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_reporting_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+revoke all on function public.get_campaign_reporting_summaries(uuid, uuid[]) from public;
+grant execute on function public.get_campaign_reporting_summaries(uuid, uuid[]) to authenticated, service_role;
+
+-- Migration 202607180009_campaign_delivery_analytics.sql
+create table public.campaign_delivery_events (
+  id uuid primary key default gen_random_uuid(), campaign_id uuid not null, campaign_recipient_id uuid not null, user_id uuid not null,
+  provider text not null, provider_event_id text not null, provider_message_id text, event_type text not null, occurred_at timestamptz not null,
+  url text, is_automated boolean not null default false, privacy_limited boolean not null default false, provider_payload jsonb, created_at timestamptz not null default now(),
+  constraint campaign_delivery_events_campaign_fkey foreign key (campaign_id, user_id) references public.campaigns(id, user_id) on delete cascade,
+  constraint campaign_delivery_events_recipient_fkey foreign key (campaign_recipient_id) references public.campaign_recipients(id) on delete cascade,
+  constraint campaign_delivery_events_provider_event_unique unique (provider, provider_event_id),
+  constraint campaign_delivery_events_type_check check (event_type in ('delivered', 'opened', 'clicked', 'bounced', 'complained')),
+  constraint campaign_delivery_events_provider_check check (char_length(trim(provider)) between 1 and 80),
+  constraint campaign_delivery_events_provider_event_check check (char_length(trim(provider_event_id)) between 1 and 255),
+  constraint campaign_delivery_events_provider_message_check check (provider_message_id is null or char_length(provider_message_id) <= 255),
+  constraint campaign_delivery_events_url_check check (url is null or char_length(url) <= 4000)
+);
+create index campaign_delivery_events_campaign_type_idx on public.campaign_delivery_events(campaign_id, event_type, occurred_at desc);
+create index campaign_delivery_events_recipient_type_idx on public.campaign_delivery_events(campaign_recipient_id, event_type, occurred_at desc);
+create index campaign_delivery_events_provider_message_idx on public.campaign_delivery_events(provider, provider_message_id) where provider_message_id is not null;
+alter table public.campaign_delivery_events enable row level security;
+create policy campaign_delivery_events_owner_select on public.campaign_delivery_events for select using (auth.uid() = user_id);
+revoke all on table public.campaign_delivery_events from anon, authenticated;
+grant select, insert, update, delete on table public.campaign_delivery_events to service_role;
+create or replace function public.get_campaign_reporting_summaries_v2(p_user_id uuid, p_campaign_ids uuid[])
+returns table (campaign_id uuid, recipient_total bigint, eligible_count bigint, excluded_count bigint, pending_count bigint, queued_count bigint, sending_count bigint, sent_count bigint, delivered_count bigint, failed_count bigint, skipped_count bigint, cancelled_count bigint, attributed_booking_count bigint, booked_revenue_cents bigint, delivered_raw bigint, opens_raw bigint, opens_unique bigint, opens_automated bigint, opens_privacy_limited bigint, clicks_raw bigint, clicks_unique bigint, clicks_automated bigint, clicks_privacy_limited bigint)
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then raise exception using errcode = '42501', message = 'campaign_owner_mismatch'; end if;
+  return query
+  select c.id, coalesce(r.recipient_total, 0), coalesce(r.eligible_count, 0), coalesce(r.excluded_count, 0), coalesce(r.pending_count, 0), coalesce(r.queued_count, 0), coalesce(r.sending_count, 0), coalesce(r.sent_count, 0), coalesce(r.delivered_count, 0), coalesce(r.failed_count, 0), coalesce(r.skipped_count, 0), coalesce(r.cancelled_count, 0), coalesce(a.attributed_booking_count, 0), coalesce(a.booked_revenue_cents, 0), coalesce(e.delivered_raw, 0), coalesce(e.opens_raw, 0), coalesce(e.opens_unique, 0), coalesce(e.opens_automated, 0), coalesce(e.opens_privacy_limited, 0), coalesce(e.clicks_raw, 0), coalesce(e.clicks_unique, 0), coalesce(e.clicks_automated, 0), coalesce(e.clicks_privacy_limited, 0)
+  from public.campaigns c
+  left join lateral (select count(*)::bigint recipient_total, count(*) filter (where eligibility_status = 'eligible')::bigint eligible_count, count(*) filter (where eligibility_status = 'excluded')::bigint excluded_count, count(*) filter (where status = 'pending')::bigint pending_count, count(*) filter (where status = 'queued')::bigint queued_count, count(*) filter (where status = 'sending')::bigint sending_count, count(*) filter (where status = 'sent')::bigint sent_count, count(*) filter (where status = 'delivered')::bigint delivered_count, count(*) filter (where status = 'failed')::bigint failed_count, count(*) filter (where status = 'skipped')::bigint skipped_count, count(*) filter (where status = 'cancelled')::bigint cancelled_count from public.campaign_recipients r where r.campaign_id = c.id and r.user_id = p_user_id) r on true
+  left join lateral (select count(*)::bigint attributed_booking_count, coalesce(sum(round(coalesce(a.price, 0) * 100))::bigint, 0)::bigint booked_revenue_cents from public.appointments a where a.campaign_id = c.id and a.user_id = p_user_id and a.status <> 'cancelled') a on true
+  left join lateral (select count(*) filter (where event_type = 'delivered')::bigint delivered_raw, count(*) filter (where event_type = 'opened')::bigint opens_raw, count(distinct campaign_recipient_id) filter (where event_type = 'opened')::bigint opens_unique, count(*) filter (where event_type = 'opened' and is_automated)::bigint opens_automated, count(*) filter (where event_type = 'opened' and privacy_limited)::bigint opens_privacy_limited, count(*) filter (where event_type = 'clicked')::bigint clicks_raw, count(distinct campaign_recipient_id) filter (where event_type = 'clicked')::bigint clicks_unique, count(*) filter (where event_type = 'clicked' and is_automated)::bigint clicks_automated, count(*) filter (where event_type = 'clicked' and privacy_limited)::bigint clicks_privacy_limited from public.campaign_delivery_events e where e.campaign_id = c.id and e.user_id = p_user_id) e on true
+  where c.user_id = p_user_id and c.id = any(p_campaign_ids);
+end;
+$$;
+insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_delivery_analytics_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+revoke all on function public.get_campaign_reporting_summaries_v2(uuid, uuid[]) from public;
+grant execute on function public.get_campaign_reporting_summaries_v2(uuid, uuid[]) to authenticated, service_role;

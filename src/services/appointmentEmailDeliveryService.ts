@@ -15,6 +15,7 @@ import { activityEventsService } from "./activityEventsService";
 import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
+import { appointmentReminderSuppressionsService } from "./appointmentReminderSuppressionsService";
 import { notificationEventsService, type NotificationType } from "./notificationEventsService";
 
 export interface EmailMessage {
@@ -23,6 +24,8 @@ export interface EmailMessage {
   text: string;
   html: string;
   attachments?: EmailAttachment[];
+  /** Stable recipient key for providers that support idempotent submission. */
+  idempotencyKey?: string;
 }
 
 export interface EmailAttachment {
@@ -129,7 +132,7 @@ const noopEmailProvider: EmailProvider = {
   }
 };
 
-const createResendEmailProvider = (): EmailProvider | null => {
+export const createResendEmailProvider = (): EmailProvider | null => {
   const apiKey = getString(env.RESEND_API_KEY, "");
   const from = getString(env.EMAIL_FROM, "");
   const replyTo = getString(env.EMAIL_REPLY_TO, "");
@@ -148,6 +151,7 @@ const createResendEmailProvider = (): EmailProvider | null => {
         subject: message.subject,
         text: message.text,
         html: message.html,
+        ...(message.idempotencyKey ? { headers: { "Idempotency-Key": message.idempotencyKey } } : {}),
         ...(message.attachments?.length
           ? {
             attachments: message.attachments.map((attachment) => ({
@@ -847,6 +851,10 @@ const getAppointmentReminderSkipReason = async (emailEvent: Row): Promise<string
 
   if (!userId || !appointmentId || !queuedStartTime) {
     return "appointment_reminder_missing_appointment_context";
+  }
+
+  if (await appointmentReminderSuppressionsService.isSuppressed(userId, appointmentId, queuedStartTime)) {
+    return "appointment_reminder_cancelled";
   }
 
   const { data, error } = await supabaseAdmin

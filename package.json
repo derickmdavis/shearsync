@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "process:appointment-emails": "node dist/scripts/processAppointmentEmails.js",
+    "process:campaign-deliveries": "node dist/scripts/processCampaignDeliveries.js",
     "cleanup:api-request-logs": "node dist/scripts/cleanupApiRequestLogs.js",
     "smoke:appointment-images-storage": "tsx src/scripts/smokeAppointmentImageStorage.ts",
     "typecheck": "tsc --noEmit",

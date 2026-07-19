@@ -27,7 +27,8 @@ const envSchema = z.object({
   API_REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
-  EMAIL_REPLY_TO: z.string().email().optional()
+  EMAIL_REPLY_TO: z.string().email().optional(),
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional()
 });
 
 export type AppEnvironment = "development" | "test" | "staging" | "production";

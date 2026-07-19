@@ -169,7 +169,17 @@ export const accountDeletionService = {
         .from("appointment_email_events")
         .update({ status: "skipped", error: "account_deletion_requested" })
         .eq("user_id", userId)
-        .in("status", ["queued", "sending", "failed"])
+        .in("status", ["queued", "sending", "failed"]),
+      supabaseAdmin
+        .from("campaigns")
+        .update({ status: "cancelled", cancelled_at: nowIso, cancelled_reason: "account_deletion_requested" })
+        .eq("user_id", userId)
+        .in("status", ["draft", "scheduled"]),
+      supabaseAdmin
+        .from("campaign_recipients")
+        .update({ status: "cancelled", cancelled_at: nowIso, error_code: "account_deletion_requested" })
+        .eq("user_id", userId)
+        .in("status", ["pending", "queued", "failed"])
     ];
 
     const results = await Promise.all(updates);

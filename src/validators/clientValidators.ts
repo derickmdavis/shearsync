@@ -43,7 +43,8 @@ export const listClientsQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).default(25),
   sort: listClientSortSchema.default("updated_at"),
   direction: z.enum(["asc", "desc"]).default("desc"),
-  filter: listClientFilterSchema.default("all")
+  filter: listClientFilterSchema.default("all"),
+  campaign_eligibility: z.literal("email_marketing").optional()
 });
 
 export const createClientReferralLinkSchema = z.object({
