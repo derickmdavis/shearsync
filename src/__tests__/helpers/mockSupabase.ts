@@ -905,6 +905,77 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
         }
         return { data: cloneRow(settings), error: null };
 
+      case "get_insights_campaign_aggregate": {
+        const startAt = String(args.p_start_at ?? "");
+        const endAt = String(args.p_end_at ?? "");
+        const campaigns = getRows(state, "campaigns").filter((row) => row.user_id === userId);
+        const sentByCampaign = new Map<string, number>();
+        const bookingsByCampaign = new Map<string, { count: number; revenueMinor: number }>();
+
+        for (const recipient of getRows(state, "campaign_recipients")) {
+          const campaignId = typeof recipient.campaign_id === "string" ? recipient.campaign_id : null;
+          const sentAt = typeof recipient.sent_at === "string" ? recipient.sent_at : null;
+          if (recipient.user_id === userId && campaignId && sentAt && sentAt >= startAt && sentAt < endAt) {
+            sentByCampaign.set(campaignId, (sentByCampaign.get(campaignId) ?? 0) + 1);
+          }
+        }
+
+        for (const appointment of getRows(state, "appointments")) {
+          const campaignId = typeof appointment.campaign_id === "string" ? appointment.campaign_id : null;
+          const attributedAt = typeof appointment.campaign_attributed_at === "string" ? appointment.campaign_attributed_at : null;
+          if (
+            appointment.user_id === userId
+            && campaignId
+            && appointment.status !== "cancelled"
+            && attributedAt
+            && attributedAt >= startAt
+            && attributedAt < endAt
+          ) {
+            const current = bookingsByCampaign.get(campaignId) ?? { count: 0, revenueMinor: 0 };
+            const price = Number(appointment.price ?? 0);
+            bookingsByCampaign.set(campaignId, {
+              count: current.count + 1,
+              revenueMinor: current.revenueMinor + (Number.isFinite(price) ? Math.round(price * 100) : 0)
+            });
+          }
+        }
+
+        const metricCampaigns = campaigns
+          .filter((campaign) => sentByCampaign.has(String(campaign.id)) || bookingsByCampaign.has(String(campaign.id)))
+          .map((campaign) => {
+            const campaignId = String(campaign.id);
+            const bookings = bookingsByCampaign.get(campaignId) ?? { count: 0, revenueMinor: 0 };
+            return {
+              campaign,
+              emailsSent: sentByCampaign.get(campaignId) ?? 0,
+              appointmentsBooked: bookings.count,
+              attributedRevenueMinor: bookings.revenueMinor
+            };
+          });
+        const top = [...metricCampaigns].sort((left, right) =>
+          right.attributedRevenueMinor - left.attributedRevenueMinor
+          || right.appointmentsBooked - left.appointmentsBooked
+          || right.emailsSent - left.emailsSent
+          || String(left.campaign.id).localeCompare(String(right.campaign.id))
+        )[0];
+
+        return {
+          data: [{
+            campaign_count: metricCampaigns.length,
+            active_campaign_count: campaigns.filter((campaign) => campaign.status === "scheduled" || campaign.status === "sending").length,
+            emails_sent: metricCampaigns.reduce((total, campaign) => total + campaign.emailsSent, 0),
+            appointments_booked: metricCampaigns.reduce((total, campaign) => total + campaign.appointmentsBooked, 0),
+            attributed_revenue_minor: metricCampaigns.reduce((total, campaign) => total + campaign.attributedRevenueMinor, 0),
+            top_campaign_id: top?.campaign.id ?? null,
+            top_campaign_name: top?.campaign.name ?? null,
+            top_campaign_status: top?.campaign.status ?? null,
+            top_campaign_appointments_booked: top?.appointmentsBooked ?? 0,
+            top_campaign_attributed_revenue_minor: top?.attributedRevenueMinor ?? 0
+          }],
+          error: null
+        };
+      }
+
       case "upsert_thank_you_email_settings_with_approval_mode":
         settings = upsertByUserId(state, "thank_you_email_settings", {
           user_id: userId,

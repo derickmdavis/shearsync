@@ -69,6 +69,7 @@ export type ClientReferralStats = {
 };
 
 export type ActivityReferralStatsRange = "this_month";
+export type InsightsReferralStatsRange = "this_month" | "all_time";
 
 export type ActivityReferralStats = {
   hasReferralData: boolean;
@@ -80,6 +81,27 @@ export type ActivityReferralStats = {
   referralConversionRate: number;
   linksSent: number;
   linksClicked: number;
+  topReferrer: {
+    clientId: string;
+    displayName: string;
+    referralCount: number;
+  } | null;
+};
+
+export type InsightsReferralStats = {
+  period: {
+    label: "This Month" | "All Time";
+    startAt: string;
+    endAt: string;
+  };
+  newClients: number;
+  appointmentsBooked: number;
+  conversionRatePercent: number | null;
+  linksSent: number;
+  linksClicked: number;
+  attributedRevenueMinor: number;
+  bookedValueMinor: number;
+  currency: "USD";
   topReferrer: {
     clientId: string;
     displayName: string;
@@ -117,6 +139,30 @@ const getThisMonthRange = async (userId: string): Promise<{ startIso: string; en
   return {
     startIso: getStartOfLocalDayUtc(monthStart, timeZone).toISOString(),
     endIso: getStartOfLocalDayUtc(nextMonthStart, timeZone).toISOString()
+  };
+};
+
+const getInsightsReferralRange = (
+  range: InsightsReferralStatsRange,
+  timeZone: string,
+  now: Date
+): { label: "This Month" | "All Time"; startIso: string; endIso: string } => {
+  if (range === "all_time") {
+    return {
+      label: "All Time",
+      // Explicit lower bound makes the all-time window transportable and avoids
+      // a client having to infer a missing start timestamp.
+      startIso: "1970-01-01T00:00:00.000Z",
+      endIso: now.toISOString()
+    };
+  }
+
+  const today = getCurrentLocalDate(timeZone, now);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  return {
+    label: "This Month",
+    startIso: getStartOfLocalDayUtc(monthStart, timeZone).toISOString(),
+    endIso: now.toISOString()
   };
 };
 
@@ -531,6 +577,99 @@ export const referralLinksService = {
         : 0,
       linksSent,
       linksClicked,
+      topReferrer
+    };
+  },
+
+  async getInsightsReferralStats(
+    userId: string,
+    options: { range: InsightsReferralStatsRange; timeZone: string; now?: Date }
+  ): Promise<InsightsReferralStats> {
+    const period = getInsightsReferralRange(options.range, options.timeZone, options.now ?? new Date());
+
+    const [linksResult, clicksResult, clientsResult, appointmentsResult] = await Promise.all([
+      supabaseAdmin
+        .from("client_referral_links")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .gte("created_at", period.startIso)
+        .lt("created_at", period.endIso),
+      supabaseAdmin
+        .from("referral_events")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("event_type", "opened")
+        .gte("created_at", period.startIso)
+        .lt("created_at", period.endIso),
+      supabaseAdmin
+        .from("clients")
+        .select("id, original_referred_by_client_id, original_referral_attributed_at")
+        .eq("user_id", userId)
+        .not("original_referral_attributed_at", "is", null)
+        .gte("original_referral_attributed_at", period.startIso)
+        .lt("original_referral_attributed_at", period.endIso),
+      supabaseAdmin
+        .from("appointments")
+        .select("id, client_id, referred_by_client_id, referral_link_id, referral_attributed_at, status, price")
+        .eq("user_id", userId)
+        .not("referral_attributed_at", "is", null)
+        .neq("status", "cancelled")
+        .gte("referral_attributed_at", period.startIso)
+        .lt("referral_attributed_at", period.endIso)
+    ]);
+
+    handleSupabaseError(linksResult.error, "Unable to load Insights referral links sent");
+    handleSupabaseError(clicksResult.error, "Unable to load Insights referral link clicks");
+    handleSupabaseError(clientsResult.error, "Unable to load Insights referred clients");
+    handleSupabaseError(appointmentsResult.error, "Unable to load Insights referred appointments");
+
+    const referredClients = (clientsResult.data ?? []) as RowList;
+    const referredAppointments = (appointmentsResult.data ?? []) as RowList;
+    const completedAppointments = referredAppointments.filter((appointment) => appointment.status === "completed");
+    const linksSent = linksResult.count ?? 0;
+    const linksClicked = clicksResult.count ?? 0;
+    const appointmentsBooked = referredAppointments.length;
+    const bookedValueMinor = Math.round(referredAppointments.reduce(
+      (total, appointment) => total + toNumber(appointment.price),
+      0
+    ) * 100);
+    const attributedRevenueMinor = Math.round(completedAppointments.reduce(
+      (total, appointment) => total + toNumber(appointment.price),
+      0
+    ) * 100);
+    const fallbackTopReferrer = getTopReferrerId(referredClients, "original_referred_by_client_id");
+    const topReferrerCandidate = getTopReferrerId(referredAppointments, "referred_by_client_id") ?? fallbackTopReferrer;
+    let topReferrer: InsightsReferralStats["topReferrer"] = null;
+
+    if (topReferrerCandidate) {
+      const { data, error } = await supabaseAdmin
+        .from("clients")
+        .select("id, first_name, last_name, preferred_name")
+        .eq("user_id", userId)
+        .eq("id", topReferrerCandidate.clientId)
+        .maybeSingle();
+      handleSupabaseError(error, "Unable to load Insights top referral client");
+
+      // Do not expose an ID that cannot be proven to belong to this account.
+      if (data) {
+        topReferrer = {
+          clientId: topReferrerCandidate.clientId,
+          displayName: getClientDisplayName(data as Row),
+          referralCount: topReferrerCandidate.referralCount
+        };
+      }
+    }
+
+    return {
+      period: { label: period.label, startAt: period.startIso, endAt: period.endIso },
+      newClients: referredClients.length,
+      appointmentsBooked,
+      conversionRatePercent: linksClicked > 0 ? roundRate((appointmentsBooked / linksClicked) * 100) : null,
+      linksSent,
+      linksClicked,
+      attributedRevenueMinor,
+      bookedValueMinor,
+      currency: "USD",
       topReferrer
     };
   },

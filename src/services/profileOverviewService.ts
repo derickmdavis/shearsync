@@ -4,14 +4,9 @@ import {
   getCurrentLocalDate,
   getLocalDateForInstant,
   getEndOfLocalDayUtc,
-  getLocalDayOfWeekForDate,
   getStartOfLocalDayUtc
 } from "../lib/timezone";
 import {
-  addAppointmentToMetricTotals,
-  calculateAverageTicket,
-  calculateRebookingRate,
-  createAppointmentMetricTotals,
   getAppointmentValue,
   isAppointmentIncludedInMetric
 } from "../lib/appointmentMetrics";
@@ -19,7 +14,6 @@ import { supabaseAdmin } from "../lib/supabase";
 import type {
   BookingSettings,
   ProfileOverviewChartBar,
-  ProfileOverviewMetric,
   ProfileOverviewPeriod,
   ProfileOverviewResponse,
   ServiceCatalogItem
@@ -32,8 +26,13 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { servicesService } from "./servicesService";
 import { stylistsService } from "./stylistsService";
 import { usersService } from "./usersService";
+import {
+  buildProfileOverviewPerformanceMetrics,
+  getBusinessSnapshotPeriodWindow,
+  type BusinessSnapshotAppointment
+} from "./insightsSnapshotService";
 
-interface AppointmentRow extends Row {
+interface AppointmentRow extends Row, BusinessSnapshotAppointment {
   appointment_date: string;
   price: number | string;
   client_id: string | null;
@@ -55,41 +54,14 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2
 });
 
-const percentageFormatter = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0
-});
-
 const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const formatCurrency = (value: number): string => currencyFormatter.format(value);
 
-const formatNumberChange = (current: number, previous: number): string => {
-  const delta = current - previous;
-
-  if (delta === 0) {
-    return "0";
-  }
-
-  return `${delta > 0 ? "↑" : "↓"} ${Math.abs(delta)}`;
-};
-
 const formatPercentChange = (current: number, previous: number): string => {
-  if (previous === 0) {
-    if (current === 0) {
-      return "0%";
-    }
-
-    return "↑ 100%";
-  }
-
+  if (previous === 0) return current === 0 ? "0%" : "↑ 100%";
   const deltaPercent = Math.round(((current - previous) / previous) * 100);
-
-  if (deltaPercent === 0) {
-    return "0%";
-  }
-
-  return `${deltaPercent > 0 ? "↑" : "↓"} ${Math.abs(deltaPercent)}%`;
+  return deltaPercent === 0 ? "0%" : `${deltaPercent > 0 ? "↑" : "↓"} ${Math.abs(deltaPercent)}%`;
 };
 
 const formatMinutes = (minutes: number): string => {
@@ -122,14 +94,6 @@ const formatHoursRange = (startTime: string, endTime: string): string =>
 const formatDayRange = (startDay: number, endDay: number): string =>
   startDay === endDay ? dayLabels[startDay] : `${dayLabels[startDay]} - ${dayLabels[endDay]}`;
 
-const getMonthStartDate = (dateText: string): string => `${dateText.slice(0, 7)}-01`;
-
-const shiftMonthStartDate = (monthStartDate: string, deltaMonths: number): string => {
-  const [yearText, monthText] = monthStartDate.split("-");
-  const shifted = new Date(Date.UTC(Number(yearText), Number(monthText) - 1 + deltaMonths, 1));
-
-  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}-01`;
-};
 
 const getTrimmedString = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -185,54 +149,6 @@ const getAvatarImageId = (user: Row | null): string | null => {
 
 const isWithinRange = (instant: string, startIso: string, endIso: string): boolean =>
   instant >= startIso && instant < endIso;
-
-const buildMetric = (
-  id: string,
-  label: string,
-  value: string,
-  change: string,
-  detail: string
-): ProfileOverviewMetric => ({
-  id,
-  label,
-  value,
-  change,
-  detail
-});
-
-const getPerformanceWindows = (period: ProfileOverviewPeriod, todayDate: string, timeZone: string) => {
-  if (period === "month") {
-    const currentMonthStartDate = getMonthStartDate(todayDate);
-    const previousMonthStartDate = shiftMonthStartDate(currentMonthStartDate, -1);
-    const nextMonthStartDate = shiftMonthStartDate(currentMonthStartDate, 1);
-
-    return {
-      periodLabel: "This Month",
-      comparisonLabel: "vs last month",
-      currentStartIso: getStartOfLocalDayUtc(currentMonthStartDate, timeZone).toISOString(),
-      currentEndIso: getStartOfLocalDayUtc(nextMonthStartDate, timeZone).toISOString(),
-      previousStartIso: getStartOfLocalDayUtc(previousMonthStartDate, timeZone).toISOString(),
-      queryStartIso: getStartOfLocalDayUtc(previousMonthStartDate, timeZone).toISOString(),
-      queryEndIso: getStartOfLocalDayUtc(nextMonthStartDate, timeZone).toISOString()
-    };
-  }
-
-  const dayOfWeek = getLocalDayOfWeekForDate(todayDate, timeZone);
-  const mondayOffset = (dayOfWeek + 6) % 7;
-  const currentWeekStartDate = addDays(todayDate, -mondayOffset);
-  const currentWeekEndDate = addDays(currentWeekStartDate, 7);
-  const previousWeekStartDate = addDays(currentWeekStartDate, -7);
-
-  return {
-    periodLabel: "This Week",
-    comparisonLabel: "vs last week",
-    currentStartIso: getStartOfLocalDayUtc(currentWeekStartDate, timeZone).toISOString(),
-    currentEndIso: getStartOfLocalDayUtc(currentWeekEndDate, timeZone).toISOString(),
-    previousStartIso: getStartOfLocalDayUtc(previousWeekStartDate, timeZone).toISOString(),
-    queryStartIso: getStartOfLocalDayUtc(previousWeekStartDate, timeZone).toISOString(),
-    queryEndIso: getStartOfLocalDayUtc(currentWeekEndDate, timeZone).toISOString()
-  };
-};
 
 const buildBookingRulesSummary = (settings: BookingSettings): { badge: string; detail: string; items: string[] } => {
   const items = [
@@ -333,7 +249,7 @@ export const profileOverviewService = {
     const nextWeekEndIso = getStartOfLocalDayUtc(addDays(todayDate, 7), timeZone).toISOString();
     const nextMonthEndIso = getStartOfLocalDayUtc(addDays(todayDate, 30), timeZone).toISOString();
     const previousThirtyDaysStartIso = getStartOfLocalDayUtc(addDays(todayDate, -30), timeZone).toISOString();
-    const performanceWindows = getPerformanceWindows(performancePeriod, todayDate, timeZone);
+    const performanceWindows = getBusinessSnapshotPeriodWindow(performancePeriod, todayDate, timeZone);
     const appointmentsQueryStartIso =
       previousThirtyDaysStartIso < performanceWindows.queryStartIso ? previousThirtyDaysStartIso : performanceWindows.queryStartIso;
     const appointmentsQueryEndIso =
@@ -371,8 +287,6 @@ export const profileOverviewService = {
     handleSupabaseError(availabilityResult.error, "Unable to load profile overview availability");
 
     const appointments = (appointmentsResult.data ?? []) as AppointmentRow[];
-    const currentPerformanceMetrics = createAppointmentMetricTotals();
-    const previousPerformanceMetrics = createAppointmentMetricTotals();
     let nextWeekRevenue = 0;
     let nextMonthRevenue = 0;
     let nextMonthAppointmentCount = 0;
@@ -408,13 +322,6 @@ export const profileOverviewService = {
         previousThirtyDaysRevenue += price;
       }
 
-      if (isWithinRange(appointmentDate, performanceWindows.currentStartIso, performanceWindows.currentEndIso)) {
-        addAppointmentToMetricTotals(currentPerformanceMetrics, appointment, "booked_revenue");
-      }
-
-      if (isWithinRange(appointmentDate, performanceWindows.previousStartIso, performanceWindows.currentStartIso)) {
-        addAppointmentToMetricTotals(previousPerformanceMetrics, appointment, "booked_revenue");
-      }
     }
 
     const nextSevenChartPoints = chartDateKeys.map((dateText) => chartPointMap.get(dateText) ?? {
@@ -424,48 +331,16 @@ export const profileOverviewService = {
     });
     const chartBars = buildChartBars(nextSevenChartPoints);
     const upcomingRevenueTrend = formatPercentChange(nextMonthRevenue, previousThirtyDaysRevenue);
-    const currentPerformanceRevenue = currentPerformanceMetrics.revenue;
-    const previousPerformanceRevenue = previousPerformanceMetrics.revenue;
-    const currentPerformanceRebookingRate = calculateRebookingRate(currentPerformanceMetrics);
-    const previousPerformanceRebookingRate = calculateRebookingRate(previousPerformanceMetrics);
-    const currentPerformanceAverageTicket = calculateAverageTicket(currentPerformanceMetrics);
-    const previousPerformanceAverageTicket = calculateAverageTicket(previousPerformanceMetrics);
     const bookingSummary = buildBookingRulesSummary(bookingSettings);
     const servicesSummary = buildServicesSummary(services);
     const messagingSummary = buildMessagingSummary();
     const availabilityRows = (availabilityResult.data ?? []) as AvailabilityRow[];
     const availability = buildAvailabilitySummary(availabilityRows);
     const availabilitySettings = mapAvailabilityRowsToSettings(availabilityRows, timeZone);
-    const performanceMetrics = [
-      buildMetric(
-        "revenue",
-        "Booked Revenue",
-        formatCurrency(currentPerformanceRevenue),
-        formatPercentChange(currentPerformanceRevenue, previousPerformanceRevenue),
-        performanceWindows.comparisonLabel
-      ),
-      buildMetric(
-        "appointments",
-        "Appointments",
-        String(currentPerformanceMetrics.count),
-        formatNumberChange(currentPerformanceMetrics.count, previousPerformanceMetrics.count),
-        performanceWindows.comparisonLabel
-      ),
-      buildMetric(
-        "rebooking-rate",
-        "Rebooking Rate",
-        `${percentageFormatter.format(currentPerformanceRebookingRate)}%`,
-        formatPercentChange(currentPerformanceRebookingRate, previousPerformanceRebookingRate),
-        performanceWindows.comparisonLabel
-      ),
-      buildMetric(
-        "avg-ticket",
-        "Avg. Ticket",
-        formatCurrency(currentPerformanceAverageTicket),
-        formatPercentChange(currentPerformanceAverageTicket, previousPerformanceAverageTicket),
-        performanceWindows.comparisonLabel
-      )
-    ];
+    const performanceMetrics = buildProfileOverviewPerformanceMetrics({
+      appointments,
+      periodWindow: performanceWindows
+    });
 
     return {
       avatarImageId: getAvatarImageId(user),

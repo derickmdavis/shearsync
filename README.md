@@ -98,6 +98,7 @@ Authenticated routes:
 - `POST /api/reminders`
 - `PATCH /api/reminders/:id`
 - `GET /api/dashboard`
+- `GET /api/insights?business_snapshot_period=week|month&referral_period=this_month|all_time`
 - `GET /api/calendar?date=YYYY-MM-DD`
 - `GET /api/settings/profile`
 - `PATCH /api/settings/profile`

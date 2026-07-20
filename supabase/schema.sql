@@ -3119,6 +3119,17 @@ create table public.campaign_delivery_events (
 create index campaign_delivery_events_campaign_type_idx on public.campaign_delivery_events(campaign_id, event_type, occurred_at desc);
 create index campaign_delivery_events_recipient_type_idx on public.campaign_delivery_events(campaign_recipient_id, event_type, occurred_at desc);
 create index campaign_delivery_events_provider_message_idx on public.campaign_delivery_events(provider, provider_message_id) where provider_message_id is not null;
+
+-- Insights aggregate indexes: all reporting queries are account-scoped and
+-- bounded to an explicit reporting window.
+create index if not exists insights_appointments_user_date_idx on public.appointments(user_id, appointment_date) where status <> 'cancelled';
+create index if not exists insights_activity_events_user_type_occurred_idx on public.activity_events(user_id, activity_type, occurred_at desc);
+create index if not exists insights_referral_links_user_created_idx on public.client_referral_links(user_id, created_at desc);
+create index if not exists insights_referral_events_user_type_created_idx on public.referral_events(user_id, event_type, created_at desc);
+create index if not exists insights_clients_user_referral_attributed_idx on public.clients(user_id, original_referral_attributed_at desc) where original_referral_attributed_at is not null;
+create index if not exists insights_appointments_user_referral_attributed_idx on public.appointments(user_id, referral_attributed_at desc) where referral_attributed_at is not null and status <> 'cancelled';
+create index if not exists insights_campaign_recipients_user_sent_idx on public.campaign_recipients(user_id, sent_at desc, campaign_id) where sent_at is not null;
+create index if not exists insights_appointments_user_campaign_attributed_idx on public.appointments(user_id, campaign_attributed_at desc, campaign_id) where campaign_id is not null and status <> 'cancelled';
 alter table public.campaign_delivery_events enable row level security;
 create policy campaign_delivery_events_owner_select on public.campaign_delivery_events for select using (auth.uid() = user_id);
 revoke all on table public.campaign_delivery_events from anon, authenticated;
@@ -3138,5 +3149,59 @@ begin
 end;
 $$;
 insert into public.outreach_schema_versions (component, version, applied_at) values ('campaign_authoring', 'campaign_delivery_analytics_2026_07_18', now()) on conflict (component) do update set version = excluded.version, applied_at = excluded.applied_at;
+
+-- Migration 202607200001_insight_snapshot_configurations.sql
+create table if not exists public.insight_snapshot_configurations (
+  id uuid primary key default gen_random_uuid(),
+  configuration_version integer not null,
+  is_active boolean not null default false,
+  enabled boolean not null default true,
+  pages jsonb not null,
+  target_plan_tiers text[],
+  rollout_percentage integer not null default 100,
+  updated_by text not null default 'system',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint insight_snapshot_configurations_version_check check (configuration_version > 0),
+  constraint insight_snapshot_configurations_pages_array_check check (jsonb_typeof(pages) = 'array'),
+  constraint insight_snapshot_configurations_rollout_check check (rollout_percentage between 0 and 100),
+  constraint insight_snapshot_configurations_plan_tiers_check check (target_plan_tiers is null or target_plan_tiers <@ array['basic', 'pro', 'premium']::text[]),
+  constraint insight_snapshot_configurations_updated_by_check check (char_length(trim(updated_by)) between 1 and 255)
+);
+create unique index if not exists insight_snapshot_configurations_one_active_idx on public.insight_snapshot_configurations ((is_active)) where is_active;
+create or replace function public.set_insight_snapshot_configuration_updated_at() returns trigger language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
+drop trigger if exists set_insight_snapshot_configuration_updated_at on public.insight_snapshot_configurations;
+create trigger set_insight_snapshot_configuration_updated_at before update on public.insight_snapshot_configurations for each row execute function public.set_insight_snapshot_configuration_updated_at();
+alter table public.insight_snapshot_configurations enable row level security;
+revoke all on table public.insight_snapshot_configurations from anon, authenticated;
+grant select, insert, update, delete on table public.insight_snapshot_configurations to service_role;
+insert into public.insight_snapshot_configurations (id, configuration_version, is_active, enabled, pages, target_plan_tiers, rollout_percentage, updated_by)
+select '20260720-0000-4000-8000-000000000001'::uuid, 1, true, true, '[{"id":"business_performance","title":"Business Performance","layout":"grid_2x2","period_behavior":"selected_period","enabled":true,"metrics":[{"metric_id":"booked_revenue","enabled":true},{"metric_id":"appointments_booked","enabled":true},{"metric_id":"rebooking_rate","enabled":true},{"metric_id":"average_ticket","enabled":true}]}]'::jsonb, null, 100, 'system:initial-insights-configuration'
+where not exists (select 1 from public.insight_snapshot_configurations where is_active)
+on conflict (id) do nothing;
+
+-- Migration 202607200002_insights_campaign_aggregate.sql
+create or replace function public.get_insights_campaign_aggregate(p_user_id uuid, p_start_at timestamptz, p_end_at timestamptz)
+returns table (campaign_count bigint, active_campaign_count bigint, emails_sent bigint, appointments_booked bigint, attributed_revenue_minor bigint, top_campaign_id uuid, top_campaign_name text, top_campaign_status text, top_campaign_appointments_booked bigint, top_campaign_attributed_revenue_minor bigint)
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and auth.uid() <> p_user_id then raise exception using errcode = '42501', message = 'campaign_owner_mismatch'; end if;
+  return query
+  with sent_by_campaign as (
+    select r.campaign_id, count(*)::bigint as emails_sent from public.campaign_recipients r where r.user_id = p_user_id and r.sent_at >= p_start_at and r.sent_at < p_end_at group by r.campaign_id
+  ), attributed_by_campaign as (
+    select a.campaign_id, count(*)::bigint as appointments_booked, coalesce(sum(round(coalesce(a.price, 0) * 100))::bigint, 0)::bigint as attributed_revenue_minor from public.appointments a where a.user_id = p_user_id and a.campaign_id is not null and a.status <> 'cancelled' and a.campaign_attributed_at >= p_start_at and a.campaign_attributed_at < p_end_at group by a.campaign_id
+  ), period_campaigns as (
+    select campaign_id from sent_by_campaign union select campaign_id from attributed_by_campaign
+  ), campaign_metrics as (
+    select c.id, c.name, c.status, coalesce(sent.emails_sent, 0)::bigint as emails_sent, coalesce(attributed.appointments_booked, 0)::bigint as appointments_booked, coalesce(attributed.attributed_revenue_minor, 0)::bigint as attributed_revenue_minor from period_campaigns period_campaign join public.campaigns c on c.id = period_campaign.campaign_id and c.user_id = p_user_id left join sent_by_campaign sent on sent.campaign_id = c.id left join attributed_by_campaign attributed on attributed.campaign_id = c.id
+  ), top_campaign as (
+    select * from campaign_metrics order by attributed_revenue_minor desc, appointments_booked desc, emails_sent desc, id asc limit 1
+  )
+  select (select count(*)::bigint from campaign_metrics), (select count(*)::bigint from public.campaigns where user_id = p_user_id and status in ('scheduled', 'sending')), coalesce((select sum(emails_sent)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(appointments_booked)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(attributed_revenue_minor)::bigint from campaign_metrics), 0)::bigint, (select id from top_campaign), (select name from top_campaign), (select status from top_campaign), coalesce((select appointments_booked from top_campaign), 0)::bigint, coalesce((select attributed_revenue_minor from top_campaign), 0)::bigint;
+end;
+$$;
+revoke all on function public.get_insights_campaign_aggregate(uuid, timestamptz, timestamptz) from public;
+grant execute on function public.get_insights_campaign_aggregate(uuid, timestamptz, timestamptz) to authenticated, service_role;
 revoke all on function public.get_campaign_reporting_summaries_v2(uuid, uuid[]) from public;
 grant execute on function public.get_campaign_reporting_summaries_v2(uuid, uuid[]) to authenticated, service_role;

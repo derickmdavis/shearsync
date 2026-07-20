@@ -1,0 +1,29 @@
+{
+  "data": {
+    "contract_version": "2026-07-20",
+    "generated_at": "2026-07-20T18:42:00.000Z",
+    "account_timezone": "America/Denver",
+    "business_snapshot": {
+      "available": false,
+      "reason": "insufficient_history",
+      "message": "A comparison period is not available yet."
+    },
+    "campaigns": {
+      "available": false,
+      "reason": "processing",
+      "message": "Campaign reporting is still being prepared.",
+      "retry_after_seconds": 60
+    },
+    "referrals": {
+      "available": false,
+      "reason": "feature_unavailable",
+      "message": "Referral insights are not available for this account."
+    },
+    "appointment_changes": {
+      "available": false,
+      "reason": "temporarily_unavailable",
+      "message": "Appointment changes are temporarily unavailable.",
+      "retry_after_seconds": 30
+    }
+  }
+}

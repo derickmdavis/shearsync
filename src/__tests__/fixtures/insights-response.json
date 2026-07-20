@@ -1,0 +1,81 @@
+{
+  "data": {
+  "contract_version": "2026-07-20",
+  "generated_at": "2026-07-20T18:42:00.000Z",
+  "account_timezone": "America/Denver",
+  "business_snapshot": {
+    "available": true,
+    "calculated_at": "2026-07-20T18:42:00.000Z",
+    "pages": [
+      {
+        "id": "business_performance",
+        "title": "Business Performance",
+        "period_label": "This Week",
+        "layout": "grid_2x2",
+        "window": {
+          "start_at": "2026-07-19T06:00:00.000Z",
+          "end_at": "2026-07-26T06:00:00.000Z"
+        },
+        "metrics": [
+          {
+            "id": "booked_revenue",
+            "label": "Booked Revenue",
+            "value": { "kind": "money", "amount_minor": 124500, "currency": "USD" },
+            "detail": "12 booked appointments",
+            "comparison": { "label": "vs previous week", "percent_change": 12.5, "trend": "up" }
+          },
+          {
+            "id": "appointments_booked",
+            "label": "Appointments Booked",
+            "value": { "kind": "count", "count": 12 },
+            "detail": "2 awaiting approval",
+            "comparison": { "label": "vs previous week", "percent_change": null }
+          },
+          {
+            "id": "rebooking_rate",
+            "label": "Rebooking Rate",
+            "value": { "kind": "percent", "percent": 64.2 },
+            "detail": "9 of 14 eligible clients",
+            "comparison": { "label": "vs previous week", "percent_change": 4.2, "trend": "up" }
+          },
+          {
+            "id": "average_ticket",
+            "label": "Average Ticket",
+            "value": { "kind": "money", "amount_minor": 10375, "currency": "USD" },
+            "detail": "Booked appointments only",
+            "comparison": { "label": "vs previous week", "percent_change": -2.1, "trend": "down" }
+          },
+          {
+            "id": "average_service_time",
+            "label": "Average Service Time",
+            "value": { "kind": "duration", "minutes": 55 },
+            "detail": "Completed appointments"
+          },
+          {
+            "id": "booking_note",
+            "label": "Booking Note",
+            "value": { "kind": "text", "text": "Strong week" }
+          }
+        ]
+      }
+    ]
+  },
+  "campaigns": {
+    "available": false,
+    "reason": "processing",
+    "message": "Campaign reporting is still being prepared.",
+    "retry_after_seconds": 60
+  },
+  "referrals": {
+    "available": false,
+    "reason": "feature_unavailable",
+    "message": "Referral insights are not available for this account."
+  },
+  "appointment_changes": {
+    "available": false,
+    "reason": "temporarily_unavailable",
+    "message": "Appointment changes are temporarily unavailable.",
+    "retry_after_seconds": 30
+  }
+  }
+}
