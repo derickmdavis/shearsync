@@ -101,7 +101,7 @@ const trendFor = (percentChange: number | null): "up" | "down" | "neutral" | und
 };
 
 const moneyDetail = (count: number): string =>
-  `${count} booked appointment${count === 1 ? "" : "s"}`;
+  `${count} booked appt${count === 1 ? "" : "s"}`;
 
 const bookedTotals = (appointments: BusinessSnapshotAppointment[]) =>
   calculateAppointmentMetricTotals(appointments, "booked_revenue");
@@ -131,7 +131,7 @@ export const businessSnapshotMetricCatalog: Readonly<Record<BusinessSnapshotMetr
   },
   appointments_booked: {
     id: "appointments_booked",
-    label: "Appointments Booked",
+    label: "Appts Booked",
     valueKind: "count",
     requiredData: ["appointments"],
     isAvailable: noAvailabilityGate,
@@ -141,7 +141,7 @@ export const businessSnapshotMetricCatalog: Readonly<Record<BusinessSnapshotMetr
       const percentChange = calculatePercentChange(current.count, previous.count);
       return {
         value: { kind: "count", count: current.count },
-        detail: "Pending, scheduled, and completed appointments",
+        detail: "All appointments",
         comparison: { label: input.comparisonLabel, percentChange, trend: trendFor(percentChange) },
         currentNumber: current.count,
         previousNumber: previous.count
@@ -161,7 +161,7 @@ export const businessSnapshotMetricCatalog: Readonly<Record<BusinessSnapshotMetr
       const percentChange = calculatePercentChange(current, previous);
       return {
         value: { kind: "percent", percent: current },
-        detail: "Clients with more than one booked appointment",
+        detail: "Returned clients",
         comparison: { label: input.comparisonLabel, percentChange, trend: trendFor(percentChange) },
         currentNumber: current,
         previousNumber: previous
@@ -181,7 +181,7 @@ export const businessSnapshotMetricCatalog: Readonly<Record<BusinessSnapshotMetr
       const percentChange = calculatePercentChange(current, previous);
       return {
         value: { kind: "money", amount_minor: toMinorUnits(current), currency: input.currency },
-        detail: "Booked appointments only",
+        detail: "Booked appts",
         comparison: { label: input.comparisonLabel, percentChange, trend: trendFor(percentChange) },
         currentNumber: current,
         previousNumber: previous
