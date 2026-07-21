@@ -102,6 +102,11 @@ export type InsightsReferralStats = {
   attributedRevenueMinor: number;
   bookedValueMinor: number;
   currency: "USD";
+  historicalResults: {
+    newClients: number;
+    appointmentsBooked: number;
+    hasSuccessfulConversions: boolean;
+  };
   topReferrer: {
     clientId: string;
     displayName: string;
@@ -587,7 +592,7 @@ export const referralLinksService = {
   ): Promise<InsightsReferralStats> {
     const period = getInsightsReferralRange(options.range, options.timeZone, options.now ?? new Date());
 
-    const [linksResult, clicksResult, clientsResult, appointmentsResult] = await Promise.all([
+    const [linksResult, clicksResult, clientsResult, appointmentsResult, lifetimeClientsResult, lifetimeAppointmentsResult] = await Promise.all([
       supabaseAdmin
         .from("client_referral_links")
         .select("id", { count: "exact", head: true })
@@ -615,13 +620,26 @@ export const referralLinksService = {
         .not("referral_attributed_at", "is", null)
         .neq("status", "cancelled")
         .gte("referral_attributed_at", period.startIso)
-        .lt("referral_attributed_at", period.endIso)
+        .lt("referral_attributed_at", period.endIso),
+      supabaseAdmin
+        .from("clients")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .not("original_referral_attributed_at", "is", null),
+      supabaseAdmin
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .not("referral_attributed_at", "is", null)
+        .neq("status", "cancelled")
     ]);
 
     handleSupabaseError(linksResult.error, "Unable to load Insights referral links sent");
     handleSupabaseError(clicksResult.error, "Unable to load Insights referral link clicks");
     handleSupabaseError(clientsResult.error, "Unable to load Insights referred clients");
     handleSupabaseError(appointmentsResult.error, "Unable to load Insights referred appointments");
+    handleSupabaseError(lifetimeClientsResult.error, "Unable to load lifetime referred clients");
+    handleSupabaseError(lifetimeAppointmentsResult.error, "Unable to load lifetime referred appointments");
 
     const referredClients = (clientsResult.data ?? []) as RowList;
     const referredAppointments = (appointmentsResult.data ?? []) as RowList;
@@ -629,6 +647,8 @@ export const referralLinksService = {
     const linksSent = linksResult.count ?? 0;
     const linksClicked = clicksResult.count ?? 0;
     const appointmentsBooked = referredAppointments.length;
+    const lifetimeNewClients = lifetimeClientsResult.count ?? 0;
+    const lifetimeAppointmentsBooked = lifetimeAppointmentsResult.count ?? 0;
     const bookedValueMinor = Math.round(referredAppointments.reduce(
       (total, appointment) => total + toNumber(appointment.price),
       0
@@ -670,6 +690,11 @@ export const referralLinksService = {
       attributedRevenueMinor,
       bookedValueMinor,
       currency: "USD",
+      historicalResults: {
+        newClients: lifetimeNewClients,
+        appointmentsBooked: lifetimeAppointmentsBooked,
+        hasSuccessfulConversions: lifetimeNewClients > 0 || lifetimeAppointmentsBooked > 0
+      },
       topReferrer
     };
   },

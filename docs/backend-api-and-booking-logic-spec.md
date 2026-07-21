@@ -1274,6 +1274,7 @@ All route declarations are defined in `src/routes/*`. Controllers are in `src/co
   - `smsRemainingThisMonth`
   - `features`
     - includes `appointmentPhotos`, which gates appointment photos, before/after photos, client visual history, and public reference photo uploads
+    - includes `referrals`, which is false for Basic and true for Pro and Premium
   - `settings.waitlistEnabled`
   - `effectiveFeatures.waitlistEnabled`
 

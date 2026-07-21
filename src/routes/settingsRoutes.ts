@@ -11,6 +11,7 @@ import {
   replaceAvailabilitySchema,
   updateRebookNudgeSettingsSchema,
   updateThankYouEmailSettingsSchema,
+  updateReferralProgramSettingsSchema,
   updateAppointmentEmailTemplateSchema,
   updateBookingRulesSchema,
   updateBookingSettingsSchema,
@@ -79,6 +80,12 @@ settingsRouter.patch(
   "/thank-you-emails",
   validate({ body: updateThankYouEmailSettingsSchema }),
   asyncHandler(settingsController.updateThankYouEmailSettings)
+);
+settingsRouter.get("/referrals", asyncHandler(settingsController.getReferralProgramSettings));
+settingsRouter.patch(
+  "/referrals",
+  validate({ body: updateReferralProgramSettingsSchema }),
+  asyncHandler(settingsController.updateReferralProgramSettings)
 );
 settingsRouter.post(
   "/thank-you-emails/preview",

@@ -67,9 +67,26 @@
     "retry_after_seconds": 60
   },
   "referrals": {
-    "available": false,
-    "reason": "feature_unavailable",
-    "message": "Referral insights are not available for this account."
+    "available": true,
+    "calculated_at": "2026-07-20T18:42:00.000Z",
+    "period": {
+      "label": "This Month",
+      "start_at": "2026-07-01T06:00:00.000Z",
+      "end_at": "2026-07-20T18:42:00.000Z"
+    },
+    "new_clients": 0,
+    "appointments_booked": 0,
+    "conversion_rate_percent": null,
+    "links_sent": 2,
+    "links_clicked": 1,
+    "attributed_revenue": { "kind": "money", "amount_minor": 0, "currency": "USD" },
+    "booked_value": { "kind": "money", "amount_minor": 0, "currency": "USD" },
+    "historical_results": {
+      "new_clients": 3,
+      "appointments_booked": 4,
+      "has_successful_conversions": true
+    },
+    "top_referrer": null
   },
   "appointment_changes": {
     "available": false,

@@ -179,8 +179,9 @@ The initial contract also reserves these independently available sections:
   bookings/revenue, canonical active statuses (`scheduled`, `sending`), and an
   optional top campaign ID for authenticated drill-down. It also explicitly
   marks `clients_returned` as `not_implemented`; the client must not infer it.
-- `referrals`: requested period, client/appointment/link counts, money values,
-  nullable conversion rate, and an optional account-owned top-referrer ID.
+- `referrals`: requested-period client/appointment/link counts, money values,
+  nullable conversion rate, an optional account-owned top-referrer ID, and
+  lifetime successful-conversion results.
 - `appointment_changes`: server-selected contiguous current and preceding
   24-hour UTC windows with new-appointment and cancellation counts and nullable
   comparisons.
@@ -218,6 +219,22 @@ integer minor units. `conversion_rate_percent` is referral-attributed booked
 appointments divided by referral-link opens, multiplied by 100; it is `null`
 when there were no opens. The top-referrer client ID is returned only after a
 same-account ownership lookup succeeds.
+
+Every available referral section also returns:
+
+```ts
+historical_results: {
+  new_clients: number;
+  appointments_booked: number;
+  has_successful_conversions: boolean;
+}
+```
+
+These are lifetime aggregates independent of `referral_period`. `new_clients`
+counts clients with `original_referral_attributed_at`; `appointments_booked`
+counts non-cancelled appointments with `referral_attributed_at`.
+`has_successful_conversions` is true when either lifetime count is non-zero.
+Referral link creation, shares, and opens never make this flag true.
 
 ### Appointment-change definitions
 

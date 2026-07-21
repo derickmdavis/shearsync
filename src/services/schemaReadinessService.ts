@@ -61,6 +61,14 @@ const REQUIRED_TABLE_COLUMNS = {
     "created_at",
     "updated_at"
   ],
+  referral_programs: [
+    "user_id",
+    "enabled",
+    "offer_name",
+    "offer_description",
+    "created_at",
+    "updated_at"
+  ],
   appointments: [
     "id",
     "user_id",

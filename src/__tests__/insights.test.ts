@@ -226,6 +226,11 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(month.referrals.period.label, "This Month");
       assert.equal(month.referrals.appointments_booked, 2);
       assert.equal(month.referrals.conversion_rate_percent, 100);
+      assert.deepEqual(month.referrals.historical_results, {
+        new_clients: 2,
+        appointments_booked: 3,
+        has_successful_conversions: true
+      });
       assert.deepEqual(month.referrals.attributed_revenue, { kind: "money", amount_minor: 10000, currency: "USD" });
       assert.deepEqual(month.referrals.booked_value, { kind: "money", amount_minor: 15000, currency: "USD" });
       assert.deepEqual(month.referrals.top_referrer, { client_id: referrerId, display_name: "Sarah Jones", referral_count: 2 });
@@ -241,8 +246,51 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(allTime.referrals.appointments_booked, 3);
       assert.equal(allTime.referrals.links_sent, 2);
       assert.equal(allTime.referrals.links_clicked, 3);
+      assert.deepEqual(allTime.referrals.historical_results, {
+        new_clients: 2,
+        appointments_booked: 3,
+        has_successful_conversions: true
+      });
       assert.deepEqual(allTime.referrals.attributed_revenue, { kind: "money", amount_minor: 30000, currency: "USD" });
       assert.deepEqual(allTime.referrals.booked_value, { kind: "money", amount_minor: 35000, currency: "USD" });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns lifetime referral conversions when the selected period has no results", async () => {
+    const supabase = installMockSupabase({
+      users: [user],
+      insight_snapshot_configurations: [runtimeConfiguration()],
+      activity_events: [],
+      clients: [{
+        id: "40000000-0000-4000-8000-000000000010",
+        user_id: userId,
+        original_referred_by_client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        original_referral_attributed_at: "2026-06-10T12:00:00.000Z"
+      }],
+      appointments: [{
+        id: "50000000-0000-4000-8000-000000000010",
+        user_id: userId,
+        referral_attributed_at: "2026-06-11T12:00:00.000Z",
+        referred_by_client_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        status: "completed",
+        price: 100
+      }]
+    });
+
+    try {
+      const response = await getInsights();
+      assert.equal(response.referrals.available, true);
+      if (!response.referrals.available) throw new Error("Expected available referrals");
+
+      assert.equal(response.referrals.new_clients, 0);
+      assert.equal(response.referrals.appointments_booked, 0);
+      assert.deepEqual(response.referrals.historical_results, {
+        new_clients: 1,
+        appointments_booked: 1,
+        has_successful_conversions: true
+      });
     } finally {
       supabase.restore();
     }

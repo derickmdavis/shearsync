@@ -11,6 +11,7 @@ export type PlanFeatureKey =
   | "rebookNudges"
   | "birthdayReminders"
   | "thankYouEmails"
+  | "referrals"
   | "waitlistMatch"
   | "noShowFollowUp"
   | "customCoverPhoto"
@@ -29,6 +30,7 @@ export interface PlanFeatures {
   rebookNudges: boolean;
   birthdayReminders: boolean;
   thankYouEmails: boolean;
+  referrals: boolean;
   waitlistMatch: boolean;
   noShowFollowUp: boolean;
   customCoverPhoto: boolean;
@@ -76,6 +78,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       rebookNudges: false,
       birthdayReminders: false,
       thankYouEmails: false,
+      referrals: false,
       waitlistMatch: false,
       noShowFollowUp: false,
       customCoverPhoto: false,
@@ -99,6 +102,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       rebookNudges: true,
       birthdayReminders: true,
       thankYouEmails: true,
+      referrals: true,
       waitlistMatch: true,
       noShowFollowUp: true,
       customCoverPhoto: true,
@@ -122,6 +126,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       rebookNudges: true,
       birthdayReminders: true,
       thankYouEmails: true,
+      referrals: true,
       waitlistMatch: true,
       noShowFollowUp: true,
       customCoverPhoto: true,

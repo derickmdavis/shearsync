@@ -76,6 +76,43 @@ GET /api/activity/referrals?range=this_month
 
 Auth required. This is intentionally separate from `GET /api/activity/dashboard`.
 
+### Referral Impact State Resolution
+
+For Referral Impact, load all three authenticated read models:
+
+- `GET /api/account/plan`
+- `GET /api/settings/referrals`
+- `GET /api/insights?referral_period=...`
+
+Resolve the card state exactly as follows:
+
+```ts
+if (!accountPlan.features.referrals) {
+  return "hidden";
+}
+
+if (!referralProgram.configured || !referralProgram.active) {
+  return "setup_required";
+}
+
+if (!referralMetrics.available) {
+  return "metrics_unavailable"; // show the retry state; do not show setup
+}
+
+if (!referralMetrics.historical_results.has_successful_conversions) {
+  return "active_no_conversions";
+}
+
+return "active_with_results";
+```
+
+`available: false` is only an Insights delivery/calculation state: the
+referral Insights section is disabled or metrics could not be calculated. It
+does not mean no entitlement, incomplete setup, no current-period activity,
+or no historical conversions. When `available: true`, zero-valued count
+metrics are valid results. `conversion_rate_percent` remains `null` when the
+selected period had no referral-link opens.
+
 ## Shared Types
 
 Use these frontend types or equivalent generated API types.

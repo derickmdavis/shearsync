@@ -170,6 +170,11 @@ const availableReferralsSectionSchema = sectionTimingSchema.extend({
   links_clicked: z.number().int().nonnegative(),
   attributed_revenue: insightsMoneyValueSchema,
   booked_value: insightsMoneyValueSchema,
+  historical_results: z.object({
+    new_clients: z.number().int().nonnegative(),
+    appointments_booked: z.number().int().nonnegative(),
+    has_successful_conversions: z.boolean()
+  }),
   top_referrer: z.object({
     client_id: z.string().uuid().nullable(),
     display_name: z.string().min(1).max(160),

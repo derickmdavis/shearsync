@@ -252,6 +252,11 @@ Authenticated client referral endpoints:
 - `GET /api/clients/:id/referral-stats` returns lightweight counts for referral link opens and attributed bookings.
 - `GET /api/activity/referrals?range=this_month` returns account-level referral activity stats for the Activity surface.
 
+Referral program setup endpoints:
+
+- `GET /api/settings/referrals` returns account-level referral offer configuration and its backend-derived `configured` state.
+- `PATCH /api/settings/referrals` creates or updates referral offer configuration for entitled Pro and Premium accounts.
+
 Public referral endpoint:
 
 - `GET /api/public/referrals/:referralCode` validates an active referral code and returns the stylist booking URL plus an expiry timestamp for frontend handoff.
@@ -344,6 +349,7 @@ Stylist settings toggle:
 - The account plan endpoint also returns:
   - `data.features.waitlist`: tier eligibility
   - `data.features.appointmentPhotos`: tier eligibility for appointment photos, before/after photos, and public reference photo upload
+  - `data.features.referrals`: tier eligibility for Referral Impact and referral setup (Basic: false; Pro/Premium: true)
   - `data.settings.waitlistEnabled`: stored stylist toggle
   - `data.effectiveFeatures.waitlistEnabled`: eligible, not cancelled, and toggled on
 

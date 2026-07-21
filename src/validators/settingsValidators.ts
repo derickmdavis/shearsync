@@ -55,6 +55,12 @@ export const updateThankYouEmailSettingsSchema = z.object({
   customMessageBlock: z.string().max(4000).nullable().optional()
 });
 
+export const updateReferralProgramSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  offerName: z.string().max(120).nullable().optional(),
+  offerDescription: z.string().max(500).nullable().optional()
+}).refine((payload) => Object.keys(payload).length > 0, "At least one referral setting is required");
+
 export const previewThankYouEmailSettingsSchema = updateThankYouEmailSettingsSchema.pick({
   subjectTemplate: true,
   customMessageBlock: true

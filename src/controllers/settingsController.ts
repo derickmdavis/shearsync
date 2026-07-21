@@ -7,6 +7,8 @@ import { appointmentEmailTemplatesService } from "../services/appointmentEmailTe
 import { rebookNudgeSettingsService } from "../services/rebookNudgeSettingsService";
 import { birthdayReminderSettingsService } from "../services/birthdayReminderSettingsService";
 import { thankYouEmailSettingsService } from "../services/thankYouEmailSettingsService";
+import { referralProgramSettingsService } from "../services/referralProgramSettingsService";
+import { referralProgramStatusService } from "../services/referralProgramStatusService";
 import { entitlementsService } from "../services/entitlementsService";
 import { stylistsService } from "../services/stylistsService";
 import { usersService } from "../services/usersService";
@@ -174,6 +176,21 @@ export const settingsController = {
   async updateThankYouEmailSettings(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
     const settings = await thankYouEmailSettingsService.upsertForUser(userId, req.body);
+    res.json({ data: settings });
+  },
+
+  async getReferralProgramSettings(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const [settings, status] = await Promise.all([
+      referralProgramSettingsService.getForUser(userId),
+      referralProgramStatusService.getForUser(userId)
+    ]);
+    res.json({ data: { ...settings, ...status } });
+  },
+
+  async updateReferralProgramSettings(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const settings = await referralProgramSettingsService.upsertForUser(userId, req.body);
     res.json({ data: settings });
   },
 

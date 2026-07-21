@@ -72,7 +72,8 @@ const {
   updateAppointmentEmailTemplateSchema,
   updateBookingRulesSchema,
   updateProfileSchema,
-  updateBookingSettingsSchema
+  updateBookingSettingsSchema,
+  updateReferralProgramSettingsSchema
 } =
   require("../validators/settingsValidators") as typeof import("../validators/settingsValidators");
 const { updateAccountPlanSchema } =
@@ -8387,6 +8388,7 @@ describe("API handlers", () => {
         rebookNudges: false,
         birthdayReminders: false,
         thankYouEmails: false,
+        referrals: false,
         waitlistMatch: false,
         noShowFollowUp: false,
         customCoverPhoto: false,
@@ -8432,6 +8434,7 @@ describe("API handlers", () => {
         rebookNudges: true,
         birthdayReminders: true,
         thankYouEmails: true,
+        referrals: true,
         waitlistMatch: true,
         noShowFollowUp: true,
         customCoverPhoto: true,
@@ -8478,6 +8481,7 @@ describe("API handlers", () => {
         rebookNudges: true,
         birthdayReminders: true,
         thankYouEmails: true,
+        referrals: true,
         waitlistMatch: true,
         noShowFollowUp: true,
         customCoverPhoto: true,
@@ -8486,6 +8490,49 @@ describe("API handlers", () => {
         weeklyBusinessRecap: true,
         clientExport: true
       });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("returns referral tier eligibility for every subscription status", async () => {
+    const supabase = installMockSupabase({
+      users: [{
+        id: userId,
+        email: "owner@example.com",
+        plan_tier: "basic",
+        plan_status: "active"
+      }]
+    });
+
+    try {
+      const expectedByTier = {
+        basic: false,
+        pro: true,
+        premium: true
+      } as const;
+      const statuses = ["trialing", "active", "past_due", "cancelled"] as const;
+
+      for (const [tier, expected] of Object.entries(expectedByTier) as Array<[
+        keyof typeof expectedByTier,
+        boolean
+      ]>) {
+        for (const status of statuses) {
+          supabase.state.users[0] = {
+            ...supabase.state.users[0],
+            plan_tier: tier,
+            plan_status: status
+          };
+
+          const req = createMockRequest({ user: { id: userId } as Request["user"] });
+          const response = await runWithErrorHandler((request, res) => accountController.getPlan(request, res), req);
+          const plan = (response.body as { data: { status: string; features: { referrals: boolean } } }).data;
+
+          assert.equal(response.statusCode, 200);
+          assert.equal(plan.status, status);
+          assert.equal(plan.features.referrals, expected, `${tier}/${status}`);
+        }
+      }
     } finally {
       supabase.restore();
     }
@@ -8584,6 +8631,115 @@ describe("API handlers", () => {
       const response = await runWithErrorHandler((request, res) => settingsController.getThankYouEmailSettings(request, res), req);
       assert.equal(response.statusCode, 403);
       assert.equal((response.body as { error: { message: string } }).error.message, "This feature is not available for the current plan.");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("persists referral program settings and derives configuration from the offer", async () => {
+    const supabase = installMockSupabase({
+      users: [{
+        id: userId,
+        email: "owner@example.com",
+        plan_tier: "pro",
+        plan_status: "active"
+      }],
+      referral_programs: []
+    });
+
+    try {
+      const firstUpdate = await runWithErrorHandler(
+        (request, res) => settingsController.updateReferralProgramSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: updateReferralProgramSettingsSchema.parse({ enabled: true, offerName: "  $20 off a first visit  " })
+        })
+      );
+      const partial = (firstUpdate.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(firstUpdate.statusCode, 200);
+      assert.equal(partial.enabled, true);
+      assert.equal(partial.offerName, "$20 off a first visit");
+      assert.equal(partial.offerDescription, null);
+      assert.equal(partial.configured, false);
+
+      const secondUpdate = await runWithErrorHandler(
+        (request, res) => settingsController.updateReferralProgramSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: updateReferralProgramSettingsSchema.parse({
+            offerDescription: "Share your link and your friend receives $20 off their first appointment."
+          })
+        })
+      );
+      const configured = (secondUpdate.body as { data: Record<string, unknown> }).data;
+
+      assert.equal(secondUpdate.statusCode, 200);
+      assert.equal(configured.configured, true);
+      assert.equal(supabase.state.referral_programs.length, 1);
+      assert.equal(supabase.state.referral_programs[0]?.offer_name, "$20 off a first visit");
+
+      const getResponse = await runWithErrorHandler(
+        (request, res) => settingsController.getReferralProgramSettings(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      assert.equal(getResponse.statusCode, 200);
+      const settings = (getResponse.body as { data: {
+        configured: boolean;
+        active: boolean;
+        program_enabled: boolean;
+        offer_configured: boolean;
+        thank_you_referral_enabled: boolean;
+        active_campaign_count: number;
+      } }).data;
+      assert.equal(settings.configured, true);
+      assert.equal(settings.active, true);
+      assert.equal(settings.program_enabled, true);
+      assert.equal(settings.offer_configured, true);
+      assert.equal(settings.thank_you_referral_enabled, false);
+      assert.equal(settings.active_campaign_count, 0);
+
+      assert.equal(updateReferralProgramSettingsSchema.safeParse({}).success, false);
+      assert.equal(updateReferralProgramSettingsSchema.safeParse({ offerName: "x".repeat(121) }).success, false);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("allows referral settings reads but blocks Basic referral settings writes", async () => {
+    const supabase = installMockSupabase({
+      users: [{
+        id: userId,
+        email: "owner@example.com",
+        plan_tier: "basic",
+        plan_status: "active"
+      }],
+      referral_programs: [{
+        user_id: userId,
+        enabled: false,
+        offer_name: null,
+        offer_description: null,
+        created_at: "2026-07-21T00:00:00.000Z",
+        updated_at: "2026-07-21T00:00:00.000Z"
+      }]
+    });
+
+    try {
+      const getResponse = await runWithErrorHandler(
+        (request, res) => settingsController.getReferralProgramSettings(request, res),
+        createMockRequest({ user: { id: userId } as Request["user"] })
+      );
+      assert.equal(getResponse.statusCode, 200);
+
+      const updateResponse = await runWithErrorHandler(
+        (request, res) => settingsController.updateReferralProgramSettings(request, res),
+        createMockRequest({
+          user: { id: userId } as Request["user"],
+          body: updateReferralProgramSettingsSchema.parse({ enabled: true })
+        })
+      );
+      assert.equal(updateResponse.statusCode, 403);
+      assert.equal((updateResponse.body as { error: { message: string } }).error.message, "This feature is not available for the current plan.");
     } finally {
       supabase.restore();
     }

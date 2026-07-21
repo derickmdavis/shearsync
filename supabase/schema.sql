@@ -124,6 +124,19 @@ create table if not exists public.client_referral_links (
     unique (referral_code)
 );
 
+create table if not exists public.referral_programs (
+  user_id uuid primary key references public.users(id) on delete cascade,
+  enabled boolean not null default false,
+  offer_name text,
+  offer_description text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint referral_programs_offer_name_length_check
+    check (offer_name is null or char_length(trim(offer_name)) between 1 and 120),
+  constraint referral_programs_offer_description_length_check
+    check (offer_description is null or char_length(trim(offer_description)) between 1 and 500)
+);
+
 alter table public.clients
   add column if not exists original_referral_link_id uuid references public.client_referral_links(id) on delete set null,
   add column if not exists original_referred_by_client_id uuid references public.clients(id) on delete set null,
@@ -1058,6 +1071,9 @@ create index if not exists client_referral_links_client_id_idx
   on public.client_referral_links(client_id);
 create index if not exists client_referral_links_referral_code_idx
   on public.client_referral_links(referral_code);
+create index if not exists referral_programs_enabled_idx
+  on public.referral_programs(user_id)
+  where enabled = true;
 create index if not exists clients_original_referral_link_id_idx
   on public.clients(original_referral_link_id);
 create index if not exists clients_original_referred_by_client_id_idx
@@ -1264,6 +1280,7 @@ create index if not exists automation_settings_user_id_idx on public.automation_
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
 alter table public.client_referral_links enable row level security;
+alter table public.referral_programs enable row level security;
 alter table public.appointments enable row level security;
 alter table public.referral_events enable row level security;
 alter table public.photos enable row level security;
@@ -1327,6 +1344,25 @@ create policy client_referral_links_insert_own
 drop policy if exists client_referral_links_update_own on public.client_referral_links;
 create policy client_referral_links_update_own
   on public.client_referral_links
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists referral_programs_select_own on public.referral_programs;
+create policy referral_programs_select_own
+  on public.referral_programs
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists referral_programs_insert_own on public.referral_programs;
+create policy referral_programs_insert_own
+  on public.referral_programs
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists referral_programs_update_own on public.referral_programs;
+create policy referral_programs_update_own
+  on public.referral_programs
   for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
@@ -1583,6 +1619,22 @@ create trigger set_birthday_reminder_settings_updated_at
   before update on public.birthday_reminder_settings
   for each row
   execute function public.set_birthday_reminder_settings_updated_at();
+
+create or replace function public.set_referral_programs_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists set_referral_programs_updated_at on public.referral_programs;
+create trigger set_referral_programs_updated_at
+  before update on public.referral_programs
+  for each row
+  execute function public.set_referral_programs_updated_at();
 
 create or replace function public.upsert_birthday_reminder_settings_with_approval_mode(
   p_user_id uuid,

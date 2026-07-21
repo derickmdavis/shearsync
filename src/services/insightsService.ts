@@ -141,6 +141,11 @@ export const insightsService = {
           amount_minor: referralStats.bookedValueMinor,
           currency: referralStats.currency
         },
+        historical_results: {
+          new_clients: referralStats.historicalResults.newClients,
+          appointments_booked: referralStats.historicalResults.appointmentsBooked,
+          has_successful_conversions: referralStats.historicalResults.hasSuccessfulConversions
+        },
         top_referrer: referralStats.topReferrer && {
           client_id: referralStats.topReferrer.clientId,
           display_name: referralStats.topReferrer.displayName,

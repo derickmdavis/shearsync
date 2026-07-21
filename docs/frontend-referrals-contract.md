@@ -2,6 +2,48 @@
 
 This is the frontend integration contract for client referral links and public booking attribution.
 
+## Referral Program Settings
+
+```http
+GET /api/settings/referrals
+PATCH /api/settings/referrals
+```
+
+`GET` is authenticated and returns the persisted setup state for any account.
+`PATCH` is restricted to accounts with `data.features.referrals === true` from
+`GET /api/account/plan` (Pro and Premium). Basic accounts receive `403`.
+
+```ts
+type ReferralProgramSettings = {
+  enabled: boolean;
+  offerName: string | null;
+  offerDescription: string | null;
+  configured: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+  active: boolean;
+  program_enabled: boolean;
+  offer_configured: boolean;
+  thank_you_referral_enabled: boolean;
+  active_campaign_count: number;
+};
+```
+
+`configured` is backend-derived. It becomes `true` only when both a non-empty
+`offerName` (maximum 120 characters) and non-empty `offerDescription` (maximum
+500 characters) have been saved. `enabled` can be saved independently so the
+setup UI can be completed incrementally; it is not proof that a live referral
+entry point exists.
+
+`active` is the canonical live-program signal. It is true only for entitled
+accounts when at least one of these is active: an enabled configured referral
+program, enabled thank-you-email automation, or a referral-link campaign in
+the `scheduled` or `sending` lifecycle state. Completed, failed, cancelled,
+and draft campaigns do not contribute to `active_campaign_count`.
+
+The patch body accepts any non-empty subset of `enabled`, `offerName`, and
+`offerDescription`. Send `null` to clear an offer field.
+
 ## Authenticated Client Referral Link
 
 ### Get Existing Link

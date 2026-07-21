@@ -66,6 +66,7 @@ Response shape:
       "emailReminders": true,
       "smsReminders": true,
       "waitlist": true,
+      "referrals": true,
       "customCoverPhoto": true,
       "customSlug": true,
       "googleCalendarSync": true,
@@ -97,6 +98,7 @@ Current feature matrix from `PLAN_CONFIG`:
 | `rebookNudges` | false | true | true |
 | `birthdayReminders` | false | true | true |
 | `thankYouEmails` | false | true | true |
+| `referrals` | false | true | true |
 | `waitlistMatch` | false | true | true |
 | `noShowFollowUp` | false | true | true |
 | `customCoverPhoto` | false | true | true |
@@ -117,6 +119,7 @@ Recommended gating examples:
 - Hide or upsell rebook nudge automation when `data.features.rebookNudges === false`
 - Hide or upsell birthday reminder automation when `data.features.birthdayReminders === false`
 - Hide or upsell thank-you email automation when `data.features.thankYouEmails === false`
+- Hide Referral Impact and referral setup when `data.features.referrals === false`
 - Hide or upsell waitlist match automation when `data.features.waitlistMatch === false`
 - Hide or upsell no-show follow-up automation when `data.features.noShowFollowUp === false`
 - Show the stylist waitlist on/off toggle from `data.settings.waitlistEnabled` when `data.features.waitlist === true`
@@ -287,6 +290,7 @@ type AccountPlan = {
     rebookNudges: boolean;
     birthdayReminders: boolean;
     thankYouEmails: boolean;
+    referrals: boolean;
     waitlistMatch: boolean;
     noShowFollowUp: boolean;
     customCoverPhoto: boolean;
@@ -315,6 +319,7 @@ const canUseWaitlist = plan.effectiveFeatures.waitlistEnabled;
 const canUseRebookNudges = plan.features.rebookNudges;
 const canUseBirthdayReminders = plan.features.birthdayReminders;
 const canUseThankYouEmails = plan.features.thankYouEmails;
+const canUseReferrals = plan.features.referrals;
 const canEditCoverPhoto = plan.features.customCoverPhoto;
 const canEditBookingSlug = plan.features.customSlug;
 const canExportClients = plan.features.clientExport;
