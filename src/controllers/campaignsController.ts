@@ -4,10 +4,12 @@ import { campaignAudienceEstimateService } from "../services/campaignAudienceEst
 import { campaignSubmissionService } from "../services/campaignSubmissionService";
 import { campaignsService } from "../services/campaignsService";
 import { getRequiredParam } from "../lib/request";
+import { entitlementsService } from "../services/entitlementsService";
 
 export const campaignsController = {
   async estimateAudience(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
+    await entitlementsService.assertFeatureAllowed(userId, "emailCampaigns");
     res.json(await campaignAudienceEstimateService.estimateForUser(userId, req.body.audience));
   },
   async list(req: Request, res: Response) {

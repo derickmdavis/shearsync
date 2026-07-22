@@ -81,12 +81,26 @@ describe("Insights business snapshot endpoint service", () => {
       });
       assert.equal(response.campaigns.available, true);
       if (!response.campaigns.available) throw new Error("Expected available campaigns");
-      assert.equal(response.campaigns.campaign_count, 0);
-      assert.deepEqual(response.campaigns.unavailable_metrics, [{
-        id: "clients_returned",
-        reason: "not_implemented",
-        message: "Clients returned is not available yet."
-      }]);
+      assert.deepEqual({
+        has_campaign_history: response.campaigns.has_campaign_history,
+        metrics: response.campaigns.metrics,
+        top_campaign: response.campaigns.top_campaign,
+        empty_state: response.campaigns.empty_state
+      }, {
+        has_campaign_history: false,
+        metrics: [
+          { id: "emails_sent", icon_key: "campaign_email", display_value: "0", label: "Emails sent", supporting_text: null, semantic_tone: "default", accessibility_label: "0 emails sent" },
+          { id: "appointments_booked", icon_key: "campaign_appointment", display_value: "0", label: "Appointments booked", supporting_text: null, semantic_tone: "default", accessibility_label: "0 appointments booked" },
+          { id: "attributed_revenue", icon_key: "campaign_revenue", display_value: "$0.00", label: "Attributed revenue", supporting_text: null, semantic_tone: "default", accessibility_label: "$0.00 attributed revenue" }
+        ],
+        top_campaign: null,
+        empty_state: {
+          icon_key: "campaign",
+          title: "Send your first campaign",
+          body: "Reach more clients with a targeted email campaign.",
+          cta_label: "Create campaign"
+        }
+      });
     } finally {
       supabase.restore();
     }
@@ -107,6 +121,24 @@ describe("Insights business snapshot endpoint service", () => {
       });
       assert.deepEqual(response.business_snapshot.pages[0].metrics[0].comparison, {
         label: "vs last week", percent_change: null
+      });
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("marks campaign insights unavailable when the account lacks the email campaigns entitlement", async () => {
+    const supabase = installMockSupabase({
+      users: [{ ...user, plan_tier: "basic" }],
+      insight_snapshot_configurations: [runtimeConfiguration()],
+      appointments: []
+    });
+    try {
+      const response = await getInsights();
+      assert.deepEqual(response.campaigns, {
+        available: false,
+        reason: "feature_unavailable",
+        message: "Campaign insights are not available for the current plan."
       });
     } finally {
       supabase.restore();
@@ -325,20 +357,32 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(response.campaigns.available, true);
       if (!response.campaigns.available) throw new Error("Expected available campaigns");
       assert.equal(response.campaigns.period.label, "This Month");
-      assert.equal(response.campaigns.campaign_count, 2);
-      assert.equal(response.campaigns.active_campaign_count, 1);
-      assert.deepEqual(response.campaigns.active_statuses, ["scheduled", "sending"]);
-      assert.deepEqual(response.campaigns.totals, {
-        emails_sent: 3,
-        appointments_booked: 3,
-        attributed_revenue: { kind: "money", amount_minor: 35000, currency: "USD" }
-      });
-      assert.deepEqual(response.campaigns.top_campaign, {
-        campaign_id: secondCampaignId,
-        name: "Summer Refresh",
-        status: "completed",
-        appointments_booked: 2,
-        attributed_revenue: { kind: "money", amount_minor: 25000, currency: "USD" }
+      assert.deepEqual({
+        has_campaign_history: response.campaigns.has_campaign_history,
+        metrics: response.campaigns.metrics,
+        top_campaign: response.campaigns.top_campaign,
+        empty_state: response.campaigns.empty_state
+      }, {
+        has_campaign_history: true,
+        metrics: [
+          { id: "emails_sent", icon_key: "campaign_email", display_value: "3", label: "Emails sent", supporting_text: null, semantic_tone: "default", accessibility_label: "3 emails sent" },
+          { id: "appointments_booked", icon_key: "campaign_appointment", display_value: "3", label: "Appointments booked", supporting_text: null, semantic_tone: "default", accessibility_label: "3 appointments booked" },
+          { id: "attributed_revenue", icon_key: "campaign_revenue", display_value: "$350.00", label: "Attributed revenue", supporting_text: null, semantic_tone: "positive", accessibility_label: "$350.00 attributed revenue" }
+        ],
+        top_campaign: {
+          campaign_id: secondCampaignId,
+          icon_key: "campaign",
+          eyebrow: "Top campaign",
+          title: "Summer Refresh",
+          result_text: "$250.00 attributed revenue",
+          accessibility_label: "Top campaign: Summer Refresh. $250.00 attributed revenue."
+        },
+        empty_state: {
+          icon_key: "campaign",
+          title: "Send your first campaign",
+          body: "Reach more clients with a targeted email campaign.",
+          cta_label: "Create campaign"
+        }
       });
     } finally {
       supabase.restore();

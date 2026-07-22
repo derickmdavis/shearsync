@@ -64,6 +64,7 @@ Response shape:
       "bookingPage": true,
       "crm": true,
       "emailReminders": true,
+      "emailCampaigns": true,
       "smsReminders": true,
       "waitlist": true,
       "referrals": true,
@@ -92,6 +93,7 @@ Current feature matrix from `PLAN_CONFIG`:
 | `bookingPage` | true | true | true |
 | `crm` | true | true | true |
 | `emailReminders` | true | true | true |
+| `emailCampaigns` | false | true | true |
 | `smsReminders` | false | true | true |
 | `waitlist` | false | true | true |
 | `appointmentPhotos` | false | true | true |
@@ -284,6 +286,7 @@ type AccountPlan = {
     bookingPage: boolean;
     crm: boolean;
     emailReminders: boolean;
+    emailCampaigns: boolean;
     smsReminders: boolean;
     waitlist: boolean;
     appointmentPhotos: boolean;

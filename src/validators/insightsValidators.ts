@@ -5,7 +5,7 @@ import { timeZoneSchema } from "./common";
  * Contract-only schemas for the future GET /api/insights endpoint.  The route
  * is deliberately not registered until the metric builders are implemented.
  */
-export const insightsContractVersion = "2026-07-20" as const;
+export const insightsContractVersion = "2026-07-21" as const;
 
 export const insightsQuerySchema = z.object({
   business_snapshot_period: z.enum(["week", "month"]).default("week"),
@@ -130,30 +130,46 @@ const insightsPeriodSchema = z.object({
   path: ["end_at"]
 });
 
-const availableCampaignsSectionSchema = sectionTimingSchema.extend({
-  available: z.literal(true),
-  period: insightsPeriodSchema,
-  campaign_count: z.number().int().nonnegative(),
-  active_campaign_count: z.number().int().nonnegative(),
-  active_statuses: z.array(z.enum(["scheduled", "sending"])),
-  totals: z.object({
-    emails_sent: z.number().int().nonnegative(),
-    appointments_booked: z.number().int().nonnegative(),
-    attributed_revenue: insightsMoneyValueSchema
-  }),
+const campaignMetricSchema = (id: "emails_sent" | "appointments_booked" | "attributed_revenue", iconKey: "campaign_email" | "campaign_appointment" | "campaign_revenue") => z.object({
+  id: z.literal(id),
+  icon_key: z.literal(iconKey),
+  display_value: z.string().min(1).max(80),
+  label: z.string().min(1).max(80),
+  supporting_text: z.string().min(1).max(160).nullable().optional(),
+  semantic_tone: z.enum(["default", "positive", "neutral", "warning"]).optional(),
+  accessibility_label: z.string().min(1).max(280).nullable().optional()
+});
+
+export const campaignPresentationSchema = z.object({
+  // Lifetime product-use state. It intentionally does not depend on the
+  // selected reporting period or on whether a campaign successfully sent.
+  has_campaign_history: z.boolean(),
+  // A tuple makes the fixed 2+1 layout and server-defined ordering explicit.
+  metrics: z.tuple([
+    campaignMetricSchema("emails_sent", "campaign_email"),
+    campaignMetricSchema("appointments_booked", "campaign_appointment"),
+    campaignMetricSchema("attributed_revenue", "campaign_revenue")
+  ]),
   top_campaign: z.object({
     campaign_id: z.string().uuid(),
-    name: z.string().min(1).max(280),
-    status: z.enum(["draft", "scheduled", "sending", "completed", "partially_failed", "failed", "cancelled"]),
-    appointments_booked: z.number().int().nonnegative(),
-    attributed_revenue: insightsMoneyValueSchema
+    icon_key: z.literal("campaign").nullable().optional(),
+    eyebrow: z.string().min(1).max(80).nullable().optional(),
+    title: z.string().min(1).max(280),
+    result_text: z.string().min(1).max(160).nullable().optional(),
+    accessibility_label: z.string().min(1).max(280).nullable().optional()
   }).nullable(),
-  unavailable_metrics: z.array(z.object({
-    id: z.literal("clients_returned"),
-    reason: z.literal("not_implemented"),
-    message: z.string().min(1).max(280)
-  })).max(1)
+  empty_state: z.object({
+    icon_key: z.literal("campaign"),
+    title: z.string().min(1).max(120),
+    body: z.string().min(1).max(280),
+    cta_label: z.string().min(1).max(80)
+  })
 });
+
+const availableCampaignsSectionSchema = sectionTimingSchema.extend({
+  available: z.literal(true),
+  period: insightsPeriodSchema
+}).merge(campaignPresentationSchema);
 
 export const insightsCampaignsSectionSchema = z.discriminatedUnion("available", [
   availableCampaignsSectionSchema,
@@ -244,3 +260,4 @@ export type InsightsHttpResponse = z.infer<typeof insightsHttpResponseSchema>;
 export type InsightsMetricValue = z.infer<typeof insightsMetricValueSchema>;
 export type InsightsSnapshotMetric = z.infer<typeof insightsSnapshotMetricSchema>;
 export type InsightsSnapshotPage = z.infer<typeof insightsSnapshotPageSchema>;
+export type InsightsCampaignPresentation = z.infer<typeof campaignPresentationSchema>;

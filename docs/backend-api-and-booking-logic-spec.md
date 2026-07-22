@@ -3208,6 +3208,7 @@ Stored in the database or entitlement config:
 - `communication_preference_tokens`
 - plan features:
   - `emailReminders`
+  - `emailCampaigns`
   - `smsReminders`
 
 ### Actual email/SMS sending status

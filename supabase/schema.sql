@@ -3234,12 +3234,14 @@ on conflict (id) do nothing;
 
 -- Migration 202607200002_insights_campaign_aggregate.sql
 create or replace function public.get_insights_campaign_aggregate(p_user_id uuid, p_start_at timestamptz, p_end_at timestamptz)
-returns table (campaign_count bigint, active_campaign_count bigint, emails_sent bigint, appointments_booked bigint, attributed_revenue_minor bigint, top_campaign_id uuid, top_campaign_name text, top_campaign_status text, top_campaign_appointments_booked bigint, top_campaign_attributed_revenue_minor bigint)
+returns table (has_campaign_history boolean, emails_sent bigint, appointments_booked bigint, attributed_revenue_minor bigint, top_campaign_id uuid, top_campaign_name text, top_campaign_status text, top_campaign_emails_sent bigint, top_campaign_appointments_booked bigint, top_campaign_attributed_revenue_minor bigint)
 language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is not null and auth.uid() <> p_user_id then raise exception using errcode = '42501', message = 'campaign_owner_mismatch'; end if;
   return query
-  with sent_by_campaign as (
+  with campaign_history as (
+    select exists (select 1 from public.campaigns c where c.user_id = p_user_id) as has_campaign_history
+  ), sent_by_campaign as (
     select r.campaign_id, count(*)::bigint as emails_sent from public.campaign_recipients r where r.user_id = p_user_id and r.sent_at >= p_start_at and r.sent_at < p_end_at group by r.campaign_id
   ), attributed_by_campaign as (
     select a.campaign_id, count(*)::bigint as appointments_booked, coalesce(sum(round(coalesce(a.price, 0) * 100))::bigint, 0)::bigint as attributed_revenue_minor from public.appointments a where a.user_id = p_user_id and a.campaign_id is not null and a.status <> 'cancelled' and a.campaign_attributed_at >= p_start_at and a.campaign_attributed_at < p_end_at group by a.campaign_id
@@ -3250,7 +3252,7 @@ begin
   ), top_campaign as (
     select * from campaign_metrics order by attributed_revenue_minor desc, appointments_booked desc, emails_sent desc, id asc limit 1
   )
-  select (select count(*)::bigint from campaign_metrics), (select count(*)::bigint from public.campaigns where user_id = p_user_id and status in ('scheduled', 'sending')), coalesce((select sum(emails_sent)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(appointments_booked)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(attributed_revenue_minor)::bigint from campaign_metrics), 0)::bigint, (select id from top_campaign), (select name from top_campaign), (select status from top_campaign), coalesce((select appointments_booked from top_campaign), 0)::bigint, coalesce((select attributed_revenue_minor from top_campaign), 0)::bigint;
+  select (select has_campaign_history from campaign_history), coalesce((select sum(emails_sent)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(appointments_booked)::bigint from campaign_metrics), 0)::bigint, coalesce((select sum(attributed_revenue_minor)::bigint from campaign_metrics), 0)::bigint, (select id from top_campaign), (select name from top_campaign), (select status from top_campaign), coalesce((select emails_sent from top_campaign), 0)::bigint, coalesce((select appointments_booked from top_campaign), 0)::bigint, coalesce((select attributed_revenue_minor from top_campaign), 0)::bigint;
 end;
 $$;
 revoke all on function public.get_insights_campaign_aggregate(uuid, timestamptz, timestamptz) from public;

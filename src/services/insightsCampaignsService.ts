@@ -13,8 +13,7 @@ const isCampaignStatus = (value: unknown): value is CampaignStatus =>
 
 export type InsightsCampaignAggregate = {
   period: { label: "This Month"; startAt: string; endAt: string };
-  campaignCount: number;
-  activeCampaignCount: number;
+  hasCampaignHistory: boolean;
   emailsSent: number;
   appointmentsBooked: number;
   attributedRevenueMinor: number;
@@ -22,6 +21,7 @@ export type InsightsCampaignAggregate = {
     campaignId: string;
     name: string;
     status: CampaignStatus;
+    emailsSent: number;
     appointmentsBooked: number;
     attributedRevenueMinor: number;
   } | null;
@@ -50,6 +50,7 @@ export const insightsCampaignsService = {
           campaignId: row.top_campaign_id,
           name: row.top_campaign_name,
           status: row.top_campaign_status,
+          emailsSent: numberValue(row.top_campaign_emails_sent),
           appointmentsBooked: numberValue(row.top_campaign_appointments_booked),
           attributedRevenueMinor: numberValue(row.top_campaign_attributed_revenue_minor)
         }
@@ -57,8 +58,7 @@ export const insightsCampaignsService = {
 
     return {
       period: { label: "This Month", startAt, endAt },
-      campaignCount: numberValue(row?.campaign_count),
-      activeCampaignCount: numberValue(row?.active_campaign_count),
+      hasCampaignHistory: row?.has_campaign_history === true,
       emailsSent: numberValue(row?.emails_sent),
       appointmentsBooked: numberValue(row?.appointments_booked),
       attributedRevenueMinor: numberValue(row?.attributed_revenue_minor),

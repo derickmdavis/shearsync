@@ -36,7 +36,7 @@ allow the client to select metrics.
 The HTTP response uses the existing authenticated API data envelope.
 
 ```json
-{ "data": { "contract_version": "2026-07-20" } }
+{ "data": { "contract_version": "2026-07-21" } }
 ```
 
 `contract_version` is a date-versioned, additive contract marker. A new
@@ -52,7 +52,7 @@ The representative mobile fixture is
 
 ```ts
 type InsightsResponse = {
-  contract_version: "2026-07-20";
+  contract_version: "2026-07-21";
   generated_at: string; // UTC ISO-8601 instant
   account_timezone: string; // IANA, e.g. America/Denver
   business_snapshot: BusinessSnapshotSection;
@@ -175,10 +175,9 @@ chunk.
 
 The initial contract also reserves these independently available sections:
 
-- `campaigns`: reporting period, campaign counts, sent count, attributed
-  bookings/revenue, canonical active statuses (`scheduled`, `sending`), and an
-  optional top campaign ID for authenticated drill-down. It also explicitly
-  marks `clients_returned` as `not_implemented`; the client must not infer it.
+- `campaigns`: a complete server-driven Campaign Insights model, including its
+  reporting period, lifetime history state, metric cards, optional top campaign,
+  and empty-state copy.
 - `referrals`: requested-period client/appointment/link counts, money values,
   nullable conversion rate, an optional account-owned top-referrer ID, and
   lifetime successful-conversion results.
@@ -194,16 +193,59 @@ Their exact schemas are validated alongside the Snapshot schema in
 Campaign reporting is business-local calendar month-to-date. `emails_sent`
 counts campaign-recipient rows with `sent_at` in the period. Attributed bookings
 and revenue count non-cancelled appointments with `campaign_attributed_at` in
-the period; revenue is integer minor units. `campaign_count` counts distinct
-campaigns with a sent recipient or qualifying attributed appointment in that
-period. `active_campaign_count` is the current count of lifecycle statuses
-`scheduled` and `sending`—there is no `active` status.
+the period; revenue is USD. `top_campaign` is the highest attributed-revenue
+campaign in the period, with bookings, sent email count, then ID as deterministic
+tie-breakers. Its ID is the existing authenticated campaign-detail ID.
 
-`top_campaign` is the highest attributed-revenue campaign in the period, with
-bookings, sent email count, then ID as deterministic tie-breakers. Its ID is
-the existing authenticated campaign-detail ID. `clients_returned` remains an
-explicit unavailable metric until its qualifying-client and attribution rules
-are agreed and implemented.
+### Campaign renderer contract
+
+Every available `campaigns` section is a complete server-driven model for the
+Campaign Insights module. There is no parallel legacy aggregate shape.
+
+```ts
+type CampaignPresentation = {
+  has_campaign_history: boolean;
+  metrics: [
+    CampaignMetric<"emails_sent", "campaign_email">,
+    CampaignMetric<"appointments_booked", "campaign_appointment">,
+    CampaignMetric<"attributed_revenue", "campaign_revenue">
+  ];
+  top_campaign: {
+    campaign_id: string;
+    icon_key?: "campaign" | null;
+    eyebrow?: string | null;
+    title: string;
+    result_text?: string | null;
+    accessibility_label?: string | null;
+  } | null;
+  empty_state: {
+    icon_key: "campaign";
+    title: string;
+    body: string;
+    cta_label: string;
+  };
+};
+```
+
+The metric tuple is exactly three items and is already in display order. Its
+closed icon-key catalog is `campaign`, `campaign_email`,
+`campaign_appointment`, and `campaign_revenue`; clients must not infer icons,
+labels, order, copy, or formatting from metric IDs. Campaign money display is
+always USD.
+
+#### Campaign state matrix
+
+| Account/UI state | Campaigns section | `has_campaign_history` | Metrics / top campaign | Empty state |
+| --- | --- | --- | --- | --- |
+| Not entitled or cancelled | `available: false`, `feature_unavailable` | omitted | omitted | omitted; UI hides module |
+| Section disabled or calculation failure | `available: false` with the relevant reason | omitted | omitted | omitted; UI renders safe message/retry state |
+| No account-owned campaign, including no draft | `available: true` | `false` | three calculated zero metrics; `top_campaign: null` | Render returned state |
+| Existing campaign but no current-month activity | `available: true` | `true` | three calculated zero metrics; `top_campaign: null` | Do not render |
+| Current-month campaign activity | `available: true` | `true` | three calculated metrics; ranked `top_campaign` when one qualifies | Do not render |
+
+`has_campaign_history` is a lifetime account-owned-campaign `EXISTS` check;
+draft, scheduled, completed, failed, and cancelled campaigns all count. It is
+independent of the reporting period.
 
 ### Referral definitions
 

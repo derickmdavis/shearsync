@@ -36,4 +36,17 @@ describe("Insights API contract", () => {
     metric.comparison.trend = "up";
     assert.throws(() => insightsHttpResponseSchema.parse(invalid));
   });
+
+  it("requires the complete ordered Campaign metric tuple", () => {
+    const invalid = structuredClone(fixture) as typeof fixture & {
+      data: { campaigns: { metrics?: unknown[] } };
+    };
+    const campaigns = invalid.data.campaigns;
+    if (!campaigns.available || !campaigns.metrics) {
+      throw new Error("Fixture must include Campaign metrics");
+    }
+
+    campaigns.metrics.reverse();
+    assert.throws(() => insightsHttpResponseSchema.parse(invalid));
+  });
 });

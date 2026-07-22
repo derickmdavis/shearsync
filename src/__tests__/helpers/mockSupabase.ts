@@ -961,14 +961,14 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
 
         return {
           data: [{
-            campaign_count: metricCampaigns.length,
-            active_campaign_count: campaigns.filter((campaign) => campaign.status === "scheduled" || campaign.status === "sending").length,
+            has_campaign_history: campaigns.length > 0,
             emails_sent: metricCampaigns.reduce((total, campaign) => total + campaign.emailsSent, 0),
             appointments_booked: metricCampaigns.reduce((total, campaign) => total + campaign.appointmentsBooked, 0),
             attributed_revenue_minor: metricCampaigns.reduce((total, campaign) => total + campaign.attributedRevenueMinor, 0),
             top_campaign_id: top?.campaign.id ?? null,
             top_campaign_name: top?.campaign.name ?? null,
             top_campaign_status: top?.campaign.status ?? null,
+            top_campaign_emails_sent: top?.emailsSent ?? 0,
             top_campaign_appointments_booked: top?.appointmentsBooked ?? 0,
             top_campaign_attributed_revenue_minor: top?.attributedRevenueMinor ?? 0
           }],

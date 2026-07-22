@@ -1,6 +1,6 @@
 {
   "data": {
-  "contract_version": "2026-07-20",
+  "contract_version": "2026-07-21",
   "generated_at": "2026-07-20T18:42:00.000Z",
   "account_timezone": "America/Denver",
   "business_snapshot": {
@@ -61,10 +61,33 @@
     ]
   },
   "campaigns": {
-    "available": false,
-    "reason": "processing",
-    "message": "Campaign reporting is still being prepared.",
-    "retry_after_seconds": 60
+    "available": true,
+    "calculated_at": "2026-07-20T18:42:00.000Z",
+    "period": {
+      "label": "This Month",
+      "start_at": "2026-07-01T06:00:00.000Z",
+      "end_at": "2026-07-20T18:42:00.000Z"
+    },
+    "has_campaign_history": true,
+      "metrics": [
+        { "id": "emails_sent", "icon_key": "campaign_email", "display_value": "1,240", "label": "Emails sent", "supporting_text": null, "semantic_tone": "default", "accessibility_label": "1,240 emails sent" },
+        { "id": "appointments_booked", "icon_key": "campaign_appointment", "display_value": "36", "label": "Appointments booked", "supporting_text": null, "semantic_tone": "default", "accessibility_label": "36 appointments booked" },
+        { "id": "attributed_revenue", "icon_key": "campaign_revenue", "display_value": "$1,250.00", "label": "Attributed revenue", "supporting_text": null, "semantic_tone": "positive", "accessibility_label": "$1,250.00 attributed revenue" }
+      ],
+      "top_campaign": {
+        "campaign_id": "60000000-0000-4000-8000-000000000001",
+        "icon_key": "campaign",
+        "eyebrow": "Top campaign",
+        "title": "Summer Refresh",
+        "result_text": "$1,250.00 attributed revenue",
+        "accessibility_label": "Top campaign: Summer Refresh. $1,250.00 attributed revenue."
+      },
+    "empty_state": {
+      "icon_key": "campaign",
+      "title": "Send your first campaign",
+      "body": "Reach more clients with a targeted email campaign.",
+      "cta_label": "Create campaign"
+    }
   },
   "referrals": {
     "available": true,

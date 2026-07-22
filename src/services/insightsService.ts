@@ -1,6 +1,6 @@
 import { getCurrentLocalDate, resolveBusinessTimeZone } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
-import type { PlanTier } from "../lib/plans";
+import { PLAN_CONFIG, type PlanTier } from "../lib/plans";
 import { logger } from "../lib/logger";
 import { insightsResponseSchema, type InsightsQuery, type InsightsResponse } from "../validators/insightsValidators";
 import { handleSupabaseError } from "./db";
@@ -9,10 +9,18 @@ import { insightsSnapshotConfigurationService } from "./insightsSnapshotConfigur
 import { insightsAppointmentChangesService } from "./insightsAppointmentChangesService";
 import { referralLinksService } from "./referralLinksService";
 import { insightsCampaignsService } from "./insightsCampaignsService";
+import { insightsCampaignPresentationService } from "./insightsCampaignPresentationService";
 import { usersService } from "./usersService";
 
 const toPlanTier = (value: unknown): PlanTier | undefined =>
   value === "basic" || value === "pro" || value === "premium" ? value : undefined;
+
+const hasEmailCampaigns = (user: Record<string, unknown> | null): boolean => {
+  const tier = toPlanTier(user?.plan_tier);
+  return user?.plan_status !== "cancelled"
+    && !!tier
+    && PLAN_CONFIG[tier].features.emailCampaigns;
+};
 
 type InsightsSection = "business_snapshot" | "campaigns" | "referrals" | "appointment_changes";
 
@@ -171,6 +179,10 @@ export const insightsService = {
         logSectionResult("campaigns", userId, startedAt, "feature_disabled");
         return { available: false, reason: "feature_unavailable", message: "Campaign insights are not enabled for this account." };
       }
+      if (!hasEmailCampaigns(user)) {
+        logSectionResult("campaigns", userId, startedAt, "feature_unavailable");
+        return { available: false, reason: "feature_unavailable", message: "Campaign insights are not available for the current plan." };
+      }
       try {
       const campaignStats = await insightsCampaignsService.getForUser(userId, accountTimeZone, now);
         const campaigns: InsightsResponse["campaigns"] = {
@@ -181,34 +193,7 @@ export const insightsService = {
           start_at: campaignStats.period.startAt,
           end_at: campaignStats.period.endAt
         },
-        campaign_count: campaignStats.campaignCount,
-        active_campaign_count: campaignStats.activeCampaignCount,
-        active_statuses: ["scheduled", "sending"],
-        totals: {
-          emails_sent: campaignStats.emailsSent,
-          appointments_booked: campaignStats.appointmentsBooked,
-          attributed_revenue: {
-            kind: "money",
-            amount_minor: campaignStats.attributedRevenueMinor,
-            currency: "USD"
-          }
-        },
-        top_campaign: campaignStats.topCampaign && {
-          campaign_id: campaignStats.topCampaign.campaignId,
-          name: campaignStats.topCampaign.name,
-          status: campaignStats.topCampaign.status,
-          appointments_booked: campaignStats.topCampaign.appointmentsBooked,
-          attributed_revenue: {
-            kind: "money",
-            amount_minor: campaignStats.topCampaign.attributedRevenueMinor,
-            currency: "USD"
-          }
-        },
-        unavailable_metrics: [{
-          id: "clients_returned",
-          reason: "not_implemented",
-          message: "Clients returned is not available yet."
-        }]
+        ...insightsCampaignPresentationService.build(campaignStats)
       };
         logSectionResult("campaigns", userId, startedAt);
         return campaigns;
@@ -275,7 +260,7 @@ export const insightsService = {
     // These are reserved contract sections. They intentionally remain explicit
     // unavailable states until their dedicated aggregate implementations ship.
     return insightsResponseSchema.parse({
-      contract_version: "2026-07-20",
+      contract_version: "2026-07-21",
       generated_at: generatedAt,
       account_timezone: accountTimeZone,
       business_snapshot: businessSnapshot,

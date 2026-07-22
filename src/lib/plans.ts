@@ -5,6 +5,7 @@ export type PlanFeatureKey =
   | "bookingPage"
   | "crm"
   | "emailReminders"
+  | "emailCampaigns"
   | "smsReminders"
   | "waitlist"
   | "appointmentPhotos"
@@ -24,6 +25,7 @@ export interface PlanFeatures {
   bookingPage: boolean;
   crm: boolean;
   emailReminders: boolean;
+  emailCampaigns: boolean;
   smsReminders: boolean;
   waitlist: boolean;
   appointmentPhotos: boolean;
@@ -72,6 +74,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       bookingPage: true,
       crm: true,
       emailReminders: true,
+      emailCampaigns: false,
       smsReminders: false,
       waitlist: false,
       appointmentPhotos: false,
@@ -96,6 +99,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       bookingPage: true,
       crm: true,
       emailReminders: true,
+      emailCampaigns: true,
       smsReminders: true,
       waitlist: true,
       appointmentPhotos: true,
@@ -120,6 +124,7 @@ export const PLAN_CONFIG: Record<PlanTier, PlanConfig> = {
       bookingPage: true,
       crm: true,
       emailReminders: true,
+      emailCampaigns: true,
       smsReminders: true,
       waitlist: true,
       appointmentPhotos: true,
