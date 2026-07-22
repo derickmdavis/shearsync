@@ -49,7 +49,7 @@ editing, preview, validation, audience estimates, scheduling, and sending.
 
 ## Contract version
 
-The current Insights contract version is `2026-07-21`.
+The current Insights contract version is `2026-07-22`.
 
 ```ts
 type CampaignsSection =
@@ -258,4 +258,3 @@ of the API:
 - `totals`
 - the former aggregate-shaped `top_campaign`
 - `unavailable_metrics.clients_returned`
-

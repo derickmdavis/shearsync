@@ -66,7 +66,14 @@ describe("referral program status", () => {
       program_enabled: true,
       offer_configured: true,
       thank_you_referral_enabled: false,
-      active_campaign_count: 0
+      active_campaign_count: 0,
+      setup_state: {
+        icon_key: "referral_program",
+        title: "Turn happy clients into new bookings",
+        body: "Create a referral offer and share your personal links to start earning more clients.",
+        cta_label: "Start referral program",
+        accessibility_label: "Set up your referral program"
+      }
     });
   });
 

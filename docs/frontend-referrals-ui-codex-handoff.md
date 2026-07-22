@@ -99,19 +99,75 @@ if (!referralMetrics.available) {
   return "metrics_unavailable"; // show the retry state; do not show setup
 }
 
-if (!referralMetrics.historical_results.has_successful_conversions) {
+if (!referralMetrics.has_successful_conversions) {
   return "active_no_conversions";
 }
 
 return "active_with_results";
 ```
 
+### Referral Impact presentation contract
+
+The `data.referrals` section is presentation-ready. It replaces the former
+fixed referral aggregate fields; do not retain a compatibility parser.
+
+```ts
+type ReferralsSection =
+  | {
+      available: true;
+      calculated_at?: string;
+      period: { label: string; start_at: string; end_at: string };
+      has_successful_conversions: boolean;
+      metrics: [ReferralMetric, ReferralMetric, ReferralMetric];
+      top_referrer: ReferralHighlight | null;
+    }
+  | {
+      available: false;
+      reason: "feature_unavailable" | "processing" | "temporarily_unavailable" | "insufficient_history";
+      message?: string;
+      retry_after_seconds?: number;
+      calculated_at?: string;
+    };
+
+type ReferralMetric = {
+  id: string;
+  icon_key: string;
+  display_value: string;
+  label: string;
+  supporting_text?: string | null;
+  semantic_tone?: "default" | "positive" | "neutral" | "warning";
+  accessibility_label?: string | null;
+};
+
+type ReferralHighlight = {
+  client_id: string | null;
+  icon_key?: string | null;
+  eyebrow?: string | null;
+  title: string;
+  result_text?: string | null;
+  accessibility_label?: string | null;
+};
+```
+
+Render all three metrics in returned order. `display_value`, labels,
+supporting copy, accessibility copy, tone, and icon keys are backend-owned.
+The initial icon keys are `referral_program`, `referral_clients`,
+`referral_appointments`, `referral_conversion`, and
+`referral_top_referrer`. Unknown keys must omit the icon and report a
+presentation-contract warning; never infer an icon from `id` or text.
+
+When `top_referrer.client_id` is present, navigate through the existing
+authenticated client-detail route. A null ID makes the highlight
+informational. Never reinterpret `result_text` as a referral count, click
+count, or share count.
+
 `available: false` is only an Insights delivery/calculation state: the
 referral Insights section is disabled or metrics could not be calculated. It
 does not mean no entitlement, incomplete setup, no current-period activity,
 or no historical conversions. When `available: true`, zero-valued count
-metrics are valid results. `conversion_rate_percent` remains `null` when the
-selected period had no referral-link opens.
+metrics are valid results. The three returned `metrics` cards are already
+formatted and ordered by the backend; the client must not calculate or relabel
+them.
 
 ## Shared Types
 

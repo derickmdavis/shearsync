@@ -96,7 +96,10 @@ export type InsightsReferralStats = {
   };
   newClients: number;
   appointmentsBooked: number;
-  conversionRatePercent: number | null;
+  // The calculation layer always returns a renderable percentage. A missing
+  // click/open denominator is represented as zero; the presentation layer
+  // supplies the accompanying "No bookings yet" explanation.
+  conversionRatePercent: number;
   linksSent: number;
   linksClicked: number;
   attributedRevenueMinor: number;
@@ -110,7 +113,8 @@ export type InsightsReferralStats = {
   topReferrer: {
     clientId: string;
     displayName: string;
-    referralCount: number;
+    successfulOutcomeCount: number;
+    engagementCount: number;
   } | null;
 };
 
@@ -210,6 +214,64 @@ const getTopReferrerId = (rows: RowList, referralColumn: string): { clientId: st
   }
 
   return topReferrer;
+};
+
+type InsightsTopReferrerCandidate = {
+  clientId: string;
+  successfulOutcomeCount: number;
+  engagementCount: number;
+};
+
+const getInsightsTopReferrerCandidates = ({
+  referredClients,
+  referredAppointments,
+  engagementEvents
+}: {
+  referredClients: RowList;
+  referredAppointments: RowList;
+  engagementEvents: RowList;
+}): InsightsTopReferrerCandidate[] => {
+  const counts = new Map<string, {
+    clientConversions: number;
+    appointmentsBooked: number;
+    engagementCount: number;
+  }>();
+
+  const increment = (clientId: unknown, key: "clientConversions" | "appointmentsBooked" | "engagementCount") => {
+    if (typeof clientId !== "string" || clientId.length === 0) return;
+    const current = counts.get(clientId) ?? {
+      clientConversions: 0,
+      appointmentsBooked: 0,
+      engagementCount: 0
+    };
+    current[key] += 1;
+    counts.set(clientId, current);
+  };
+
+  for (const client of referredClients) {
+    increment(client.original_referred_by_client_id, "clientConversions");
+  }
+  for (const appointment of referredAppointments) {
+    increment(appointment.referred_by_client_id, "appointmentsBooked");
+  }
+  for (const event of engagementEvents) {
+    increment(event.referred_by_client_id, "engagementCount");
+  }
+
+  return [...counts.entries()]
+    .map(([clientId, count]) => ({
+      clientId,
+      // Prefer booked referral appointments when present, preserving the
+      // established referral-count meaning; otherwise use new-client
+      // conversions. Engagement breaks ties only after successful outcomes.
+      successfulOutcomeCount: count.appointmentsBooked || count.clientConversions,
+      engagementCount: count.engagementCount
+    }))
+    .sort((left, right) =>
+      right.successfulOutcomeCount - left.successfulOutcomeCount
+      || right.engagementCount - left.engagementCount
+      || left.clientId.localeCompare(right.clientId)
+    );
 };
 
 const generateReferralCode = (): string =>
@@ -592,7 +654,15 @@ export const referralLinksService = {
   ): Promise<InsightsReferralStats> {
     const period = getInsightsReferralRange(options.range, options.timeZone, options.now ?? new Date());
 
-    const [linksResult, clicksResult, clientsResult, appointmentsResult, lifetimeClientsResult, lifetimeAppointmentsResult] = await Promise.all([
+    const [
+      linksResult,
+      clicksResult,
+      clientsResult,
+      appointmentsResult,
+      lifetimeClientsResult,
+      lifetimeAppointmentsResult,
+      engagementEventsResult
+    ] = await Promise.all([
       supabaseAdmin
         .from("client_referral_links")
         .select("id", { count: "exact", head: true })
@@ -632,6 +702,16 @@ export const referralLinksService = {
         .eq("user_id", userId)
         .not("referral_attributed_at", "is", null)
         .neq("status", "cancelled")
+      ,
+      // Engagement is only used to rank and describe a top referrer. It does
+      // not alter period metrics or lifetime conversion state.
+      supabaseAdmin
+        .from("referral_events")
+        .select("referred_by_client_id, event_type")
+        .eq("user_id", userId)
+        .in("event_type", ["opened", "link_clicked"])
+        .gte("created_at", period.startIso)
+        .lt("created_at", period.endIso)
     ]);
 
     handleSupabaseError(linksResult.error, "Unable to load Insights referral links sent");
@@ -640,6 +720,7 @@ export const referralLinksService = {
     handleSupabaseError(appointmentsResult.error, "Unable to load Insights referred appointments");
     handleSupabaseError(lifetimeClientsResult.error, "Unable to load lifetime referred clients");
     handleSupabaseError(lifetimeAppointmentsResult.error, "Unable to load lifetime referred appointments");
+    handleSupabaseError(engagementEventsResult.error, "Unable to load Insights referral engagement events");
 
     const referredClients = (clientsResult.data ?? []) as RowList;
     const referredAppointments = (appointmentsResult.data ?? []) as RowList;
@@ -657,25 +738,31 @@ export const referralLinksService = {
       (total, appointment) => total + toNumber(appointment.price),
       0
     ) * 100);
-    const fallbackTopReferrer = getTopReferrerId(referredClients, "original_referred_by_client_id");
-    const topReferrerCandidate = getTopReferrerId(referredAppointments, "referred_by_client_id") ?? fallbackTopReferrer;
+    const topReferrerCandidates = getInsightsTopReferrerCandidates({
+      referredClients,
+      referredAppointments,
+      engagementEvents: (engagementEventsResult.data ?? []) as RowList
+    });
     let topReferrer: InsightsReferralStats["topReferrer"] = null;
 
-    if (topReferrerCandidate) {
+    if (topReferrerCandidates.length > 0) {
       const { data, error } = await supabaseAdmin
         .from("clients")
         .select("id, first_name, last_name, preferred_name")
         .eq("user_id", userId)
-        .eq("id", topReferrerCandidate.clientId)
-        .maybeSingle();
+        .in("id", topReferrerCandidates.map((candidate) => candidate.clientId));
       handleSupabaseError(error, "Unable to load Insights top referral client");
 
-      // Do not expose an ID that cannot be proven to belong to this account.
-      if (data) {
+      const ownedClients = new Map(((data ?? []) as RowList).map((client) => [String(client.id), client]));
+      const topReferrerCandidate = topReferrerCandidates.find((candidate) => ownedClients.has(candidate.clientId));
+      // Do not expose an ID that cannot be proven to belong to this account;
+      // a valid lower-ranked candidate may still be shown.
+      if (topReferrerCandidate) {
         topReferrer = {
           clientId: topReferrerCandidate.clientId,
-          displayName: getClientDisplayName(data as Row),
-          referralCount: topReferrerCandidate.referralCount
+          displayName: getClientDisplayName(ownedClients.get(topReferrerCandidate.clientId)),
+          successfulOutcomeCount: topReferrerCandidate.successfulOutcomeCount,
+          engagementCount: topReferrerCandidate.engagementCount
         };
       }
     }
@@ -684,7 +771,7 @@ export const referralLinksService = {
       period: { label: period.label, startAt: period.startIso, endAt: period.endIso },
       newClients: referredClients.length,
       appointmentsBooked,
-      conversionRatePercent: linksClicked > 0 ? roundRate((appointmentsBooked / linksClicked) * 100) : null,
+      conversionRatePercent: linksClicked > 0 ? roundRate((appointmentsBooked / linksClicked) * 100) : 0,
       linksSent,
       linksClicked,
       attributedRevenueMinor,

@@ -5,6 +5,14 @@ import { referralProgramSettingsService } from "./referralProgramSettingsService
 
 const ACTIVE_REFERRAL_CAMPAIGN_STATUSES = ["scheduled", "sending"] as const;
 
+const referralSetupState = {
+  icon_key: "referral_program" as const,
+  title: "Turn happy clients into new bookings",
+  body: "Create a referral offer and share your personal links to start earning more clients.",
+  cta_label: "Start referral program",
+  accessibility_label: "Set up your referral program"
+};
+
 export const referralProgramStatusService = {
   activeCampaignStatuses: [...ACTIVE_REFERRAL_CAMPAIGN_STATUSES],
 
@@ -44,7 +52,8 @@ export const referralProgramStatusService = {
       program_enabled: programEnabled,
       offer_configured: offerConfigured,
       thank_you_referral_enabled: thankYouReferralEnabled,
-      active_campaign_count: activeCampaignCount
+      active_campaign_count: activeCampaignCount,
+      setup_state: referralSetupState
     };
   }
 };

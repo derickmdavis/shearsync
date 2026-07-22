@@ -26,6 +26,13 @@ type ReferralProgramSettings = {
   offer_configured: boolean;
   thank_you_referral_enabled: boolean;
   active_campaign_count: number;
+  setup_state: {
+    icon_key: "referral_program";
+    title: string;
+    body: string;
+    cta_label: string;
+    accessibility_label?: string | null;
+  };
 };
 ```
 
@@ -40,6 +47,10 @@ accounts when at least one of these is active: an enabled configured referral
 program, enabled thank-you-email automation, or a referral-link campaign in
 the `scheduled` or `sending` lifecycle state. Completed, failed, cancelled,
 and draft campaigns do not contribute to `active_campaign_count`.
+
+`setup_state` is server-owned presentation for Referral Impact's setup card.
+When the UI selects setup-required state, render its icon key and copy as
+returned; do not substitute hardcoded text or infer an icon from other fields.
 
 The patch body accepts any non-empty subset of `enabled`, `offerName`, and
 `offerDescription`. Send `null` to clear an offer field.

@@ -256,16 +256,16 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(month.referrals.available, true);
       if (!month.referrals.available) throw new Error("Expected available referrals");
       assert.equal(month.referrals.period.label, "This Month");
-      assert.equal(month.referrals.appointments_booked, 2);
-      assert.equal(month.referrals.conversion_rate_percent, 100);
-      assert.deepEqual(month.referrals.historical_results, {
-        new_clients: 2,
-        appointments_booked: 3,
-        has_successful_conversions: true
+      assert.deepEqual(month.referrals.metrics.map((metric) => metric.display_value), ["1", "2", "100%"]);
+      assert.equal(month.referrals.has_successful_conversions, true);
+      assert.deepEqual(month.referrals.top_referrer, {
+        client_id: referrerId,
+        icon_key: "referral_top_referrer",
+        eyebrow: "Top referrer",
+        title: "Sarah Jones",
+        result_text: "2 referrals",
+        accessibility_label: "Top referrer Sarah Jones, 2 referrals"
       });
-      assert.deepEqual(month.referrals.attributed_revenue, { kind: "money", amount_minor: 10000, currency: "USD" });
-      assert.deepEqual(month.referrals.booked_value, { kind: "money", amount_minor: 15000, currency: "USD" });
-      assert.deepEqual(month.referrals.top_referrer, { client_id: referrerId, display_name: "Sarah Jones", referral_count: 2 });
 
       const allTime = await insightsService.getForUser(userId, {
         business_snapshot_period: "week",
@@ -274,17 +274,8 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(allTime.referrals.available, true);
       if (!allTime.referrals.available) throw new Error("Expected available referrals");
       assert.equal(allTime.referrals.period.label, "All Time");
-      assert.equal(allTime.referrals.new_clients, 2);
-      assert.equal(allTime.referrals.appointments_booked, 3);
-      assert.equal(allTime.referrals.links_sent, 2);
-      assert.equal(allTime.referrals.links_clicked, 3);
-      assert.deepEqual(allTime.referrals.historical_results, {
-        new_clients: 2,
-        appointments_booked: 3,
-        has_successful_conversions: true
-      });
-      assert.deepEqual(allTime.referrals.attributed_revenue, { kind: "money", amount_minor: 30000, currency: "USD" });
-      assert.deepEqual(allTime.referrals.booked_value, { kind: "money", amount_minor: 35000, currency: "USD" });
+      assert.deepEqual(allTime.referrals.metrics.map((metric) => metric.display_value), ["2", "3", "100%"]);
+      assert.equal(allTime.referrals.has_successful_conversions, true);
     } finally {
       supabase.restore();
     }
@@ -316,13 +307,8 @@ describe("Insights business snapshot endpoint service", () => {
       assert.equal(response.referrals.available, true);
       if (!response.referrals.available) throw new Error("Expected available referrals");
 
-      assert.equal(response.referrals.new_clients, 0);
-      assert.equal(response.referrals.appointments_booked, 0);
-      assert.deepEqual(response.referrals.historical_results, {
-        new_clients: 1,
-        appointments_booked: 1,
-        has_successful_conversions: true
-      });
+      assert.deepEqual(response.referrals.metrics.map((metric) => metric.display_value), ["0", "0", "0%"]);
+      assert.equal(response.referrals.has_successful_conversions, true);
     } finally {
       supabase.restore();
     }

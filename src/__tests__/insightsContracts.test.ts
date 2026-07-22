@@ -49,4 +49,17 @@ describe("Insights API contract", () => {
     campaigns.metrics.reverse();
     assert.throws(() => insightsHttpResponseSchema.parse(invalid));
   });
+
+  it("requires exactly three Referral Impact metrics", () => {
+    const invalid = structuredClone(fixture) as typeof fixture & {
+      data: { referrals: { metrics?: unknown[] } };
+    };
+    const referrals = invalid.data.referrals;
+    if (!referrals.available || !referrals.metrics) {
+      throw new Error("Fixture must include Referral Impact metrics");
+    }
+
+    referrals.metrics.pop();
+    assert.throws(() => insightsHttpResponseSchema.parse(invalid));
+  });
 });

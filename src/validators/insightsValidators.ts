@@ -5,7 +5,9 @@ import { timeZoneSchema } from "./common";
  * Contract-only schemas for the future GET /api/insights endpoint.  The route
  * is deliberately not registered until the metric builders are implemented.
  */
-export const insightsContractVersion = "2026-07-21" as const;
+// This version removes the legacy fixed Referral Insights aggregate in favor
+// of the server-rendered Referral Impact model.
+export const insightsContractVersion = "2026-07-22" as const;
 
 export const insightsQuerySchema = z.object({
   business_snapshot_period: z.enum(["week", "month"]).default("week"),
@@ -176,26 +178,36 @@ export const insightsCampaignsSectionSchema = z.discriminatedUnion("available", 
   unavailableSectionSchema
 ]);
 
+const referralMetricSchema = z.object({
+  // The ID is server-defined presentation metadata. Clients must render the
+  // tuple in supplied order and must not branch on this value.
+  id: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/),
+  icon_key: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/),
+  display_value: z.string().min(1).max(80),
+  label: z.string().min(1).max(80),
+  supporting_text: z.string().min(1).max(160).nullable().optional(),
+  semantic_tone: z.enum(["default", "positive", "neutral", "warning"]).optional(),
+  accessibility_label: z.string().min(1).max(280).nullable().optional()
+});
+
+const referralHighlightSchema = z.object({
+  client_id: z.string().uuid().nullable(),
+  icon_key: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/).nullable().optional(),
+  eyebrow: z.string().min(1).max(80).nullable().optional(),
+  title: z.string().min(1).max(160),
+  result_text: z.string().min(1).max(160).nullable().optional(),
+  accessibility_label: z.string().min(1).max(280).nullable().optional()
+});
+
 const availableReferralsSectionSchema = sectionTimingSchema.extend({
   available: z.literal(true),
   period: insightsPeriodSchema,
-  new_clients: z.number().int().nonnegative(),
-  appointments_booked: z.number().int().nonnegative(),
-  conversion_rate_percent: z.number().min(0).max(100).nullable(),
-  links_sent: z.number().int().nonnegative(),
-  links_clicked: z.number().int().nonnegative(),
-  attributed_revenue: insightsMoneyValueSchema,
-  booked_value: insightsMoneyValueSchema,
-  historical_results: z.object({
-    new_clients: z.number().int().nonnegative(),
-    appointments_booked: z.number().int().nonnegative(),
-    has_successful_conversions: z.boolean()
-  }),
-  top_referrer: z.object({
-    client_id: z.string().uuid().nullable(),
-    display_name: z.string().min(1).max(160),
-    referral_count: z.number().int().nonnegative()
-  }).nullable()
+  // Lifetime state. It is intentionally independent of referral_period.
+  has_successful_conversions: z.boolean(),
+  // Exactly three server-ordered cards are required for the Referral Impact
+  // layout. Their content and order are presentation-owned by the backend.
+  metrics: z.tuple([referralMetricSchema, referralMetricSchema, referralMetricSchema]),
+  top_referrer: referralHighlightSchema.nullable()
 });
 
 export const insightsReferralsSectionSchema = z.discriminatedUnion("available", [
@@ -261,3 +273,5 @@ export type InsightsMetricValue = z.infer<typeof insightsMetricValueSchema>;
 export type InsightsSnapshotMetric = z.infer<typeof insightsSnapshotMetricSchema>;
 export type InsightsSnapshotPage = z.infer<typeof insightsSnapshotPageSchema>;
 export type InsightsCampaignPresentation = z.infer<typeof campaignPresentationSchema>;
+export type InsightsReferralMetric = z.infer<typeof referralMetricSchema>;
+export type InsightsReferralHighlight = z.infer<typeof referralHighlightSchema>;

@@ -10,6 +10,7 @@ import { insightsAppointmentChangesService } from "./insightsAppointmentChangesS
 import { referralLinksService } from "./referralLinksService";
 import { insightsCampaignsService } from "./insightsCampaignsService";
 import { insightsCampaignPresentationService } from "./insightsCampaignPresentationService";
+import { insightsReferralPresentationService } from "./insightsReferralPresentationService";
 import { usersService } from "./usersService";
 
 const toPlanTier = (value: unknown): PlanTier | undefined =>
@@ -134,31 +135,7 @@ export const insightsService = {
           start_at: referralStats.period.startAt,
           end_at: referralStats.period.endAt
         },
-        new_clients: referralStats.newClients,
-        appointments_booked: referralStats.appointmentsBooked,
-        conversion_rate_percent: referralStats.conversionRatePercent,
-        links_sent: referralStats.linksSent,
-        links_clicked: referralStats.linksClicked,
-        attributed_revenue: {
-          kind: "money",
-          amount_minor: referralStats.attributedRevenueMinor,
-          currency: referralStats.currency
-        },
-        booked_value: {
-          kind: "money",
-          amount_minor: referralStats.bookedValueMinor,
-          currency: referralStats.currency
-        },
-        historical_results: {
-          new_clients: referralStats.historicalResults.newClients,
-          appointments_booked: referralStats.historicalResults.appointmentsBooked,
-          has_successful_conversions: referralStats.historicalResults.hasSuccessfulConversions
-        },
-        top_referrer: referralStats.topReferrer && {
-          client_id: referralStats.topReferrer.clientId,
-          display_name: referralStats.topReferrer.displayName,
-          referral_count: referralStats.topReferrer.referralCount
-        }
+        ...insightsReferralPresentationService.build(referralStats)
       };
         logSectionResult("referrals", userId, startedAt);
         return referrals;
@@ -260,7 +237,7 @@ export const insightsService = {
     // These are reserved contract sections. They intentionally remain explicit
     // unavailable states until their dedicated aggregate implementations ship.
     return insightsResponseSchema.parse({
-      contract_version: "2026-07-21",
+      contract_version: "2026-07-22",
       generated_at: generatedAt,
       account_timezone: accountTimeZone,
       business_snapshot: businessSnapshot,

@@ -90,17 +90,11 @@ describe("Referral Insights state matrix", () => {
       assert.equal(insights.referrals.available, true);
       if (!insights.referrals.available) throw new Error("Expected available referrals");
 
-      assert.equal(insights.referrals.new_clients, 0);
-      assert.equal(insights.referrals.appointments_booked, 0);
-      assert.equal(insights.referrals.links_sent, 0);
-      assert.equal(insights.referrals.links_clicked, 0);
-      // Existing conversion semantics intentionally use null when there are no opens.
-      assert.equal(insights.referrals.conversion_rate_percent, null);
-      assert.deepEqual(insights.referrals.historical_results, {
-        new_clients: 0,
-        appointments_booked: 0,
-        has_successful_conversions: false
-      });
+      assert.equal(insights.referrals.has_successful_conversions, false);
+      assert.deepEqual(insights.referrals.metrics.map((metric) => metric.display_value), ["0", "0", "0%"]);
+      assert.deepEqual(insights.referrals.metrics.map((metric) => metric.icon_key), [
+        "referral_clients", "referral_appointments", "referral_conversion"
+      ]);
     } finally {
       supabase.restore();
     }
@@ -131,9 +125,8 @@ describe("Referral Insights state matrix", () => {
       assert.equal(insights.referrals.available, true);
       if (!insights.referrals.available) throw new Error("Expected available referrals");
 
-      assert.equal(insights.referrals.new_clients, 0);
-      assert.equal(insights.referrals.appointments_booked, 0);
-      assert.equal(insights.referrals.historical_results.has_successful_conversions, true);
+      assert.deepEqual(insights.referrals.metrics.map((metric) => metric.display_value), ["0", "0", "0%"]);
+      assert.equal(insights.referrals.has_successful_conversions, true);
     } finally {
       supabase.restore();
     }

@@ -36,7 +36,7 @@ allow the client to select metrics.
 The HTTP response uses the existing authenticated API data envelope.
 
 ```json
-{ "data": { "contract_version": "2026-07-21" } }
+{ "data": { "contract_version": "2026-07-22" } }
 ```
 
 `contract_version` is a date-versioned, additive contract marker. A new
@@ -52,7 +52,7 @@ The representative mobile fixture is
 
 ```ts
 type InsightsResponse = {
-  contract_version: "2026-07-21";
+  contract_version: "2026-07-22";
   generated_at: string; // UTC ISO-8601 instant
   account_timezone: string; // IANA, e.g. America/Denver
   business_snapshot: BusinessSnapshotSection;
@@ -178,9 +178,9 @@ The initial contract also reserves these independently available sections:
 - `campaigns`: a complete server-driven Campaign Insights model, including its
   reporting period, lifetime history state, metric cards, optional top campaign,
   and empty-state copy.
-- `referrals`: requested-period client/appointment/link counts, money values,
-  nullable conversion rate, an optional account-owned top-referrer ID, and
-  lifetime successful-conversion results.
+- `referrals`: a complete server-driven Referral Impact model, including its
+  requested reporting period, lifetime conversion state, three metric cards,
+  and an optional account-owned top-referrer highlight.
 - `appointment_changes`: server-selected contiguous current and preceding
   24-hour UTC windows with new-appointment and cancellation counts and nullable
   comparisons.
@@ -255,28 +255,67 @@ generation instant. `all_time` uses the explicit UTC interval from
 `1970-01-01T00:00:00.000Z` to the generation instant. It is not a relabeled
 month response.
 
-`appointments_booked` includes non-cancelled referral-attributed appointments;
-`attributed_revenue` includes completed ones only. Both money values are
-integer minor units. `conversion_rate_percent` is referral-attributed booked
-appointments divided by referral-link opens, multiplied by 100; it is `null`
-when there were no opens. The top-referrer client ID is returned only after a
-same-account ownership lookup succeeds.
-
-Every available referral section also returns:
+Every available referral section is a complete server-driven model for
+Referral Impact. There is no parallel legacy aggregate shape.
 
 ```ts
-historical_results: {
-  new_clients: number;
-  appointments_booked: number;
-  has_successful_conversions: boolean;
-}
+type ReferralsSection =
+  | {
+      available: true;
+      calculated_at?: string;
+      period: { label: string; start_at: string; end_at: string };
+      has_successful_conversions: boolean;
+      metrics: [ReferralMetric, ReferralMetric, ReferralMetric];
+      top_referrer: ReferralHighlight | null;
+    }
+  | UnavailableSection;
+
+type ReferralMetric = {
+  id: string;
+  icon_key: string;
+  display_value: string;
+  label: string;
+  supporting_text?: string | null;
+  semantic_tone?: "default" | "positive" | "neutral" | "warning";
+  accessibility_label?: string | null;
+};
+
+type ReferralHighlight = {
+  client_id: string | null;
+  icon_key?: string | null;
+  eyebrow?: string | null;
+  title: string;
+  result_text?: string | null;
+  accessibility_label?: string | null;
+};
 ```
 
-These are lifetime aggregates independent of `referral_period`. `new_clients`
-counts clients with `original_referral_attributed_at`; `appointments_booked`
-counts non-cancelled appointments with `referral_attributed_at`.
-`has_successful_conversions` is true when either lifetime count is non-zero.
-Referral link creation, shares, and opens never make this flag true.
+`has_successful_conversions` is a lifetime value independent of
+`referral_period`. It is true when an account has at least one referred client
+or non-cancelled referral-attributed appointment. Link creation, shares, and
+opens never make this flag true.
+
+Conversion is calculated as non-cancelled referral-attributed appointments
+divided by referral-link opens in the selected period. A period with no opens
+returns the formatted `0%` metric and server-provided `No bookings yet` copy;
+it never exposes a nullable conversion value.
+
+The metric tuple is exactly three cards and is already in display order. Render
+the supplied labels, values, supporting copy, tones, and icon keys verbatim;
+do not use IDs to derive presentation or reformat `display_value`. A
+`top_referrer.client_id` is returned only after a same-account ownership lookup
+succeeds. When it is `null`, the highlight is informational rather than a
+client-detail navigation target.
+
+The closed initial icon-key catalog is `referral_program`, `referral_clients`,
+`referral_appointments`, `referral_conversion`, and `referral_top_referrer`.
+Unknown future keys must be rendered without an icon and reported as a
+presentation-contract warning.
+
+The following legacy fields were removed in contract version `2026-07-22`:
+`new_clients`, `appointments_booked`, `conversion_rate_percent`, `links_sent`,
+`links_clicked`, `attributed_revenue`, `booked_value`, `historical_results`,
+`top_referrer.display_name`, and `top_referrer.referral_count`.
 
 ### Appointment-change definitions
 
