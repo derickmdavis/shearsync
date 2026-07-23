@@ -15,7 +15,7 @@ Auth is required. Results are always scoped to the authenticated stylist/busines
 | `pageSize` | number | `25` | Max `100`. Use `25` for normal list/search UI. |
 | `sort` | string | `updated_at` | Supported: `updated`, `updated_at`, `name`, `spend`, `total_spend`, `last_visit`, `last_visit_at`. |
 | `direction` | string | `desc` | Supported: `asc`, `desc`. |
-| `filter` | string | `all` | Supported: `all`, `active`, `vip`. `active` currently means all non-deleted clients because clients do not have an archive/status column yet. |
+| `filter` | string | `all` | Supported: `all`, `active`, `vip`, `overdue`, `first_time`, `top_spenders`. `active` currently means all non-deleted clients because clients do not have an archive/status column yet. |
 
 Example:
 
@@ -32,10 +32,23 @@ type ClientsListResponse = {
   pageSize: number;
   totalCount: number;
   nextCursor: string | null;
+  insights: {
+    overdue: { count: number; supportingText: string };
+    firstTime: { count: number; supportingText: "This year" };
+    topSpenders: {
+      count: number;
+      supportingText: string;
+      thresholdAmount: number;
+      period: "lifetime";
+      percentile: 10;
+    };
+  };
 };
 ```
 
 `nextCursor` is a stringified next page number for now. Treat it as opaque on the frontend. If it is `null`, there is no next page.
+
+`insights` is calculated from all non-deleted clients matching `search`, before the selected `filter` is applied. This means tile counts remain meaningful after a tile is selected. `topSpenders.thresholdAmount` is the lifetime spend of the final client in the top 10% ranking; use it rather than a hard-coded threshold.
 
 ## Client Fields
 
@@ -62,6 +75,9 @@ type ClientRecord = {
   avatar_image_id: string | null;
   total_spend: number | string | null;
   last_visit_at: string | null;
+  completed_visit_count: number;
+  first_completed_visit_at: string | null;
+  last_completed_visit_at: string | null;
   created_at: string;
   updated_at: string;
   next_appointment_at: string | null;
@@ -103,14 +119,11 @@ Backend-backed today:
 - `all`: all authenticated stylist-owned clients.
 - `active`: same as `all` until a client archive/status field exists.
 - `vip`: clients whose persisted `is_vip` flag is `true`. Tags are no longer authoritative for VIP status.
+- `overdue`: clients whose last completed visit has passed their configured rebooking interval and who have no upcoming non-cancelled appointment.
+- `first_time`: clients whose first completed visit falls in the current business-local calendar year.
+- `top_spenders`: the highest-spending `ceil(10%)` of matching active clients, ranked by lifetime completed-appointment spend with client ID as the stable tie-breaker.
 
-Not yet accepted by `GET /api/clients`:
-
-- `needs_rebook`
-- `needs_follow_up`
-- `has_future_appointment`
-
-Those require SQL-backed summary state or dedicated filter queries before they can be paginated correctly. The response still includes `needs_rebook` and `has_future_appointment` for each returned row, but the frontend should not expect backend filtering on those values yet.
+`needs_follow_up` and `has_future_appointment` are not accepted filters.
 
 ## Recommended Request Builder
 

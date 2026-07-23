@@ -5,7 +5,7 @@ import { optionalEmailSchema, referralSourceSchema } from "./common";
 const preferredContactMethodSchema = z.enum(["text", "call", "email", "instagram"]);
 const clientSourceSchema = z.enum(["referral", "instagram", "walk-in", "existing-client", "other"]);
 const listClientSortSchema = z.enum(["updated", "updated_at", "name", "spend", "total_spend", "last_visit", "last_visit_at"]);
-const listClientFilterSchema = z.enum(["all", "active", "vip"]);
+const listClientFilterSchema = z.enum(["all", "active", "vip", "overdue", "first_time", "top_spenders"]);
 const birthdaySchema = z.string().refine(isValidBirthday, "Birthday must use DD/MM format");
 const clientAvatarImageIdSchema = z.string().uuid().nullable();
 

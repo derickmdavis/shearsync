@@ -8,9 +8,6 @@ import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { evaluateClientRebookStatus } from "./rebookService";
 import { campaignAudienceEligibilityService } from "./campaignAudienceEligibilityService";
 
-const CLIENT_LIST_SELECT =
-  "id, user_id, first_name, last_name, preferred_name, phone, phone_normalized, email, instagram, birthday, notes, preferred_contact_method, tags, source, reminder_consent, is_vip, avatar_image_id, total_spend, last_visit_at, deleted_at, deleted_reason, purge_after, created_at, updated_at";
-
 const CLIENT_SOFT_DELETE_RETENTION_DAYS = 30;
 
 type ListClientsOptions = {
@@ -19,7 +16,7 @@ type ListClientsOptions = {
   pageSize?: number;
   sort?: "updated" | "updated_at" | "name" | "spend" | "total_spend" | "last_visit" | "last_visit_at";
   direction?: "asc" | "desc";
-  filter?: "all" | "active" | "vip";
+  filter?: "all" | "active" | "vip" | "overdue" | "first_time" | "top_spenders";
   campaign_eligibility?: "email_marketing";
 };
 
@@ -29,6 +26,29 @@ type ListClientsResult = {
   pageSize: number;
   totalCount: number;
   nextCursor: string | null;
+  insights: {
+    overdue: { count: number; supportingText: string };
+    firstTime: { count: number; supportingText: string };
+    topSpenders: {
+      count: number;
+      supportingText: string;
+      thresholdAmount: number;
+      period: "lifetime";
+      percentile: 10;
+    };
+  };
+};
+
+const emptyClientInsights: ListClientsResult["insights"] = {
+  overdue: { count: 0, supportingText: "Rebooking due" },
+  firstTime: { count: 0, supportingText: "This year" },
+  topSpenders: {
+    count: 0,
+    supportingText: "$0.00+ lifetime",
+    thresholdAmount: 0,
+    period: "lifetime",
+    percentile: 10
+  }
 };
 
 const CLIENT_OPTIONAL_DEFAULTS: Row = {
@@ -133,29 +153,6 @@ const normalizeClientRecord = (client: Row): Row => {
   return { ...CLIENT_OPTIONAL_DEFAULTS, ...clientWithoutMessages };
 };
 
-const escapePostgrestSearchValue = (value: string): string =>
-  value.replace(/[%_,()]/g, (character) => `\\${character}`).replace(/"/g, '\\"');
-
-const escapePostgresArrayValue = (value: string): string => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-
-const buildClientSearchFilter = (search: string): string => {
-  const escaped = escapePostgrestSearchValue(search);
-  const escapedArrayValue = escapePostgresArrayValue(search);
-  const pattern = `%${escaped}%`;
-
-  return [
-    `first_name.ilike.${pattern}`,
-    `last_name.ilike.${pattern}`,
-    `preferred_name.ilike.${pattern}`,
-    `email.ilike.${pattern}`,
-    `phone.ilike.${pattern}`,
-    `phone_normalized.ilike.${pattern}`,
-    `instagram.ilike.${pattern}`,
-    `notes.ilike.${pattern}`,
-    `tags.cs.{"${escapedArrayValue}"}`
-  ].join(",");
-};
-
 const normalizeListOptions = (options: ListClientsOptions = {}) => ({
   search: options.search?.trim() ?? "",
   page: options.page ?? 1,
@@ -168,54 +165,15 @@ const normalizeListOptions = (options: ListClientsOptions = {}) => ({
 
 type NormalizedListClientsOptions = ReturnType<typeof normalizeListOptions>;
 
-const applyClientListFilters = <T extends {
-  or: (filters: string) => T;
-  eq: (column: string, value: unknown) => T;
-}>(query: T, options: NormalizedListClientsOptions): T => {
-  let nextQuery = query;
-
-  if (options.search) {
-    nextQuery = nextQuery.or(buildClientSearchFilter(options.search));
-  }
-
-  if (options.filter === "vip") {
-    nextQuery = nextQuery.eq("is_vip", true);
-  }
-
-  return nextQuery;
-};
-
-const applyClientListSort = <T extends {
-  order: (column: string, options?: { ascending?: boolean }) => T;
-}>(query: T, options: NormalizedListClientsOptions): T => {
-  const ascending = options.direction === "asc";
-
-  switch (options.sort) {
-    case "name":
-      return query.order("last_name", { ascending }).order("first_name", { ascending }).order("id", { ascending: true });
-    case "spend":
-    case "total_spend":
-      return query.order("total_spend", { ascending }).order("id", { ascending: true });
-    case "last_visit":
-    case "last_visit_at":
-      return query.order("last_visit_at", { ascending }).order("id", { ascending: true });
-    case "updated":
-    case "updated_at":
-    default:
-      return query.order("updated_at", { ascending }).order("id", { ascending: true });
-  }
-};
-
+// Kept for the single-client endpoint until it is moved to the same SQL-backed
+// summary source as the paginated list.
 const enrichClients = (clients: RowList, appointments: RowList, timeZone: string, now = new Date()): RowList => {
   const appointmentsByClientId = new Map<string, RowList>();
   const nowIso = now.toISOString();
 
   for (const appointment of appointments) {
     const clientId = appointment.client_id;
-    if (typeof clientId !== "string") {
-      continue;
-    }
-
+    if (typeof clientId !== "string") continue;
     const existing = appointmentsByClientId.get(clientId) ?? [];
     existing.push(appointment);
     appointmentsByClientId.set(clientId, existing);
@@ -223,28 +181,22 @@ const enrichClients = (clients: RowList, appointments: RowList, timeZone: string
 
   return clients.map((client) => {
     const normalizedClient = normalizeClientRecord(client);
-    const clientId = client.id;
-    const clientAppointments = typeof clientId === "string" ? appointmentsByClientId.get(clientId) ?? [] : [];
-    const nextAppointment = clientAppointments.find((appointment) => {
-      const appointmentDate = appointment.appointment_date;
-      return typeof appointmentDate === "string" && appointmentDate > nowIso;
-    });
-    const lastCompletedAppointment = [...clientAppointments]
-      .reverse()
-      .find((appointment) => {
-        const appointmentDate = appointment.appointment_date;
-        return typeof appointmentDate === "string" && appointmentDate <= nowIso;
-      });
+    const clientAppointments = typeof client.id === "string" ? appointmentsByClientId.get(client.id) ?? [] : [];
+    const nextAppointment = clientAppointments.find((appointment) =>
+      typeof appointment.appointment_date === "string" && appointment.appointment_date > nowIso
+    );
+    const lastPastAppointment = [...clientAppointments].reverse().find((appointment) =>
+      typeof appointment.appointment_date === "string" && appointment.appointment_date <= nowIso
+    );
     const nextAppointmentAt = (nextAppointment?.appointment_date as string | undefined) ?? null;
-    const hasFutureAppointment = nextAppointmentAt !== null;
     const { needsRebook } = evaluateClientRebookStatus(clientAppointments, timeZone, now);
 
     return {
       ...normalizedClient,
       next_appointment_at: nextAppointmentAt,
-      has_future_appointment: hasFutureAppointment,
+      has_future_appointment: nextAppointmentAt !== null,
       needs_rebook: needsRebook,
-      last_service: (lastCompletedAppointment?.service_name as string | undefined) ?? null
+      last_service: (lastPastAppointment?.service_name as string | undefined) ?? null
     };
   });
 };
@@ -252,50 +204,41 @@ const enrichClients = (clients: RowList, appointments: RowList, timeZone: string
 export const clientsService = {
   async list(userId: string, options: ListClientsOptions = {}): Promise<ListClientsResult> {
     const normalizedOptions = normalizeListOptions(options);
-    const rangeStart = (normalizedOptions.page - 1) * normalizedOptions.pageSize;
-    const rangeEnd = rangeStart + normalizedOptions.pageSize - 1;
-    let clientsQuery = supabaseAdmin
-      .from("clients")
-      .select(CLIENT_LIST_SELECT, { count: "exact" })
-      .eq("user_id", userId)
-      .is("deleted_at", null);
-
-    clientsQuery = applyClientListFilters(clientsQuery, normalizedOptions);
-    clientsQuery = applyClientListSort(clientsQuery, normalizedOptions).range(rangeStart, rangeEnd);
-
-    const { data: clients, error, count } = await clientsQuery;
+    const rpcArgs = {
+      p_user_id: userId,
+      p_search: normalizedOptions.search || null,
+      p_page: normalizedOptions.page,
+      p_page_size: normalizedOptions.pageSize,
+      p_sort: normalizedOptions.sort,
+      p_direction: normalizedOptions.direction,
+      p_filter: normalizedOptions.filter
+    };
+    const { data, error } = await supabaseAdmin.rpc("list_clients_with_summaries", rpcArgs);
 
     handleSupabaseError(error, "Unable to load clients");
-    const totalCount = count ?? clients?.length ?? 0;
-    const nextCursor = rangeEnd + 1 < totalCount ? String(normalizedOptions.page + 1) : null;
-
-    if (!clients || clients.length === 0) {
-      return {
-        data: [],
-        page: normalizedOptions.page,
-        pageSize: normalizedOptions.pageSize,
-        totalCount,
-        nextCursor
-      };
-    }
-
-    const clientIds = clients
-      .map((client) => client.id)
-      .filter((clientId): clientId is string => typeof clientId === "string");
-    const now = new Date();
-    const [timeZone, appointmentsResult] = await Promise.all([
-      businessTimeZoneService.getForUser(userId),
-      supabaseAdmin
-        .from("appointments")
-        .select("client_id, appointment_date, service_name")
-        .eq("user_id", userId)
-        .neq("status", "cancelled")
-        .in("client_id", clientIds)
-        .order("appointment_date", { ascending: true })
-    ]);
-
-    handleSupabaseError(appointmentsResult.error, "Unable to load client summary metadata");
-    const enriched = enrichClients(clients, appointmentsResult.data ?? [], timeZone, now);
+    const rows = (data ?? []) as Array<{
+      client: Row;
+      total_count: number | string;
+      insights: ListClientsResult["insights"];
+    }>;
+    // PostgreSQL cannot attach a window count to an empty page. Re-read one row
+    // only for an out-of-range page so pagination metadata remains accurate.
+    const countResult = rows.length === 0 && normalizedOptions.page > 1
+      ? await supabaseAdmin.rpc("list_clients_with_summaries", { ...rpcArgs, p_page: 1, p_page_size: 1 })
+      : null;
+    handleSupabaseError(countResult?.error ?? null, "Unable to load clients");
+    const countRows = countResult?.data as Array<{
+      total_count: number | string;
+      insights: ListClientsResult["insights"];
+    }> | null;
+    const responseRow = rows[0] ?? countRows?.[0] ?? null;
+    const totalCount = rows.length > 0
+      ? Number(rows[0].total_count)
+      : countRows && countRows.length > 0 ? Number(countRows[0].total_count) : 0;
+    const nextCursor = normalizedOptions.page * normalizedOptions.pageSize < totalCount
+      ? String(normalizedOptions.page + 1)
+      : null;
+    const enriched = rows.map((row) => normalizeClientRecord(row.client));
     const eligibility = normalizedOptions.campaign_eligibility
       ? await campaignAudienceEligibilityService.evaluateClients(userId, enriched, { applyDuplicateExclusions: false })
       : [];
@@ -311,7 +254,8 @@ export const clientsService = {
       page: normalizedOptions.page,
       pageSize: normalizedOptions.pageSize,
       totalCount,
-      nextCursor
+      nextCursor,
+      insights: responseRow?.insights ?? emptyClientInsights
     };
   },
 

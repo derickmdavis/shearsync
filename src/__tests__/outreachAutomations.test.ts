@@ -2,12 +2,61 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { outreachAutomationsService } from "../services/outreachAutomationsService";
 import { outreachAutomationsSchema } from "../validators/outreachValidators";
+import { ApiError } from "../lib/errors";
+import { handleSupabaseError } from "../services/db";
 import { installMockSupabase } from "./helpers/mockSupabase";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const clientId = "22222222-2222-4222-8222-222222222222";
 
 describe("outreach automation bootstrap", () => {
+  it("returns a valid zero-safe bootstrap for an account with no automation configuration", async () => {
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "America/Denver" }]
+    });
+
+    try {
+      const response = await outreachAutomationsService.getForUser(userId);
+
+      outreachAutomationsSchema.parse(response);
+      assert.equal(response.account_timezone, "America/Denver");
+      assert.deepEqual(response.summary, { enabled_count: 0, available_count: 2, total_count: 6 });
+      assert.equal(response.controls.every((control) => control.pending_approval_count === 0), true);
+      assert.equal(response.controls.every((control) => control.queued_count === 0), true);
+      assert.equal(response.controls.every((control) => control.templates.length >= 0), true);
+      assert.equal(response.customers_reached.unique_clients, 0);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("turns a missing Outreach table or column into the actionable schema-readiness response", () => {
+    const databaseError = {
+      code: "42P01",
+      message: 'relation "public.automation_settings" does not exist',
+      details: null,
+      hint: null,
+      name: "PostgrestError"
+    };
+
+    assert.throws(
+      () => handleSupabaseError(databaseError as never, "Unable to load outreach automation settings"),
+      (error: unknown) => {
+        assert.ok(error instanceof ApiError);
+        assert.equal(error.statusCode, 503);
+        assert.equal(error.message, "Database schema is out of date; apply the required Supabase migrations.");
+        assert.deepEqual(error.details, {
+          requiredSchemaVersion: "campaign_delivery_analytics_2026_07_18",
+          code: "42P01",
+          message: 'relation "public.automation_settings" does not exist',
+          details: null,
+          hint: null
+        });
+        return true;
+      }
+    );
+  });
+
   it("composes settings, capabilities, timing, counts, and metric metadata", async () => {
     const supabase = installMockSupabase({
       users: [{ id: userId, plan_tier: "pro", plan_status: "active", timezone: "America/Denver" }],

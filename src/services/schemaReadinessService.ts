@@ -326,6 +326,30 @@ const REQUIRED_TABLE_COLUMNS = {
   ],
   outreach_schema_versions: [
     "component", "version", "applied_at"
+  ],
+  app_content_definitions: [
+    "key", "namespace", "category", "description", "allowed_placeholders", "max_length",
+    "multiline_allowed", "is_active", "fallback_required", "developer_notes",
+    "created_by_admin_email", "updated_by_admin_email", "created_at", "updated_at"
+  ],
+  app_content_locale_state: [
+    "locale", "active_revision_id", "active_version", "updated_by_admin_email",
+    "updated_by_user_id", "created_at", "updated_at"
+  ],
+  app_content_drafts: [
+    "definition_key", "locale", "value", "draft_version", "validation_status",
+    "validation_errors", "updated_by_admin_email", "updated_by_user_id", "created_at", "updated_at"
+  ],
+  app_content_revisions: [
+    "id", "locale", "version", "kind", "source_revision_id", "checksum",
+    "published_by_admin_email", "published_by_user_id", "published_at", "created_at"
+  ],
+  app_content_revision_entries: [
+    "revision_id", "definition_key", "value", "created_at"
+  ],
+  app_content_audit_events: [
+    "id", "event_type", "definition_key", "locale", "revision_id", "actor_user_id",
+    "actor_admin_email", "previous_value", "new_value", "metadata", "created_at"
   ]
 } as const;
 

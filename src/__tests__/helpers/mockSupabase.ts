@@ -505,6 +505,126 @@ const upsertByUserId = (state: TableState, table: string, row: TableRow): TableR
   return nextRow;
 };
 
+const executeClientsListRpc = (state: TableState, args: Record<string, unknown>) => {
+  const userId = String(args.p_user_id ?? "");
+  const search = typeof args.p_search === "string" ? args.p_search.trim().toLowerCase() : "";
+  const page = Math.max(1, Number(args.p_page ?? 1));
+  const pageSize = Math.min(100, Math.max(1, Number(args.p_page_size ?? 25)));
+  const filter = String(args.p_filter ?? "all");
+  const sort = String(args.p_sort ?? "updated_at");
+  const direction = String(args.p_direction ?? "desc") === "asc" ? 1 : -1;
+  const now = new Date();
+  const settings = getRows(state, "rebook_nudge_settings").find((row) => row.user_id === userId);
+  const defaultIntervalDays = Number(settings?.default_rebook_interval_days ?? 90);
+  const timeZone = String(getRows(state, "users").find((row) => row.id === userId)?.timezone ?? "America/Denver");
+  const getYearInTimeZone = (instant: Date): number => Number(new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric"
+  }).formatToParts(instant).find((part) => part.type === "year")?.value);
+  const currentYear = getYearInTimeZone(now);
+
+  const matchesSearch = (client: TableRow): boolean => {
+    if (!search) return true;
+    const fields = ["first_name", "last_name", "preferred_name", "email", "phone", "phone_normalized", "instagram", "notes"];
+    return fields.some((field) => String(client[field] ?? "").toLowerCase().includes(search))
+      || (Array.isArray(client.tags) && client.tags.some((tag) => String(tag).toLowerCase() === search));
+  };
+
+  const summarized: TableRow[] = getRows(state, "clients")
+    .filter((client) => client.user_id === userId && !client.deleted_at && matchesSearch(client))
+    .map((client) => {
+      const appointments = getRows(state, "appointments")
+        .filter((appointment) => appointment.user_id === userId && appointment.client_id === client.id);
+      const completed = appointments
+        .filter((appointment) => appointment.status === "completed" && new Date(String(appointment.appointment_date)).getTime() <= now.getTime())
+        .sort((left, right) => String(left.appointment_date).localeCompare(String(right.appointment_date)));
+      const upcoming = appointments
+        .filter((appointment) => appointment.status !== "cancelled" && new Date(String(appointment.appointment_date)).getTime() > now.getTime())
+        .sort((left, right) => String(left.appointment_date).localeCompare(String(right.appointment_date)));
+      const preference = getRows(state, "client_rebooking_preferences")
+        .find((row) => row.user_id === userId && row.client_id === client.id);
+      const averageIntervalDays = completed.length > 1
+        ? Math.round(completed.slice(1).reduce((sum, appointment, index) =>
+          sum + (new Date(String(appointment.appointment_date)).getTime() - new Date(String(completed[index].appointment_date)).getTime()) / 86_400_000, 0
+        ) / (completed.length - 1))
+        : null;
+      const lastCompleted = completed.at(-1);
+      const nextAppointment = upcoming[0];
+      const rebookIntervalDays = Number(preference?.preferred_interval_days ?? averageIntervalDays ?? defaultIntervalDays);
+      const needsRebook = Boolean(lastCompleted)
+        && !nextAppointment
+        && new Date(String(lastCompleted?.appointment_date)).getTime() + rebookIntervalDays * 86_400_000 <= now.getTime();
+      const completedSpend = completed.reduce((sum, appointment) => sum + Number(appointment.price ?? 0), 0);
+      const totalSpend = completed.length > 0 ? completedSpend : Number(client.total_spend ?? 0);
+      const firstCompleted = completed[0];
+
+      return {
+        ...cloneRow(client),
+        total_spend: totalSpend,
+        completed_visit_count: completed.length,
+        first_completed_visit_at: firstCompleted?.appointment_date ?? null,
+        last_completed_visit_at: lastCompleted?.appointment_date ?? null,
+        next_appointment_at: nextAppointment?.appointment_date ?? null,
+        has_future_appointment: Boolean(nextAppointment),
+        needs_rebook: needsRebook,
+        last_service: lastCompleted?.service_name ?? null,
+        is_first_time: Boolean(firstCompleted)
+          && getYearInTimeZone(new Date(String(firstCompleted?.appointment_date))) === currentYear
+      };
+    });
+
+  const ranked = [...summarized].sort((left, right) =>
+    Number(right.total_spend) - Number(left.total_spend) || String(left.id).localeCompare(String(right.id))
+  );
+  const topSpenderIds = new Set(ranked.slice(0, Math.ceil(ranked.length * 0.1)).map((client) => client.id));
+  const topSpenders = ranked.filter((client) => topSpenderIds.has(client.id));
+  const topSpenderThreshold = topSpenders.length > 0
+    ? Math.min(...topSpenders.map((client) => Number(client.total_spend)))
+    : 0;
+  const insights = {
+    overdue: {
+      count: summarized.filter((client) => client.needs_rebook === true).length,
+      supportingText: "Rebooking due"
+    },
+    firstTime: {
+      count: summarized.filter((client) => client.is_first_time === true).length,
+      supportingText: "This year"
+    },
+    topSpenders: {
+      count: topSpenders.length,
+      supportingText: `$${topSpenderThreshold.toFixed(2)}+ lifetime`,
+      thresholdAmount: topSpenderThreshold,
+      period: "lifetime",
+      percentile: 10
+    }
+  };
+  const filtered = summarized.filter((client) =>
+    filter === "all" || filter === "active"
+      || (filter === "vip" && client.is_vip === true)
+      || (filter === "overdue" && client.needs_rebook === true)
+      || (filter === "first_time" && client.is_first_time === true)
+      || (filter === "top_spenders" && topSpenderIds.has(client.id))
+  );
+  const sorted = [...filtered].sort((left, right) => {
+    const column = sort === "name" ? "last_name" : sort === "spend" ? "total_spend" : sort === "last_visit" ? "last_completed_visit_at" : sort;
+    const first = left[column] ?? null;
+    const second = right[column] ?? null;
+    if (first === second) return String(left.id).localeCompare(String(right.id));
+    if (first === null) return 1;
+    if (second === null) return -1;
+    return (first < second ? -1 : 1) * direction;
+  });
+
+  return {
+    data: sorted.slice((page - 1) * pageSize, page * pageSize).map((client) => ({
+      client: Object.fromEntries(Object.entries(client).filter(([key]) => key !== "is_first_time")),
+      total_count: filtered.length,
+      insights
+    })),
+    error: null
+  };
+};
+
 const executeApprovalSettingsRpc = (state: TableState, functionName: string, args: Record<string, unknown>) => {
   const snapshot = cloneState(state);
 
@@ -1039,7 +1159,9 @@ export const installMockSupabase = (initialState: TableState, options: MockSupab
   const state = cloneState(initialState);
   const fromRestore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
   const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
-    executeApprovalSettingsRpc(state, functionName, args)
+    functionName === "list_clients_with_summaries"
+      ? executeClientsListRpc(state, args)
+      : executeApprovalSettingsRpc(state, functionName, args)
   );
 
   return {

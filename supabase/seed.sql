@@ -7,8 +7,8 @@
 --
 -- It resets only client/appointment-adjacent demo data for the target user:
 -- clients, appointments, photos, reminders, waitlist entries, activity events,
--- referral attribution, automation queues, communication events, and appointment
--- email events.
+-- referral-program/campaign attribution and analytics, automation queues,
+-- communication events, and appointment email events.
 --
 -- Change this value if you want to reseed a different stylist account.
 
@@ -29,6 +29,26 @@ begin
     join seed_target st on st.user_id = u.id
   ) then
     raise exception 'Seed target user does not exist in public.users. Update seed_target.user_id before running this seed.';
+  end if;
+end
+$$;
+
+-- Databases that predate the DD/MM birthday migration still store this column
+-- as a date. Bring that legacy shape forward so the same seed works for both
+-- schema versions; current databases skip this block.
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'birthday_reminders'
+      and column_name = 'birthday'
+      and data_type = 'date'
+  ) then
+    alter table public.birthday_reminders
+      alter column birthday type text
+      using to_char(birthday, 'DD/MM');
   end if;
 end
 $$;
@@ -94,6 +114,14 @@ where user_id in (select user_id from seed_target);
 delete from public.client_communication_preferences
 where user_id in (select user_id from seed_target);
 
+delete from public.campaign_idempotency_records
+where user_id in (select user_id from seed_target);
+
+-- Campaign deletion cascades to its runs, audience selections, recipients, and
+-- delivery events. Delete it before referral links, which recipients may reference.
+delete from public.campaigns
+where user_id in (select user_id from seed_target);
+
 delete from public.referral_events
 where user_id in (select user_id from seed_target);
 
@@ -119,6 +147,9 @@ delete from public.clients
 where user_id in (select user_id from seed_target);
 
 delete from public.automation_settings
+where user_id in (select user_id from seed_target);
+
+delete from public.referral_programs
 where user_id in (select user_id from seed_target);
 
 do $$
@@ -529,6 +560,197 @@ from link_seed
 join client_rows on client_rows.client_no = link_seed.referrer_no
 cross join seed_target;
 
+insert into public.referral_programs (
+  user_id,
+  enabled,
+  offer_name,
+  offer_description,
+  created_at,
+  updated_at
+)
+select
+  user_id,
+  true,
+  '$25 off for you and a friend',
+  'Share your personal link. When your friend books, you both receive $25 off a future service.',
+  now() - interval '28 days',
+  now() - interval '1 day'
+from seed_target;
+
+-- Three campaigns make the campaign list, detail, delivery analytics, scheduled
+-- state, and referral-link campaign UI testable without sending any real email.
+with campaign_seed as (
+  select *
+  from (values
+    ('email-campaign-summer-gloss', 'Summer gloss refresh', 'completed', 'now', 'booking_link', 'everyone', 'Book your summer gloss', 'Hi {{first_name}}, refresh your summer color with a gloss appointment.'),
+    ('email-campaign-rebook-reminder', 'August rebooking reminder', 'scheduled', 'scheduled', 'booking_link', 'specific', 'Reserve your August appointment', 'Hi {{first_name}}, your preferred appointment times are filling up.'),
+    ('campaign-referral-share', 'Share your referral offer', 'completed', 'now', 'referral_link', 'everyone', 'Share $25 off with a friend', 'Hi {{first_name}}, share your personal referral link and give a friend $25 off.')
+  ) as seed(seed_key, name, target_status, send_mode, link_type, audience_mode, subject, message)
+)
+insert into public.campaigns (
+  id, user_id, name, status, campaign_kind, send_mode, scheduled_for,
+  timezone_snapshot, link_type, subject_snapshot, message_snapshot, audience_mode,
+  revision, created_at, updated_at
+)
+select
+  pg_temp.seed_uuid(seed_key),
+  st.user_id,
+  name,
+  'draft',
+  'one_time',
+  send_mode,
+  case when send_mode = 'scheduled' then now() + interval '4 days' else null end,
+  'America/Denver',
+  link_type,
+  subject,
+  message,
+  audience_mode,
+  3,
+  now() - interval '12 days',
+  now() - interval '1 day'
+from campaign_seed
+cross join seed_target st;
+
+update public.campaigns
+set
+  status = 'scheduled',
+  scheduled_at = now() - interval '1 day'
+where id = pg_temp.seed_uuid('email-campaign-rebook-reminder');
+
+update public.campaigns
+set
+  status = 'sending',
+  sending_started_at = now() - interval '8 days'
+where id in (
+  pg_temp.seed_uuid('email-campaign-summer-gloss'),
+  pg_temp.seed_uuid('campaign-referral-share')
+);
+
+update public.campaigns
+set
+  status = 'completed',
+  completed_at = now() - interval '7 days'
+where id in (
+  pg_temp.seed_uuid('email-campaign-summer-gloss'),
+  pg_temp.seed_uuid('campaign-referral-share')
+);
+
+insert into public.campaign_audience_selections (campaign_id, user_id, client_id, created_at)
+select
+  pg_temp.seed_uuid('email-campaign-rebook-reminder'),
+  st.user_id,
+  clients.id,
+  now() - interval '1 day'
+from public.clients clients
+cross join seed_target st
+where clients.user_id = st.user_id
+  and clients.id in (
+    select id
+    from public.clients
+    where user_id = st.user_id
+    order by first_name, last_name, id
+    offset 6 limit 2
+  );
+
+with client_rows as (
+  select row_number() over (order by first_name, last_name, id) as client_no, id as client_id
+  from public.clients
+  where user_id in (select user_id from seed_target)
+), recipient_seed as (
+  select *
+  from (values
+    ('email-campaign-summer-gloss', 1, 'delivered', 'eligible', null::text),
+    ('email-campaign-summer-gloss', 2, 'delivered', 'eligible', null::text),
+    ('email-campaign-summer-gloss', 3, 'failed', 'eligible', null::text),
+    ('campaign-referral-share', 4, 'delivered', 'eligible', null::text),
+    ('campaign-referral-share', 5, 'sent', 'eligible', null::text),
+    ('campaign-referral-share', 6, 'skipped', 'excluded', 'email_marketing_disabled'),
+    ('email-campaign-rebook-reminder', 7, 'pending', 'eligible', null::text),
+    ('email-campaign-rebook-reminder', 8, 'pending', 'eligible', null::text)
+  ) as seed(campaign_key, client_no, recipient_status, eligibility_status, exclusion_reason)
+)
+insert into public.campaign_recipients (
+  id, campaign_id, campaign_run_id, user_id, client_id, recipient_email_snapshot,
+  first_name_snapshot, eligibility_status, exclusion_reason, subject_snapshot,
+  rendered_text_snapshot, rendered_html_snapshot, booking_tracking_token_hash,
+  referral_link_id, status, idempotency_key, provider, provider_message_id,
+  attempt_count, queued_at, sent_at, delivered_at, failed_at, error_code, error_message,
+  created_at, updated_at
+)
+select
+  pg_temp.seed_uuid('campaign-recipient-' || seed.campaign_key || '-' || seed.client_no),
+  pg_temp.seed_uuid(seed.campaign_key),
+  runs.id,
+  st.user_id,
+  clients.client_id,
+  case when seed.eligibility_status = 'eligible' then 'seed.client.' || seed.client_no || '@example.test' else null end,
+  'Client ' || seed.client_no,
+  seed.eligibility_status,
+  seed.exclusion_reason,
+  campaigns.subject_snapshot,
+  campaigns.message_snapshot,
+  '<p>' || campaigns.message_snapshot || '</p>',
+  case when seed.eligibility_status = 'eligible' then repeat('a', 64) else null end,
+  links.id,
+  seed.recipient_status,
+  'seed-' || seed.campaign_key || '-' || seed.client_no,
+  case when seed.recipient_status in ('delivered', 'sent', 'failed') then 'resend' else null end,
+  case when seed.recipient_status in ('delivered', 'sent', 'failed') then 'seed-message-' || seed.campaign_key || '-' || seed.client_no else null end,
+  case when seed.recipient_status in ('delivered', 'sent', 'failed') then 1 else 0 end,
+  case when seed.recipient_status <> 'pending' then now() - interval '8 days' else null end,
+  case when seed.recipient_status in ('delivered', 'sent') then now() - interval '8 days' else null end,
+  case when seed.recipient_status = 'delivered' then now() - interval '8 days' + interval '3 minutes' else null end,
+  case when seed.recipient_status = 'failed' then now() - interval '8 days' + interval '1 minute' else null end,
+  case when seed.recipient_status = 'failed' then 'provider_rejected' else null end,
+  case when seed.recipient_status = 'failed' then 'The provider rejected this demo recipient.' else null end,
+  now() - interval '9 days', now() - interval '7 days'
+from recipient_seed seed
+join client_rows clients on clients.client_no = seed.client_no
+join public.campaigns campaigns on campaigns.id = pg_temp.seed_uuid(seed.campaign_key)
+join public.campaign_runs runs on runs.campaign_id = campaigns.id and runs.sequence_number = 1
+left join public.client_referral_links links on links.client_id = clients.client_id and links.user_id = campaigns.user_id
+cross join seed_target st;
+
+update public.campaign_runs runs
+set
+  recipient_total = metrics.recipient_total,
+  eligible_count = metrics.eligible_count,
+  excluded_count = metrics.excluded_count,
+  pending_count = metrics.pending_count,
+  sent_count = metrics.sent_count,
+  failed_count = metrics.failed_count
+from (
+  select campaign_run_id, count(*) as recipient_total,
+    count(*) filter (where eligibility_status = 'eligible') as eligible_count,
+    count(*) filter (where eligibility_status = 'excluded') as excluded_count,
+    count(*) filter (where status = 'pending') as pending_count,
+    count(*) filter (where status in ('sent', 'delivered')) as sent_count,
+    count(*) filter (where status = 'failed') as failed_count
+  from public.campaign_recipients
+  where user_id in (select user_id from seed_target)
+  group by campaign_run_id
+) metrics
+where runs.id = metrics.campaign_run_id;
+
+insert into public.campaign_delivery_events (
+  id, campaign_id, campaign_recipient_id, user_id, provider, provider_event_id,
+  provider_message_id, event_type, occurred_at, url, is_automated, privacy_limited, provider_payload, created_at
+)
+select
+  pg_temp.seed_uuid('campaign-event-' || recipients.id || '-' || event.event_type || '-' || event.event_no),
+  recipients.campaign_id, recipients.id, recipients.user_id, 'resend',
+  'seed-event-' || recipients.id || '-' || event.event_type || '-' || event.event_no,
+  recipients.provider_message_id, event.event_type,
+  now() - interval '7 days' + (event.event_no || ' hours')::interval,
+  case when event.event_type = 'clicked' then 'https://app.shearsync.test/book/seed' else null end,
+  event.is_automated, event.privacy_limited, jsonb_build_object('seed', true), now() - interval '7 days'
+from public.campaign_recipients recipients
+join lateral (values
+  ('delivered', 1, false, false), ('opened', 1, false, false), ('opened', 2, true, false), ('clicked', 1, false, false)
+) as event(event_type, event_no, is_automated, privacy_limited)
+  on recipients.status = 'delivered'
+where recipients.user_id in (select user_id from seed_target);
+
 with attribution_seed as (
   select
     attribution_no,
@@ -630,6 +852,36 @@ set
   acquisition_source = 'client_referral_link'
 from appointment_targets
 where a.id = appointment_targets.appointment_id;
+
+-- Attribute a few successful referral appointments to the completed booking
+-- campaign. This exercises the campaign reporting booking/revenue fields.
+with attributed_appointments as (
+  select
+    id,
+    row_number() over (order by referral_attributed_at, id) as appointment_no
+  from public.appointments
+  where user_id in (select user_id from seed_target)
+    and referral_link_id is not null
+    and status <> 'cancelled'
+  order by referral_attributed_at, id
+  limit 2
+), campaign_context as (
+  select
+    campaigns.id as campaign_id,
+    runs.id as campaign_run_id
+  from public.campaigns campaigns
+  join public.campaign_runs runs on runs.campaign_id = campaigns.id and runs.sequence_number = 1
+  where campaigns.id = pg_temp.seed_uuid('email-campaign-summer-gloss')
+)
+update public.appointments appointments
+set
+  campaign_id = campaign_context.campaign_id,
+  campaign_run_id = campaign_context.campaign_run_id,
+  campaign_recipient_id = pg_temp.seed_uuid('campaign-recipient-email-campaign-summer-gloss-' || attributed_appointments.appointment_no),
+  campaign_attributed_at = appointments.referral_attributed_at
+from attributed_appointments
+cross join campaign_context
+where appointments.id = attributed_appointments.id;
 
 with link_rows as (
   select
@@ -1623,6 +1875,9 @@ select
 from marketing_rows;
 
 do $$
+declare
+  booking_step_columns text;
+  booking_step_values text;
 begin
   if to_regclass('public.product_events') is not null then
     insert into public.product_events (
@@ -1645,7 +1900,7 @@ begin
       links.user_id,
       links.user_id,
       links.client_id,
-      null,
+      null::uuid,
       'referral_link_created',
       'backend',
       stylists.slug,
@@ -1660,9 +1915,9 @@ begin
       pg_temp.seed_uuid('product-event-referral-click-' || row_number() over (order by events.created_at, events.id)),
       'local',
       events.user_id,
-      null,
-      events.referred_by_client_id,
-      null,
+      null::uuid,
+      events.referred_by_client_id::uuid,
+      null::uuid,
       'referral_link_clicked',
       'public_booking',
       stylists.slug,
@@ -1678,7 +1933,7 @@ begin
       pg_temp.seed_uuid('product-event-public-booking-' || row_number() over (order by appointments.created_at, appointments.id)),
       'local',
       appointments.user_id,
-      null,
+      null::uuid,
       appointments.client_id,
       appointments.id,
       case when appointments.referral_link_id is not null then 'referral_booking_submitted' else 'public_booking_submitted' end,
@@ -1690,7 +1945,7 @@ begin
         'has_referral', appointments.referral_link_id is not null,
         'source', 'seed'
       ),
-      coalesce(appointments.created_at, appointments.appointment_date)
+      coalesce(appointments.created_at, appointments.appointment_date::timestamptz)
     from public.appointments appointments
     left join public.stylists stylists on stylists.user_id = appointments.user_id
     where appointments.user_id in (select user_id from seed_target)
@@ -1749,6 +2004,36 @@ begin
   end if;
 
   if to_regclass('public.booking_error_events') is not null then
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'booking_error_events'
+        and column_name = 'booking_step'
+    ) and exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'booking_error_events'
+        and column_name = 'step'
+    ) then
+      booking_step_columns := 'step, booking_step';
+      booking_step_values := 'error_rows.step, error_rows.step';
+    elsif exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'booking_error_events'
+        and column_name = 'booking_step'
+    ) then
+      booking_step_columns := 'booking_step';
+      booking_step_values := 'error_rows.step';
+    else
+      booking_step_columns := 'step';
+      booking_step_values := 'error_rows.step';
+    end if;
+
+    execute format($seed_sql$
     insert into public.booking_error_events (
       id,
       environment,
@@ -1759,7 +2044,7 @@ begin
       request_id,
       session_id,
       anonymous_id,
-      step,
+      %s,
       error_code,
       severity,
       error_message,
@@ -1776,7 +2061,7 @@ begin
       'seed-request-' || error_rows.error_no,
       'seed-session-' || error_rows.error_no,
       'seed-anonymous-' || error_rows.error_no,
-      error_rows.step,
+      %s,
       error_rows.error_code,
       error_rows.severity,
       error_rows.error_message,
@@ -1786,9 +2071,9 @@ begin
       select
         row_number() over (order by clients.id) as error_no,
         clients.id as client_id,
-        (array['booking_submission', 'availability_generation', 'waitlist_submit'])[((row_number() over (order by clients.id) - 1) % 3) + 1] as step,
-        (array['booking_conflict', 'slot_unavailable', 'waitlist_create_failed'])[((row_number() over (order by clients.id) - 1) % 3) + 1] as error_code,
-        (array['warning', 'info', 'error'])[((row_number() over (order by clients.id) - 1) % 3) + 1] as severity,
+        (array['booking_submission', 'availability_generation', 'waitlist_submit'])[(mod(row_number() over (order by clients.id) - 1, 3)) + 1] as step,
+        (array['booking_conflict', 'slot_unavailable', 'waitlist_create_failed'])[(mod(row_number() over (order by clients.id) - 1, 3)) + 1] as error_code,
+        (array['warning', 'info', 'error'])[(mod(row_number() over (order by clients.id) - 1, 3)) + 1] as severity,
         'Seeded booking flow error for internal health metrics.' as error_message
       from public.clients clients
       where clients.user_id in (select user_id from seed_target)
@@ -1796,7 +2081,8 @@ begin
       limit 9
     ) error_rows
     cross join seed_target
-    left join public.stylists stylists on stylists.user_id = seed_target.user_id;
+    left join public.stylists stylists on stylists.user_id = seed_target.user_id
+    $seed_sql$, booking_step_columns, booking_step_values);
   end if;
 end
 $$;

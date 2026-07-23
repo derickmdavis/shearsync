@@ -1,11 +1,13 @@
 import { Router } from "express";
 import { adminController } from "../controllers/adminController";
+import { appContentAdminRouter } from "./appContentAdminRoutes";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAdmin } from "../middleware/adminAuth";
 
 export const adminRouter = Router();
 
 adminRouter.use(requireAdmin);
+adminRouter.use("/app-content", appContentAdminRouter);
 
 adminRouter.get("/status", (req, res) => {
   res.json({

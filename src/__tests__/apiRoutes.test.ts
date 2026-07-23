@@ -953,7 +953,7 @@ describe("API handlers", () => {
     mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-30T12:00:00.000Z") });
     const futureAppointment = "2026-05-01T12:00:00.000Z";
     const pastAppointment = "2026-04-29T12:00:00.000Z";
-    const olderPastAppointment = "2026-01-30T12:00:00.000Z";
+    const olderPastAppointment = "2025-12-30T12:00:00.000Z";
     const supabase = installMockSupabase({
       users: [
         {
@@ -1002,7 +1002,8 @@ describe("API handlers", () => {
           appointment_date: pastAppointment,
           service_name: "Gloss",
           duration_minutes: 60,
-          status: "scheduled"
+          price: 125,
+          status: "completed"
         },
         {
           id: "appointment-3",
@@ -1011,7 +1012,8 @@ describe("API handlers", () => {
           appointment_date: olderPastAppointment,
           service_name: "Haircut",
           duration_minutes: 45,
-          status: "scheduled"
+          price: 80,
+          status: "completed"
         }
       ]
     });
@@ -1039,9 +1041,12 @@ describe("API handlers", () => {
             reminder_consent: true,
             is_vip: true,
             avatar_image_id: null,
-            total_spend: null,
+            total_spend: 125,
             last_visit_at: null,
             updated_at: "2026-04-27T12:00:00.000Z",
+            completed_visit_count: 1,
+            first_completed_visit_at: pastAppointment,
+            last_completed_visit_at: pastAppointment,
             next_appointment_at: futureAppointment,
             has_future_appointment: true,
             needs_rebook: false,
@@ -1061,9 +1066,12 @@ describe("API handlers", () => {
             reminder_consent: null,
             is_vip: false,
             avatar_image_id: null,
-            total_spend: null,
+            total_spend: 80,
             last_visit_at: null,
             updated_at: "2026-04-26T12:00:00.000Z",
+            completed_visit_count: 1,
+            first_completed_visit_at: olderPastAppointment,
+            last_completed_visit_at: olderPastAppointment,
             next_appointment_at: null,
             has_future_appointment: false,
             needs_rebook: true,
@@ -1073,8 +1081,118 @@ describe("API handlers", () => {
         page: 1,
         pageSize: 25,
         totalCount: 2,
-        nextCursor: null
+        nextCursor: null,
+        insights: {
+          overdue: { count: 1, supportingText: "Rebooking due" },
+          firstTime: { count: 1, supportingText: "This year" },
+          topSpenders: {
+            count: 1,
+            supportingText: "$125.00+ lifetime",
+            thresholdAmount: 125,
+            period: "lifetime",
+            percentile: 10
+          }
+        }
       });
+
+      for (const [filter, expectedClientId] of [
+        ["overdue", "client-2"],
+        ["first_time", "client-1"],
+        ["top_spenders", "client-1"]
+      ]) {
+        const filteredResponse = await runWithErrorHandler(
+          (request, res) => clientsController.list(request, res),
+          createMockRequest({ user: { id: userId } as Request["user"], query: { filter } })
+        );
+        assert.equal(filteredResponse.statusCode, 200);
+        assert.equal((filteredResponse.body as { insights: { overdue: { count: number } } }).insights.overdue.count, 1);
+        assert.deepEqual(
+          (filteredResponse.body as { data: Array<{ id: string }> }).data.map((client) => client.id),
+          [expectedClientId]
+        );
+      }
+    } finally {
+      supabase.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("derives client insights from completed history and keeps metrics independent of insight filters", async () => {
+    mock.timers.enable({ apis: ["Date"], now: new Date("2026-01-02T12:00:00.000Z") });
+    const rankedClients = Array.from({ length: 11 }, (_, index) => ({
+      id: `rank-${String(index + 1).padStart(2, "0")}`,
+      user_id: userId,
+      first_name: `Segment Rank ${index + 1}`,
+      last_name: "Client",
+      total_spend: 1100 - index * 100,
+      updated_at: `2026-01-${String(index + 1).padStart(2, "0")}T12:00:00.000Z`
+    }));
+    const supabase = installMockSupabase({
+      users: [{ id: userId, timezone: "America/Denver" }],
+      rebook_nudge_settings: [{ user_id: userId, default_rebook_interval_days: 30 }],
+      clients: [
+        ...rankedClients,
+        { id: "legacy", user_id: userId, first_name: "Segment Legacy", last_name: "Client", total_spend: 777 },
+        { id: "completed", user_id: userId, first_name: "Segment Completed", last_name: "Client", total_spend: 999 },
+        { id: "overdue", user_id: userId, first_name: "Segment Overdue", last_name: "Client", total_spend: 5 },
+        { id: "suppressed", user_id: userId, first_name: "Segment Suppressed", last_name: "Client", total_spend: 5 },
+        { id: "first-current", user_id: userId, first_name: "Segment First Current", last_name: "Client", total_spend: 5 },
+        { id: "first-prior", user_id: userId, first_name: "Segment First Prior", last_name: "Client", total_spend: 5 }
+      ],
+      appointments: [
+        { id: "completed-1", user_id: userId, client_id: "completed", appointment_date: "2026-01-01T18:00:00.000Z", status: "completed", price: 100, service_name: "Cut" },
+        { id: "completed-2", user_id: userId, client_id: "completed", appointment_date: "2025-12-30T18:00:00.000Z", status: "scheduled", price: 999, service_name: "Ignored" },
+        { id: "completed-3", user_id: userId, client_id: "completed", appointment_date: "2025-12-29T18:00:00.000Z", status: "no_show", price: 999, service_name: "Ignored" },
+        { id: "overdue-1", user_id: userId, client_id: "overdue", appointment_date: "2025-11-01T18:00:00.000Z", status: "completed", price: 20, service_name: "Cut" },
+        { id: "suppressed-1", user_id: userId, client_id: "suppressed", appointment_date: "2025-11-01T18:00:00.000Z", status: "completed", price: 20, service_name: "Cut" },
+        { id: "suppressed-2", user_id: userId, client_id: "suppressed", appointment_date: "2026-01-10T18:00:00.000Z", status: "scheduled", price: 20, service_name: "Cut" },
+        { id: "first-current-1", user_id: userId, client_id: "first-current", appointment_date: "2026-01-01T08:00:00.000Z", status: "completed", price: 20, service_name: "Cut" },
+        { id: "first-prior-1", user_id: userId, client_id: "first-prior", appointment_date: "2026-01-01T06:00:00.000Z", status: "completed", price: 20, service_name: "Cut" }
+      ]
+    });
+
+    try {
+      const all = await clientsService.list(userId, { search: "Segment", sort: "name", direction: "asc" });
+      const completed = all.data.find((client) => client.id === "completed");
+      const legacy = all.data.find((client) => client.id === "legacy");
+      assert.equal(completed?.completed_visit_count, 1);
+      assert.equal(completed?.total_spend, 100);
+      assert.equal(legacy?.completed_visit_count, 0);
+      assert.equal(legacy?.total_spend, 777);
+      assert.equal(all.totalCount, 17);
+      assert.equal(all.insights.overdue.count, 1);
+      assert.equal(all.insights.firstTime.count, 2);
+      assert.deepEqual(all.insights.topSpenders, {
+        count: 2,
+        supportingText: "$1000.00+ lifetime",
+        thresholdAmount: 1000,
+        period: "lifetime",
+        percentile: 10
+      });
+
+      const firstSpendPage = await clientsService.list(userId, {
+        search: "Segment", sort: "spend", direction: "desc", page: 1, pageSize: 1
+      });
+      const secondSpendPage = await clientsService.list(userId, {
+        search: "Segment", sort: "spend", direction: "desc", page: 2, pageSize: 1
+      });
+      assert.deepEqual(firstSpendPage.data.map((client) => client.id), ["rank-01"]);
+      assert.deepEqual(secondSpendPage.data.map((client) => client.id), ["rank-02"]);
+      assert.equal(firstSpendPage.totalCount, 17);
+      assert.equal(firstSpendPage.nextCursor, "2");
+      assert.deepEqual(firstSpendPage.insights, all.insights);
+
+      const expectedIdsByFilter: Record<string, string[]> = {
+        overdue: ["overdue"],
+        first_time: ["completed", "first-current"],
+        top_spenders: ["rank-01", "rank-02"]
+      };
+      for (const [filter, expectedIds] of Object.entries(expectedIdsByFilter)) {
+        const result = await clientsService.list(userId, { search: "Segment", filter: filter as "overdue" | "first_time" | "top_spenders", sort: "name", direction: "asc", pageSize: 100 });
+        assert.deepEqual(result.data.map((client) => client.id).sort(), [...expectedIds].sort());
+        assert.equal(result.insights.overdue.count, 1);
+        assert.equal(result.insights.topSpenders.thresholdAmount, 1000);
+      }
     } finally {
       supabase.restore();
       mock.timers.reset();
