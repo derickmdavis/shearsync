@@ -135,7 +135,8 @@ const baseState = () => ({
       opted_out_all_email: false
     }
   ],
-  global_email_unsubscribes: []
+  global_email_unsubscribes: [],
+  campaigns: [] as Array<Record<string, unknown>>
 });
 
 const appointmentItem = (items: ScheduledOutreachItemContract[], appointmentId: string) =>
@@ -192,6 +193,90 @@ describe("scheduled outreach read model", () => {
       assert.equal(response.data.length, 1);
       assert.equal(response.total_count, 2);
       assert.ok(response.next_cursor);
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("filters Today and Tomorrow in the business timezone and returns complete category totals", async () => {
+    const state = baseState();
+    state.users[0]!.timezone = "America/Denver";
+    state.client_communication_preferences = [];
+    state.appointments[0]!.appointment_date = "2026-07-25T05:59:59.999Z";
+    state.appointments[1]!.appointment_date = "2026-07-26T06:00:00.000Z";
+    state.rebook_nudges[0]!.send_after = "2026-07-23T06:00:00.000Z";
+    state.birthday_reminders[0]!.scheduled_send_at = "2026-07-25T05:59:59.999Z";
+    state.thank_you_emails[0]!.send_after = "2026-07-25T06:00:00.000Z";
+    state.campaigns = [{
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      user_id: userId,
+      name: "Tomorrow campaign",
+      status: "scheduled",
+      send_mode: "scheduled",
+      scheduled_for: "2026-07-24T18:00:00.000Z",
+      scheduled_at: "2026-07-20T18:00:00.000Z"
+    }];
+    const supabase = installMockSupabase(state);
+    try {
+      const response = await outreachScheduledSendsService.listForUser(userId, {
+        limit: 2,
+        window: "today_tomorrow",
+        now: new Date("2026-07-23T21:00:00.000Z")
+      });
+
+      assert.deepEqual(response.window, {
+        kind: "today_tomorrow",
+        timezone: "America/Denver",
+        starts_at: "2026-07-23T06:00:00.000Z",
+        ends_at: "2026-07-25T06:00:00.000Z"
+      });
+      assert.equal(response.total_count, 4);
+      assert.deepEqual(response.category_counts, { reminders: 2, outreach: 1, campaigns: 1 });
+      assert.equal(response.data.length, 2);
+      assert.ok(response.next_cursor);
+
+      const secondPage = await outreachScheduledSendsService.listForUser(userId, {
+        limit: 2,
+        window: "today_tomorrow",
+        cursor: response.next_cursor ?? undefined,
+        now: new Date("2026-07-23T21:00:00.000Z")
+      });
+      const ids = [...response.data, ...secondPage.data].map((item) => item.id);
+      assert.equal(ids.length, 4);
+      assert.equal(new Set(ids).size, 4);
+
+      await assert.rejects(
+        outreachScheduledSendsService.listForUser(userId, {
+          limit: 2,
+          window: "today_tomorrow",
+          kinds: ["campaign"],
+          cursor: response.next_cursor ?? undefined,
+          now: new Date("2026-07-23T21:00:00.000Z")
+        }),
+        (error: unknown) => error instanceof ApiError && error.statusCode === 400
+      );
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("uses local-midnight UTC boundaries across the Denver DST transition", async () => {
+    const state = baseState();
+    state.users[0]!.timezone = "America/Denver";
+    const supabase = installMockSupabase(state);
+    try {
+      const response = await outreachScheduledSendsService.listForUser(userId, {
+        limit: 20,
+        window: "today_tomorrow",
+        now: new Date("2026-03-08T18:00:00.000Z")
+      });
+
+      assert.deepEqual(response.window, {
+        kind: "today_tomorrow",
+        timezone: "America/Denver",
+        starts_at: "2026-03-08T07:00:00.000Z",
+        ends_at: "2026-03-10T06:00:00.000Z"
+      });
     } finally {
       supabase.restore();
     }

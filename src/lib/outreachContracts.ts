@@ -136,6 +136,17 @@ export interface ScheduledOutreachListContract {
   data: ScheduledOutreachItemContract[];
   next_cursor: string | null;
   total_count?: number;
+  category_counts?: {
+    reminders: number;
+    outreach: number;
+    campaigns: number;
+  };
+  window?: {
+    kind: "today_tomorrow";
+    timezone: string;
+    starts_at: string;
+    ends_at: string;
+  };
 }
 
 export interface OutreachAutomationControlContract {

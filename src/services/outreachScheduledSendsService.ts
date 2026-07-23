@@ -18,6 +18,8 @@ import { entitlementsService } from "./entitlementsService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
 import { campaignSubmissionService } from "./campaignSubmissionService";
+import { businessTimeZoneService } from "./businessTimeZoneService";
+import { addDays, getCurrentLocalDate, getStartOfLocalDayUtc } from "../lib/timezone";
 
 const APPOINTMENT_REMINDER_LEAD_MS = 24 * 60 * 60 * 1_000;
 const DATABASE_PAGE_SIZE = 500;
@@ -39,6 +41,7 @@ type ScheduledSendCandidate = ScheduledOutreachItemContract & {
 type ListScheduledSendsOptions = {
   status?: ScheduledOutreachStatus;
   kinds?: ScheduledOutreachKind[];
+  window?: "today_tomorrow";
   limit: number;
   cursor?: string;
   now?: Date;
@@ -48,6 +51,20 @@ type CursorPayload = {
   send_at: string;
   kind: ScheduledOutreachKind;
   id: string;
+};
+
+type WindowedCursorPayload = {
+  version: 2;
+  send_at: string;
+  id: string;
+  filter: string;
+};
+
+type ScheduledSendsWindow = {
+  kind: "today_tomorrow";
+  timezone: string;
+  startsAt: string;
+  endsAt: string;
 };
 
 const getString = (row: Row | null | undefined, key: string): string | null =>
@@ -108,10 +125,40 @@ const decodeCursor = (cursor: string): CursorPayload => {
   }
 };
 
+const encodeWindowedCursor = (item: ScheduledOutreachItemContract, filter: string): string =>
+  Buffer.from(JSON.stringify({
+    version: 2,
+    send_at: item.send_at,
+    id: item.id,
+    filter
+  } satisfies WindowedCursorPayload), "utf8").toString("base64url");
+
+const decodeWindowedCursor = (cursor: string, expectedFilter: string): WindowedCursorPayload => {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<WindowedCursorPayload>;
+    if (
+      parsed.version !== 2
+      || typeof parsed.send_at !== "string"
+      || typeof parsed.id !== "string"
+      || typeof parsed.filter !== "string"
+      || parsed.filter !== expectedFilter
+    ) {
+      throw new Error("Invalid cursor shape");
+    }
+
+    return parsed as WindowedCursorPayload;
+  } catch {
+    throw new ApiError(400, "Invalid scheduled sends cursor");
+  }
+};
+
 const compareItems = (left: ScheduledOutreachItemContract, right: ScheduledOutreachItemContract): number =>
   left.send_at.localeCompare(right.send_at)
   || left.kind.localeCompare(right.kind)
   || left.id.localeCompare(right.id);
+
+const compareWindowedItems = (left: ScheduledOutreachItemContract, right: ScheduledOutreachItemContract): number =>
+  left.send_at.localeCompare(right.send_at) || left.id.localeCompare(right.id);
 
 const loadAllRows = async (
   fetchPage: (start: number, end: number) => PromiseLike<{ data: unknown; error: unknown }>,
@@ -133,6 +180,36 @@ const isAfterCursor = (item: ScheduledOutreachItemContract, cursor: CursorPayloa
   item.send_at > cursor.send_at
   || (item.send_at === cursor.send_at && item.kind > cursor.kind)
   || (item.send_at === cursor.send_at && item.kind === cursor.kind && item.id > cursor.id);
+
+const isAfterWindowedCursor = (item: ScheduledOutreachItemContract, cursor: WindowedCursorPayload): boolean =>
+  item.send_at > cursor.send_at || (item.send_at === cursor.send_at && item.id > cursor.id);
+
+const createWindow = (timeZone: string, now: Date): ScheduledSendsWindow => {
+  const today = getCurrentLocalDate(timeZone, now);
+  return {
+    kind: "today_tomorrow",
+    timezone: timeZone,
+    startsAt: getStartOfLocalDayUtc(today, timeZone).toISOString(),
+    endsAt: getStartOfLocalDayUtc(addDays(today, 2), timeZone).toISOString()
+  };
+};
+
+const isWithinWindow = (item: ScheduledOutreachItemContract, window: ScheduledSendsWindow): boolean =>
+  item.send_at >= window.startsAt && item.send_at < window.endsAt;
+
+const getWindowCursorFilter = (
+  userId: string,
+  options: ListScheduledSendsOptions,
+  window: ScheduledSendsWindow
+): string => JSON.stringify({
+  user_id: userId,
+  status: options.status ?? "queued",
+  kinds: [...(options.kinds ?? [])].sort(),
+  window: window.kind,
+  timezone: window.timezone,
+  starts_at: window.startsAt,
+  ends_at: window.endsAt
+});
 
 const loadAutomationSettings = async (userId: string): Promise<Map<string, boolean>> => {
   const { data, error } = await supabaseAdmin
@@ -170,7 +247,8 @@ const loadClients = async (userId: string, clientIds: string[]): Promise<Map<str
 const loadAppointmentCandidates = async (
   userId: string,
   enabled: boolean,
-  now: Date
+  now: Date,
+  window?: ScheduledSendsWindow
 ): Promise<{ appointments: Row[]; emailEvents: Row[]; suppressions: Set<string> }> => {
   if (!enabled) {
     return { appointments: [], emailEvents: [], suppressions: new Set() };
@@ -178,15 +256,23 @@ const loadAppointmentCandidates = async (
 
   const [appointments, emailEvents] = await Promise.all([
     loadAllRows(
-      (start, end) => supabaseAdmin
-        .from("appointments")
-        .select("id, user_id, client_id, appointment_date, service_name, status")
-        .eq("user_id", userId)
-        .in("status", ["pending", "scheduled"])
-        .gt("appointment_date", now.toISOString())
-        .order("appointment_date", { ascending: true })
-        .order("id", { ascending: true })
-        .range(start, end),
+      (start, end) => {
+        let query = supabaseAdmin
+          .from("appointments")
+          .select("id, user_id, client_id, appointment_date, service_name, status")
+          .eq("user_id", userId)
+          .in("status", ["pending", "scheduled"])
+          .gt("appointment_date", now.toISOString());
+        if (window) {
+          query = query
+            .gte("appointment_date", new Date(new Date(window.startsAt).getTime() + APPOINTMENT_REMINDER_LEAD_MS).toISOString())
+            .lt("appointment_date", new Date(new Date(window.endsAt).getTime() + APPOINTMENT_REMINDER_LEAD_MS).toISOString());
+        }
+        return query
+          .order("appointment_date", { ascending: true })
+          .order("id", { ascending: true })
+          .range(start, end);
+      },
       "Unable to load future appointment reminders"
     ),
     loadAllRows(
@@ -217,49 +303,57 @@ const loadAppointmentCandidates = async (
   };
 };
 
-const loadQueuedRows = async (userId: string, settings: Map<string, boolean>, now: Date) => {
+const loadQueuedRows = async (
+  userId: string,
+  settings: Map<string, boolean>,
+  now: Date,
+  window?: ScheduledSendsWindow
+) => {
   const [rebook, birthday, thankYou] = await Promise.all([
     settings.get("rebook_nudges") === true
       ? loadAllRows(
-        (start, end) => supabaseAdmin
-          .from("rebook_nudges")
-          .select("id, client_id, last_appointment_id, recipient_email, status, send_after, template_data")
-          .eq("user_id", userId)
-          .eq("status", "queued")
-          .eq("approval_required", false)
-          .gte("send_after", now.toISOString())
-          .order("send_after", { ascending: true })
-          .order("id", { ascending: true })
-          .range(start, end),
+        (start, end) => {
+          let query = supabaseAdmin
+            .from("rebook_nudges")
+            .select("id, client_id, last_appointment_id, recipient_email, status, send_after, template_data")
+            .eq("user_id", userId)
+            .eq("status", "queued")
+            .eq("approval_required", false)
+            .gte("send_after", window?.startsAt ?? now.toISOString());
+          if (window) query = query.lt("send_after", window.endsAt);
+          return query.order("send_after", { ascending: true }).order("id", { ascending: true }).range(start, end);
+        },
         "Unable to load scheduled rebook nudges"
       )
       : Promise.resolve([]),
     settings.get("birthday_reminders") === true
       ? loadAllRows(
-        (start, end) => supabaseAdmin
-          .from("birthday_reminders")
-          .select("id, client_id, recipient_email, status, scheduled_send_at, template_data")
-          .eq("user_id", userId)
-          .eq("status", "queued")
-          .gte("scheduled_send_at", now.toISOString())
-          .order("scheduled_send_at", { ascending: true })
-          .order("id", { ascending: true })
-          .range(start, end),
+        (start, end) => {
+          let query = supabaseAdmin
+            .from("birthday_reminders")
+            .select("id, client_id, recipient_email, status, scheduled_send_at, template_data")
+            .eq("user_id", userId)
+            .eq("status", "queued")
+            .gte("scheduled_send_at", window?.startsAt ?? now.toISOString());
+          if (window) query = query.lt("scheduled_send_at", window.endsAt);
+          return query.order("scheduled_send_at", { ascending: true }).order("id", { ascending: true }).range(start, end);
+        },
         "Unable to load scheduled birthday reminders"
       )
       : Promise.resolve([]),
     settings.get("thank_you_emails") === true
       ? loadAllRows(
-        (start, end) => supabaseAdmin
-          .from("thank_you_emails")
-          .select("id, client_id, appointment_id, recipient_email, status, send_after, template_data")
-          .eq("user_id", userId)
-          .eq("status", "queued")
-          .eq("approval_required", false)
-          .gte("send_after", now.toISOString())
-          .order("send_after", { ascending: true })
-          .order("id", { ascending: true })
-          .range(start, end),
+        (start, end) => {
+          let query = supabaseAdmin
+            .from("thank_you_emails")
+            .select("id, client_id, appointment_id, recipient_email, status, send_after, template_data")
+            .eq("user_id", userId)
+            .eq("status", "queued")
+            .eq("approval_required", false)
+            .gte("send_after", window?.startsAt ?? now.toISOString());
+          if (window) query = query.lt("send_after", window.endsAt);
+          return query.order("send_after", { ascending: true }).order("id", { ascending: true }).range(start, end);
+        },
         "Unable to load scheduled thank you emails"
       )
       : Promise.resolve([])
@@ -543,6 +637,8 @@ export const outreachScheduledSendsService = {
 
   async listForUser(userId: string, options: ListScheduledSendsOptions): Promise<ScheduledOutreachListContract> {
     const now = options.now ?? new Date();
+    const timeZone = options.window ? await businessTimeZoneService.getForUser(userId) : null;
+    const window = options.window && timeZone ? createWindow(timeZone, now) : undefined;
     const [settings, entitlements, campaigns] = await Promise.all([
       loadAutomationSettings(userId),
       entitlementsService.getEntitlementsForUser(userId),
@@ -551,9 +647,10 @@ export const outreachScheduledSendsService = {
     const appointmentSource = await loadAppointmentCandidates(
       userId,
       settings.get("appointment_reminders") === true,
-      now
+      now,
+      window
     );
-    const workflowRows = await loadQueuedRows(userId, settings, now);
+    const workflowRows = await loadQueuedRows(userId, settings, now, window);
     const clientIds = [
       ...appointmentSource.appointments,
       ...workflowRows.rebook,
@@ -571,18 +668,43 @@ export const outreachScheduledSendsService = {
     const eligible = [...(await filterEligible(userId, candidates)), ...campaigns]
       .filter((item) => !options.status || item.status === options.status)
       .filter((item) => !options.kinds || options.kinds.includes(item.kind))
-      .sort(compareItems);
+      .filter((item) => !window || isWithinWindow(item, window))
+      .sort(window ? compareWindowedItems : compareItems);
     const totalCount = eligible.length;
-    const cursor = options.cursor ? decodeCursor(options.cursor) : null;
-    const remaining = cursor ? eligible.filter((item) => isAfterCursor(item, cursor)) : eligible;
+    const cursorFilter = window ? getWindowCursorFilter(userId, options, window) : null;
+    const cursor = options.cursor
+      ? window
+        ? decodeWindowedCursor(options.cursor, cursorFilter as string)
+        : decodeCursor(options.cursor)
+      : null;
+    const remaining = cursor
+      ? window
+        ? eligible.filter((item) => isAfterWindowedCursor(item, cursor as WindowedCursorPayload))
+        : eligible.filter((item) => isAfterCursor(item, cursor as CursorPayload))
+      : eligible;
     const data = remaining.slice(0, options.limit);
 
     return {
       data,
       next_cursor: remaining.length > options.limit && data.length > 0
-        ? encodeCursor(data[data.length - 1] as ScheduledOutreachItemContract)
+        ? window
+          ? encodeWindowedCursor(data[data.length - 1] as ScheduledOutreachItemContract, cursorFilter as string)
+          : encodeCursor(data[data.length - 1] as ScheduledOutreachItemContract)
         : null,
-      total_count: totalCount
+      total_count: totalCount,
+      ...(window ? {
+        category_counts: {
+          reminders: eligible.filter((item) => item.kind === "appointment_reminder" || item.kind === "birthday_reminder").length,
+          outreach: eligible.filter((item) => item.kind === "rebook_nudge" || item.kind === "thank_you_email").length,
+          campaigns: eligible.filter((item) => item.kind === "campaign").length
+        },
+        window: {
+          kind: window.kind,
+          timezone: window.timezone,
+          starts_at: window.startsAt,
+          ends_at: window.endsAt
+        }
+      } : {})
     };
   },
 

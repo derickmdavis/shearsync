@@ -19,6 +19,7 @@ export const listScheduledOutreachQuerySchema = z.object({
     "Scheduled sends status must be queued or sending"
   ).default("queued"),
   kind: scheduledOutreachKindsQuerySchema.optional(),
+  window: z.enum(["today_tomorrow"]).optional(),
   limit: z.coerce.number().int().positive().max(100).default(20),
   cursor: z.string().min(1).max(4000).optional()
 });

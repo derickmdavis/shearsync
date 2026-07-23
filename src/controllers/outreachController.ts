@@ -44,12 +44,14 @@ export const outreachController = {
     const query = req.query as unknown as {
       status: ScheduledOutreachStatus;
       kind?: ScheduledOutreachKind[];
+      window?: "today_tomorrow";
       limit: number;
       cursor?: string;
     };
     const response = await outreachScheduledSendsService.listForUser(userId, {
       status: query.status,
       kinds: query.kind,
+      window: query.window,
       limit: query.limit,
       cursor: query.cursor
     });

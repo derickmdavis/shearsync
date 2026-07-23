@@ -91,11 +91,11 @@ The last value intentionally combines unauthorized and unknown IDs so API respon
 ### Implemented routes
 
 ```http
-GET  /api/outreach/scheduled-sends?status=queued&kind=appointment_reminder,rebook_nudge&limit=20&cursor=...
+GET  /api/outreach/scheduled-sends?status=queued&kind=appointment_reminder,rebook_nudge&window=today_tomorrow&limit=20&cursor=...
 POST /api/outreach/scheduled-sends/:id/cancel
 ```
 
-The list route defaults to `status=queued`, accepts `queued` or `sending`, supports a comma-separated canonical kind filter, and returns `{ data, next_cursor, total_count }`. `total_count` covers the full eligible filtered list before cursor pagination.
+The list route defaults to `status=queued`, accepts `queued` or `sending`, and supports a comma-separated canonical kind filter. An optional `window=today_tomorrow` uses the authenticated business timezone, includes `[local today 00:00, local day-after-tomorrow 00:00)`, and returns UTC window metadata plus complete-window category counts. `total_count` covers the full eligible filtered list before cursor pagination. Windowed cursors are opaque and bound to their status, kind, timezone, and concrete window boundaries.
 
 The cancellation body is optional:
 

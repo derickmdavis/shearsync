@@ -112,11 +112,14 @@ Query:
 ```text
 status=queued | sending       default queued
 kind=comma,separated,kinds    optional
+window=today_tomorrow         optional; uses the business timezone
 limit=1..100                 default 20
 cursor=<opaque value>         optional
 ```
 
-The cursor is opaque and ordered by send time, kind, and resource ID. Never parse, build, or persist an interpretation of it.
+The cursor is opaque. Legacy requests are ordered by send time, kind, and resource ID; `window=today_tomorrow` requests are ordered by send time and resource ID. Never parse, build, or persist an interpretation of it.
+
+For the Outreach Overview, request `window=today_tomorrow`. The server includes all sends from the business-local start of today through (but excluding) the business-local start of the day after tomorrow. The response additionally includes `category_counts` and `window` metadata; use the frontend date filter only as a defensive fallback.
 
 Response:
 
