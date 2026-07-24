@@ -942,17 +942,18 @@ create table if not exists public.client_formulas (
   service_id uuid references public.services(id) on delete set null,
   title text not null,
   formula_date date not null,
-  service_name_snapshot text not null,
+  service_name_snapshot text,
   processing_notes text,
   result_notes text,
   created_by uuid not null references public.users(id),
+  title_source text not null default 'user' check (title_source in ('user', 'service_fallback', 'date_fallback')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   deleted_at timestamptz,
   constraint client_formulas_title_length_check
     check (char_length(trim(title)) between 1 and 160),
   constraint client_formulas_service_name_snapshot_length_check
-    check (char_length(trim(service_name_snapshot)) between 1 and 160),
+    check (service_name_snapshot is null or char_length(trim(service_name_snapshot)) between 1 and 160),
   constraint client_formulas_processing_notes_length_check
     check (processing_notes is null or char_length(processing_notes) <= 5000),
   constraint client_formulas_result_notes_length_check
@@ -964,12 +965,18 @@ create table if not exists public.client_formula_sections (
   formula_id uuid not null references public.client_formulas(id) on delete cascade,
   type text not null,
   custom_label text,
+  section_kind text,
+  display_label text,
   content text not null,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint client_formula_sections_type_check
     check (type in ('formula', 'application', 'processing', 'result', 'aftercare', 'custom')),
+  constraint client_formula_sections_section_kind_check
+    check (section_kind in ('root', 'lightener', 'toner', 'gloss', 'color', 'mid_lengths', 'ends', 'custom')),
+  constraint client_formula_sections_display_label_length_check
+    check (display_label is null or char_length(trim(display_label)) between 1 and 120),
   constraint client_formula_sections_custom_label_check
     check (
       (type = 'custom' and custom_label is not null and char_length(trim(custom_label)) between 1 and 120)

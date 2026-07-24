@@ -20,6 +20,17 @@ const preview = (value: unknown): string | null => {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized ? normalized.slice(0, 180) : null;
 };
+const titleFor = (input: Row, current?: Row): Row => {
+  const serviceName = typeof input.service_name_snapshot === "string" && input.service_name_snapshot.trim()
+    ? input.service_name_snapshot.trim()
+    : typeof current?.service_name_snapshot === "string" ? current.service_name_snapshot : null;
+  const provided = typeof input.title === "string" && input.title.trim() ? input.title.trim() : null;
+  if (provided) return { ...input, title: provided, title_source: "user" };
+  if (serviceName) return { ...input, title: serviceName, title_source: "service_fallback" };
+  const date = typeof input.formula_date === "string" ? input.formula_date : current?.formula_date;
+  return { ...input, title: `Formula — ${date ?? ""}`, title_source: "date_fallback" };
+};
+const resolvedLabel = (section: Row): string => typeof section.display_label === "string" && section.display_label.trim() ? section.display_label : ({ root: "Root", lightener: "Lightener", toner: "Toner", gloss: "Gloss", color: "Color", mid_lengths: "Mid-lengths", ends: "Ends" } as Record<string, string>)[String(section.section_kind)] ?? section.custom_label as string ?? "Formula";
 
 export const clientFormulasService = {
   async getOwned(userId: string, clientId: string, formulaId: string, includeDeleted = false): Promise<Row> {
@@ -34,11 +45,27 @@ export const clientFormulasService = {
     if (typeof input.service_id === "string") { const { data, error } = await supabaseAdmin.from("services").select("id").eq("id", input.service_id).eq("user_id", userId).maybeSingle(); handleSupabaseError(error, "Unable to validate formula service"); requireFound(data, "Service not found"); }
   },
 
-  async list(userId: string, clientId: string, options: { limit?: number; cursor?: string }): Promise<{ data: RowList; next_cursor: string | null }> {
+  async list(userId: string, clientId: string, options: { limit?: number; cursor?: string; view?: "default" | "client-detail" }): Promise<{ data: RowList; next_cursor: string | null }> {
     await clientsService.assertOwned(userId, clientId); const limit = options.limit ?? 25; const after = options.cursor ? decodeCursor(options.cursor) : null;
     let query = supabaseAdmin.from("client_formulas").select(FIELDS).eq("user_id", userId).eq("client_id", clientId).is("deleted_at", null).order("formula_date", { ascending: false }).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit + 1);
     if (after) query = query.or(`formula_date.lt.${after.formula_date},and(formula_date.eq.${after.formula_date},created_at.lt.${after.created_at}),and(formula_date.eq.${after.formula_date},created_at.eq.${after.created_at},id.lt.${after.id})`);
     const { data, error } = await query; handleSupabaseError(error, "Unable to load formulas"); const rows = (data ?? []) as RowList; const page = rows.slice(0, limit);
+    if (options.view === "client-detail") {
+      if (page.length === 0) {
+        return { data: [], next_cursor: null };
+      }
+      const ids = page.map((row) => String(row.id));
+      const [{ data: sections, error: sectionsError }, { data: photos, error: photosError }, { data: appointments, error: appointmentsError }] = await Promise.all([
+        supabaseAdmin.from("client_formula_sections").select("id, formula_id, section_kind, display_label, custom_label, content, sort_order").in("formula_id", ids).order("sort_order"),
+        supabaseAdmin.from("client_formula_photos").select("id, formula_id, formula_image_id, appointment_image_id, photo_type, sort_order").in("formula_id", ids).order("sort_order"),
+        supabaseAdmin.from("appointments").select("id, appointment_date, service_name, status").eq("user_id", userId).eq("client_id", clientId).in("id", page.map((row) => row.appointment_id).filter((id): id is string => typeof id === "string"))
+      ]);
+      handleSupabaseError(sectionsError, "Unable to load formula card sections"); handleSupabaseError(photosError, "Unable to load formula card photos"); handleSupabaseError(appointmentsError, "Unable to load formula card appointments");
+      const sectionsByFormula = new Map<string, RowList>(); for (const section of (sections ?? []) as RowList) { const group = sectionsByFormula.get(String(section.formula_id)) ?? []; group.push(section); sectionsByFormula.set(String(section.formula_id), group); }
+      const photosByFormula = new Map<string, RowList>(); for (const photo of (photos ?? []) as RowList) { const group = photosByFormula.get(String(photo.formula_id)) ?? []; group.push(photo); photosByFormula.set(String(photo.formula_id), group); }
+      const appointmentById = new Map((appointments ?? []).map((appointment) => [String(appointment.id), appointment as Row]));
+      return { data: await Promise.all(page.map(async (row, index) => { const cardSections = sectionsByFormula.get(String(row.id)) ?? []; const cardPhotos = photosByFormula.get(String(row.id)) ?? []; const card = cardSections.slice(0, 2).map((section) => ({ id: section.id, kind: section.section_kind ?? "custom", display_label: resolvedLabel(section), content: section.content, sort_order: section.sort_order })); const photoCards = await Promise.all(cardPhotos.slice(0, 2).map(async (photo) => { const table = photo.formula_image_id ? "client_formula_images" : "appointment_images"; const imageId = photo.formula_image_id ?? photo.appointment_image_id; const { data: image, error } = await supabaseAdmin.from(table).select("thumbnail_path").eq("id", imageId).eq("user_id", userId).eq("client_id", clientId).eq("upload_status", "ready").maybeSingle(); handleSupabaseError(error, "Unable to load formula card thumbnail"); return { id: photo.id, thumbnail_url: image?.thumbnail_path ? await appointmentImageStorageService.createSignedReadUrl(image.thumbnail_path, THUMB_TTL) : null, thumbnail_expires_at: image?.thumbnail_path ? new Date(Date.now() + THUMB_TTL * 1000).toISOString() : null, photo_type: photo.photo_type, sort_order: photo.sort_order }; })); return { id: row.id, title: row.title, title_source: row.title_source ?? "user", formula_date: row.formula_date, service_name_snapshot: row.service_name_snapshot ?? null, ...(!after && index === 0 ? { is_latest: true } : {}), sections: card, section_count: cardSections.length, additional_section_count: Math.max(0, cardSections.length - card.length), processing_notes: row.processing_notes ?? null, result_notes: row.result_notes ?? null, photos: photoCards, photo_count: cardPhotos.length, additional_photo_count: Math.max(0, cardPhotos.length - photoCards.length), appointment: typeof row.appointment_id === "string" ? appointmentById.get(row.appointment_id) ?? null : null, created_at: row.created_at, updated_at: row.updated_at }; })), next_cursor: rows.length > limit ? cursor(page[page.length - 1]) : null };
+    }
     return {
       data: await Promise.all(page.map(async (row, index) => {
         const [{ data: firstSection, error: sectionError }, thumbnailUrl] = await Promise.all([
@@ -57,14 +84,14 @@ export const clientFormulasService = {
   },
 
   async create(userId: string, clientId: string, input: Row): Promise<Row> {
-    await clientsService.assertOwned(userId, clientId); await this.assertAssociations(userId, clientId, input); const { sections, ...formula } = input;
+    await clientsService.assertOwned(userId, clientId); await this.assertAssociations(userId, clientId, input); const { sections, ...rawFormula } = input; const formula = titleFor(rawFormula);
     const { data, error } = await supabaseAdmin.rpc("create_client_formula", { p_user_id: userId, p_client_id: clientId, p_formula: formula, p_sections: sections });
     handleSupabaseError(error, "Unable to create formula"); const created = requireFound(data as Row | null, "Formula was not created");
     return this.detail(userId, clientId, created.id as string);
   },
 
   async update(userId: string, clientId: string, formulaId: string, input: Row): Promise<Row> {
-    await this.getOwned(userId, clientId, formulaId); await this.assertAssociations(userId, clientId, input); const { sections, ...updates } = input;
+    const current = await this.getOwned(userId, clientId, formulaId); await this.assertAssociations(userId, clientId, input); const { sections, ...rawUpdates } = input; const updates = (rawUpdates.title !== undefined || rawUpdates.service_name_snapshot !== undefined) ? titleFor(rawUpdates, current) : rawUpdates;
     const { error } = await supabaseAdmin.rpc("update_client_formula", { p_user_id: userId, p_client_id: clientId, p_formula_id: formulaId, p_updates: updates, p_sections: sections ?? null });
     handleSupabaseError(error, "Unable to update formula");
     return this.detail(userId, clientId, formulaId);
@@ -86,7 +113,7 @@ export const clientFormulasService = {
       ? supabaseAdmin.from("appointments").select("id, appointment_date, service_name, status").eq("id", formula.appointment_id).eq("user_id", userId).eq("client_id", clientId).maybeSingle()
       : Promise.resolve({ data: null, error: null });
     const [{ data: sections, error: sectionsError }, photos, appointmentResult] = await Promise.all([
-      supabaseAdmin.from("client_formula_sections").select("id, formula_id, type, custom_label, content, sort_order, created_at, updated_at").eq("formula_id", formulaId).order("sort_order"),
+      supabaseAdmin.from("client_formula_sections").select("id, formula_id, type, custom_label, section_kind, display_label, content, sort_order, created_at, updated_at").eq("formula_id", formulaId).order("sort_order"),
       this.listPhotos(userId, clientId, formulaId), appointmentRequest
     ]);
     handleSupabaseError(sectionsError, "Unable to load formula sections");
