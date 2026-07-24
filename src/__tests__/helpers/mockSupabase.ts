@@ -635,6 +635,25 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
     let settings: TableRow;
 
     switch (functionName) {
+      case "create_client_formula": {
+        const formula = args.p_formula as TableRow;
+        const sections = args.p_sections as TableRow[];
+        const id = randomUUID();
+        const row = { id, user_id: userId, client_id: args.p_client_id, created_by: userId, created_at: timestamp, updated_at: timestamp, deleted_at: null, ...formula };
+        getRows(state, "client_formulas").push(row);
+        getRows(state, "client_formula_sections").push(...sections.map((section) => ({ id: randomUUID(), formula_id: id, created_at: timestamp, updated_at: timestamp, ...section })));
+        return { data: cloneRow(row), error: null };
+      }
+      case "update_client_formula": {
+        const row = getRows(state, "client_formulas").find((candidate) => candidate.id === args.p_formula_id && candidate.user_id === userId && candidate.client_id === args.p_client_id && candidate.deleted_at === null);
+        if (!row) throw new Error("formula_not_found");
+        Object.assign(row, args.p_updates as TableRow, { updated_at: timestamp });
+        if (Array.isArray(args.p_sections)) {
+          state.client_formula_sections = getRows(state, "client_formula_sections").filter((section) => section.formula_id !== args.p_formula_id);
+          getRows(state, "client_formula_sections").push(...(args.p_sections as TableRow[]).map((section) => ({ id: randomUUID(), formula_id: args.p_formula_id, created_at: timestamp, updated_at: timestamp, ...section })));
+        }
+        return { data: cloneRow(row), error: null };
+      }
       case "create_campaign_draft": {
         const templateId = typeof args.p_template_id === "string" ? args.p_template_id : null;
         const template = templateId

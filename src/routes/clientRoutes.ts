@@ -3,6 +3,7 @@ import { appointmentImagesController } from "../controllers/appointmentImagesCon
 import { appointmentsController } from "../controllers/appointmentsController";
 import { clientsController } from "../controllers/clientsController";
 import { photosController } from "../controllers/photosController";
+import { clientFormulasController } from "../controllers/clientFormulasController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import { clientVisualHistoryQuerySchema } from "../validators/appointmentImageValidators";
@@ -15,6 +16,7 @@ import {
   updateClientRebookingPreferenceSchema,
   updateClientSchema
 } from "../validators/clientValidators";
+import { attachFormulaPhotoSchema, createClientFormulaSchema, finalizeFormulaImageSchema, formulaParamsSchema, formulaPhotoParamsSchema, formulaImageUploadIntentSchema, listClientFormulasQuerySchema, reorderFormulaPhotosSchema, updateClientFormulaSchema } from "../validators/clientFormulaValidators";
 import { uuidParamSchema } from "../validators/common";
 
 export const clientRouter = Router();
@@ -37,6 +39,17 @@ clientRouter.get(
   asyncHandler(clientsController.getReferralStats)
 );
 clientRouter.get("/:id/detail", validate({ params: uuidParamSchema }), asyncHandler(clientsController.getDetail));
+clientRouter.get("/:id/formulas", validate({ params: uuidParamSchema, query: listClientFormulasQuerySchema }), asyncHandler(clientFormulasController.list));
+clientRouter.post("/:id/formulas", validate({ params: uuidParamSchema, body: createClientFormulaSchema }), asyncHandler(clientFormulasController.create));
+clientRouter.get("/:id/formulas/:formulaId", validate({ params: formulaParamsSchema }), asyncHandler(clientFormulasController.get));
+clientRouter.patch("/:id/formulas/:formulaId", validate({ params: formulaParamsSchema, body: updateClientFormulaSchema }), asyncHandler(clientFormulasController.update));
+clientRouter.post("/:id/formulas/:formulaId/duplicate", validate({ params: formulaParamsSchema }), asyncHandler(clientFormulasController.duplicate));
+clientRouter.delete("/:id/formulas/:formulaId", validate({ params: formulaParamsSchema }), asyncHandler(clientFormulasController.remove));
+clientRouter.post("/:id/formulas/:formulaId/photos/upload-intent", validate({ params: formulaParamsSchema, body: formulaImageUploadIntentSchema }), asyncHandler(clientFormulasController.uploadIntent));
+clientRouter.post("/:id/formulas/:formulaId/photos", validate({ params: formulaParamsSchema, body: finalizeFormulaImageSchema }), asyncHandler(clientFormulasController.finalize));
+clientRouter.post("/:id/formulas/:formulaId/photos/attach", validate({ params: formulaParamsSchema, body: attachFormulaPhotoSchema }), asyncHandler(clientFormulasController.attachPhoto));
+clientRouter.post("/:id/formulas/:formulaId/photos/reorder", validate({ params: formulaParamsSchema, body: reorderFormulaPhotosSchema }), asyncHandler(clientFormulasController.reorderPhotos));
+clientRouter.delete("/:id/formulas/:formulaId/photos/:photoId", validate({ params: formulaPhotoParamsSchema }), asyncHandler(clientFormulasController.removePhoto));
 clientRouter.patch(
   "/:id/rebooking-preference",
   validate({ params: uuidParamSchema, body: updateClientRebookingPreferenceSchema }),

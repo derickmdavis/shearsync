@@ -48,6 +48,15 @@ type GeneratePathsInput = {
   thumbnailContentType?: string | null;
 };
 
+type GenerateFormulaPathsInput = {
+  userId: string;
+  clientId: string;
+  formulaId: string;
+  imageId: string;
+  displayContentType: string;
+  thumbnailContentType?: string | null;
+};
+
 type VerifyObjectOptions = {
   expectedContentType?: string;
   expectedSizeBytes?: number;
@@ -165,11 +174,33 @@ export const appointmentImageStorageService = {
     };
   },
 
+  generateFormulaPaths(input: GenerateFormulaPathsInput): AppointmentImagePaths {
+    const userId = requireSafeId("user ID", input.userId);
+    const clientId = requireSafeId("client ID", input.clientId);
+    const formulaId = requireSafeId("formula ID", input.formulaId);
+    const imageId = requireSafeId("image ID", input.imageId);
+    const displayExtension = this.getExtensionForContentType(input.displayContentType);
+    const thumbnailExtension = this.getExtensionForContentType(input.thumbnailContentType ?? input.displayContentType);
+    const basePath = `users/${userId}/clients/${clientId}/formulas/${formulaId}`;
+
+    return {
+      storagePath: `${basePath}/${imageId}.${displayExtension}`,
+      thumbnailPath: `${basePath}/${imageId}_thumb.${thumbnailExtension}`
+    };
+  },
+
   assertPathMatches(input: GeneratePathsInput & AppointmentImagePaths): void {
     const expected = this.generatePaths(input);
 
     if (input.storagePath !== expected.storagePath || input.thumbnailPath !== expected.thumbnailPath) {
       throw new ApiError(400, "Appointment image storage path does not match server-generated path");
+    }
+  },
+
+  assertFormulaPathMatches(input: GenerateFormulaPathsInput & AppointmentImagePaths): void {
+    const expected = this.generateFormulaPaths(input);
+    if (input.storagePath !== expected.storagePath || input.thumbnailPath !== expected.thumbnailPath) {
+      throw new ApiError(400, "Formula image storage path does not match server-generated path");
     }
   },
 

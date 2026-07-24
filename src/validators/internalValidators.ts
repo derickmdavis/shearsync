@@ -51,6 +51,8 @@ export const purgeDeletedClientsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
+export const purgeArchivedFormulasQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(100).optional() });
+
 export const cleanupAppointmentImagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
   dry_run: booleanQuerySchema,

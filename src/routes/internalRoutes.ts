@@ -10,6 +10,7 @@ import {
   processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
   processThankYouEmailsQuerySchema,
+  purgeArchivedFormulasQuerySchema,
   purgeDeletedClientsQuerySchema,
   queueAppointmentRemindersQuerySchema,
   queueBirthdayRemindersQuerySchema,
@@ -78,6 +79,12 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: purgeDeletedClientsQuerySchema }),
   asyncHandler(internalController.purgeDeletedClients)
+);
+internalRouter.post(
+  "/client-formulas/purge",
+  requireInternalApiSecret,
+  validate({ query: purgeArchivedFormulasQuerySchema }),
+  asyncHandler(internalController.purgeArchivedFormulas)
 );
 internalRouter.post(
   "/appointment-images/cleanup",

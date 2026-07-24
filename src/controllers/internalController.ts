@@ -5,6 +5,7 @@ import { appointmentImageCleanupService } from "../services/appointmentImageClea
 import { appointmentRemindersService } from "../services/appointmentRemindersService";
 import { birthdayRemindersService } from "../services/birthdayRemindersService";
 import { clientPurgeService } from "../services/clientPurgeService";
+import { clientFormulaCleanupService } from "../services/clientFormulaCleanupService";
 import { apiRequestLogRetentionService } from "../services/apiRequestLogRetentionService";
 import { rebookNudgesService } from "../services/rebookNudgesService";
 import { thankYouEmailsService } from "../services/thankYouEmailsService";
@@ -114,6 +115,11 @@ export const internalController = {
       limit: query.limit
     });
     res.json({ data: result });
+  },
+
+  async purgeArchivedFormulas(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    res.json({ data: await clientFormulaCleanupService.purgeExpiredArchivedFormulas(new Date(), query.limit) });
   },
 
   async cleanupAppointmentImages(req: Request, res: Response) {
