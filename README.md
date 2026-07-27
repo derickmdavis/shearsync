@@ -287,7 +287,7 @@ This is intentionally MVP-safe. There is no calendar sync, payment collection, a
 
 ## Waitlist
 
-Waitlist is a plan-gated backend feature for public booking pages with a stylist-controlled on/off setting. Basic stylists cannot use it; Pro and Premium stylists can use it when their plan is not cancelled and `public.users.waitlist_enabled=true`. No Stripe or real subscription lifecycle logic is added.
+Waitlist is included for every active paid account and has a stylist-controlled on/off setting through `public.users.waitlist_enabled`.
 
 Database support:
 
@@ -330,7 +330,7 @@ Public create:
 }
 ```
 
-The backend validates the stylist slug, plan eligibility, requested date in the stylist business timezone, optional service ownership, and at least one email or phone contact. Public callers cannot list waitlist entries.
+The backend validates the stylist slug, active account access, requested date in the stylist business timezone, optional service ownership, and at least one email or phone contact. Public callers cannot list waitlist entries.
 
 Authenticated stylist endpoints:
 
@@ -340,18 +340,13 @@ Authenticated stylist endpoints:
 - `PATCH /api/waitlist/:id`
 - `DELETE /api/waitlist/:id`
 
-`GET /api/waitlist` returns an empty list with `meta.featureAvailable=false` for Basic accounts. Mutating waitlist routes return `403` for ineligible plans. Cross-stylist access returns `404`.
+`GET /api/waitlist` returns `meta.featureAvailable=false` when the stylist has disabled the waitlist setting. Inactive accounts cannot access authenticated product routes. Cross-stylist access returns `404`.
 
 Stylist settings toggle:
 
 - Read current value with `GET /api/settings/profile` and `data.waitlist_enabled`.
 - Update with `PATCH /api/settings/profile` and body `{ "waitlist_enabled": false }` or `{ "waitlist_enabled": true }`.
-- The account plan endpoint also returns:
-  - `data.features.waitlist`: tier eligibility
-  - `data.features.appointmentPhotos`: tier eligibility for appointment photos, before/after photos, and public reference photo upload
-  - `data.features.referrals`: tier eligibility for Referral Impact and referral setup (Basic: false; Pro/Premium: true)
-  - `data.settings.waitlistEnabled`: stored stylist toggle
-  - `data.effectiveFeatures.waitlistEnabled`: eligible, not cancelled, and toggled on
+- `GET /api/account/access` returns the account status and billing-period audit fields. All product capabilities are available while the account is active.
 
 Public booking integration:
 
@@ -369,7 +364,7 @@ Current limitations:
 - Rebook nudges use `/internal/rebook-nudges/queue` to create due nudge records, `/internal/rebook-nudges/process` to enqueue approved/automatic rebook emails, and `/internal/appointment-emails/process` to deliver the resulting email events.
 - Thank-you emails use `/internal/thank-you-emails/queue` to create completed-appointment records, `/internal/thank-you-emails/process` to enqueue approved/automatic thank-you email events, and `/internal/appointment-emails/process` to deliver the resulting email events.
 - SMS preference/consent checks and STOP/START/HELP inbound handling exist for future SMS provider integration.
-- No Stripe enforcement beyond the existing mocked/backend plan fields.
+- Billing-provider integration is not yet configured; only trusted server-side billing events may change account status.
 - No automated expiration or cleanup.
 
 ## Availability Settings
@@ -384,7 +379,6 @@ The authenticated availability settings API is the source of truth for a stylist
 See [docs/frontend-availability-integration.md](docs/frontend-availability-integration.md) for the full frontend contract and UI integration notes.
 See [docs/frontend-public-booking-client-context-handoff.md](docs/frontend-public-booking-client-context-handoff.md) for the intake token flow the web booking app should use for client-aware services and slots.
 
-See [docs/tiers-overview.md](docs/tiers-overview.md) for the full plan/tier entitlement contract.
 
 ## Photo Upload Placeholder
 

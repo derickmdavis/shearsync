@@ -2,6 +2,7 @@ import { createResendEmailProvider, type EmailProvider } from "./appointmentEmai
 import { communicationPreferencesService } from "./communicationPreferences";
 import { handleSupabaseError, type Row } from "./db";
 import { supabaseAdmin } from "../lib/supabase";
+import { accountAccessService } from "./accountAccessService";
 
 const DEFAULT_BATCH_SIZE = 25;
 const MAX_BATCH_SIZE = 100;
@@ -126,6 +127,17 @@ export const campaignDeliveryWorkerService = {
             error_message: "The campaign recipient does not have a deliverable email snapshot."
           });
         }
+        result.skipped += 1;
+        continue;
+      }
+
+      if (!(await accountAccessService.isAccountActive(userId))) {
+        await updateClaimedRecipient(recipientId, {
+          status: "skipped",
+          skipped_at: now.toISOString(),
+          error_code: "account_inactive",
+          error_message: "Account is inactive."
+        });
         result.skipped += 1;
         continue;
       }

@@ -11,8 +11,7 @@ export const waitlistController = {
       res.json({
         data: [],
         meta: {
-          featureAvailable: false,
-          requiredPlan: "pro"
+          featureAvailable: false
         }
       });
       return;
@@ -58,4 +57,3 @@ export const waitlistController = {
     res.status(204).send();
   }
 };
-

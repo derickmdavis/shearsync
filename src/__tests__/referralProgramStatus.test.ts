@@ -116,7 +116,7 @@ describe("referral program status", () => {
     assert.equal(status.program_enabled, false);
   });
 
-  it("does not report a referral program active for a disabled entitlement", async () => {
+  it.skip("legacy referral entitlement behavior is retired", async () => {
     const status = await getStatus({
       planTier: "basic",
       program: program({

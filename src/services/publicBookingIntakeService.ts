@@ -81,6 +81,7 @@ export const publicBookingIntakeService = {
 
   async lookupBookingIntake(input: Row): Promise<BookingIntakeResponse> {
     const stylist = await stylistsService.getBySlug(input.stylist_slug as string);
+    await stylistsService.assertPublicBookingEnabled(stylist);
     const bookingEnabled = Boolean(stylist.booking_enabled);
     const fullName = (input.full_name as string).trim();
     const normalizedPhone = this.normalizePhoneOrThrow(input.phone as string);

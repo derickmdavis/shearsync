@@ -6,6 +6,7 @@ import type { Row } from "./db";
 import { ApiError } from "../lib/errors";
 import { handleSupabaseError, normalizeEmptyString } from "./db";
 import { entitlementsService } from "./entitlementsService";
+import { accountAccessService } from "./accountAccessService";
 import { usersService } from "./usersService";
 import { recordProductTelemetry } from "./productTelemetry";
 
@@ -186,6 +187,7 @@ export const stylistsService = {
 
   async getPublicProfileBySlug(slug: string): Promise<PublicStylistProfile> {
     const stylist = await this.getBySlug(slug);
+    await this.assertPublicAccountActive(stylist);
     const user = await usersService.getById(stylist.user_id as string);
     const entitlements = await entitlementsService.getEntitlementsForUser(stylist.user_id as string);
 
@@ -208,7 +210,14 @@ export const stylistsService = {
     };
   },
 
-  assertPublicBookingEnabled(stylist: Row): void {
+  async assertPublicAccountActive(stylist: Row): Promise<void> {
+    if (!(await accountAccessService.isAccountActive(stylist.user_id as string))) {
+      throw new ApiError(404, "Stylist not found");
+    }
+  },
+
+  async assertPublicBookingEnabled(stylist: Row): Promise<void> {
+    await this.assertPublicAccountActive(stylist);
     if (!stylist.booking_enabled) {
       throw new ApiError(400, "Online booking is not enabled for this stylist");
     }

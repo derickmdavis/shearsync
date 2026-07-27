@@ -72,7 +72,7 @@ export const servicesService = {
     }
   ): Promise<ServiceCatalogItem[]> {
     const stylist = await stylistsService.getBySlug(slug);
-    stylistsService.assertPublicBookingEnabled(stylist);
+    await stylistsService.assertPublicBookingEnabled(stylist);
 
     const { data, error } = await supabaseAdmin
       .from("services")

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { logger } from "../lib/logger";
-import type { PlanTier } from "../lib/plans";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row } from "./db";
 import {
@@ -12,7 +11,6 @@ import {
   type BusinessSnapshotPeriodWindow
 } from "./insightsSnapshotService";
 
-const planTierSchema = z.enum(["basic", "pro", "premium"]);
 const metricIdSchema = z.string().refine(
   (value): value is keyof typeof businessSnapshotMetricCatalog => value in businessSnapshotMetricCatalog,
   "metric_id must be registered in the business snapshot metric catalog"
@@ -43,7 +41,6 @@ const databaseConfigurationSchema = z.object({
   configuration_version: z.number().int().positive(),
   enabled: z.boolean(),
   pages: z.array(pageSchema).min(1).max(20),
-  target_plan_tiers: z.array(planTierSchema).nullable(),
   rollout_percentage: z.number().int().min(0).max(100),
   updated_by: z.string().min(1).max(255),
   updated_at: z.string().datetime({ offset: true })
@@ -98,15 +95,11 @@ const toPageConfigurations = (configuration: RuntimeSnapshotConfiguration): Busi
     }))
     .filter((page) => page.metricIds.length > 0);
 
-const belongsToTarget = (configuration: RuntimeSnapshotConfiguration, planTier: PlanTier | undefined): boolean =>
-  configuration.target_plan_tiers === null
-  || (planTier !== undefined && configuration.target_plan_tiers.includes(planTier));
-
 export const insightsSnapshotConfigurationService = {
-  async resolveForUser(input: { userId: string; planTier?: PlanTier }): Promise<ResolvedSnapshotConfiguration> {
+  async resolveForUser(input: { userId: string }): Promise<ResolvedSnapshotConfiguration> {
     const { data, error } = await supabaseAdmin
       .from("insight_snapshot_configurations")
-      .select("id, configuration_version, enabled, pages, target_plan_tiers, rollout_percentage, updated_by, updated_at")
+      .select("id, configuration_version, enabled, pages, rollout_percentage, updated_by, updated_at")
       .eq("is_active", true)
       .order("updated_at", { ascending: false })
       .limit(1)
@@ -130,7 +123,7 @@ export const insightsSnapshotConfigurationService = {
 
     const configuration = parsed.data;
     const pages = toPageConfigurations(configuration);
-    if (!configuration.enabled || pages.length === 0 || !belongsToTarget(configuration, input.planTier)
+    if (!configuration.enabled || pages.length === 0
       || !isInRollout(input.userId, configuration.id, configuration.rollout_percentage)) {
       return fallbackConfiguration();
     }
@@ -146,13 +139,12 @@ export const insightsSnapshotConfigurationService = {
 
   async buildPagesForUser(input: {
     userId: string;
-    planTier?: PlanTier;
     enabledFeatures?: ReadonlySet<string>;
     appointments: BusinessSnapshotAppointment[];
     periodWindow: BusinessSnapshotPeriodWindow;
     currency?: string;
   }) {
-    const configuration = await this.resolveForUser({ userId: input.userId, planTier: input.planTier });
+    const configuration = await this.resolveForUser({ userId: input.userId });
     return {
       configuration,
       pages: buildBusinessSnapshotPages({

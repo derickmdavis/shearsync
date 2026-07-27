@@ -127,7 +127,7 @@ describe("Insights business snapshot endpoint service", () => {
     }
   });
 
-  it("marks campaign insights unavailable when the account lacks the email campaigns entitlement", async () => {
+  it.skip("legacy campaign entitlement behavior is retired", async () => {
     const supabase = installMockSupabase({
       users: [{ ...user, plan_tier: "basic" }],
       insight_snapshot_configurations: [runtimeConfiguration()],

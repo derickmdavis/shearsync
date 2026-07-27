@@ -8,7 +8,7 @@ import {
 } from "../lib/outreachContracts";
 import { supabaseAdmin } from "../lib/supabase";
 import type { MessageType } from "../lib/communications";
-import type { UserEntitlements } from "../lib/plans";
+import type { AccountCapabilities } from "../lib/accountCapabilities";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { appointmentReminderSuppressionsService } from "./appointmentReminderSuppressionsService";
@@ -393,8 +393,8 @@ const loadCampaignCandidates = async (userId: string): Promise<ScheduledOutreach
   });
 };
 
-const isFeatureAvailable = (entitlements: UserEntitlements, kind: ScheduledOutreachKind): boolean => {
-  if (entitlements.status === "cancelled") {
+const isFeatureAvailable = (entitlements: AccountCapabilities, kind: ScheduledOutreachKind): boolean => {
+  if (entitlements.status !== "active") {
     return false;
   }
 

@@ -301,14 +301,14 @@ export const waitlistService = {
   },
 
   async createStylistWaitlistEntry(userId: string, input: CreateWaitlistEntryInput): Promise<WaitlistEntry> {
-    await assertWaitlistAvailableForUser(userId, "Waitlist is not available for the current plan.");
+    await assertWaitlistAvailableForUser(userId, "Waitlist is disabled in booking settings.");
     await assertServiceBelongsToStylist(userId, input.serviceId);
     return insertWaitlistEntry(userId, input, "stylist_created");
   },
 
   async updateWaitlistEntry(userId: string, waitlistEntryId: string, input: UpdateWaitlistEntryInput): Promise<WaitlistEntry> {
     await this.getWaitlistEntry(userId, waitlistEntryId);
-    await assertWaitlistAvailableForUser(userId, "Waitlist is not available for the current plan.");
+    await assertWaitlistAvailableForUser(userId, "Waitlist is disabled in booking settings.");
     await assertServiceBelongsToStylist(userId, input.serviceId);
 
     if (input.requestedDate) {
@@ -358,7 +358,7 @@ export const waitlistService = {
 
   async deleteWaitlistEntry(userId: string, waitlistEntryId: string): Promise<void> {
     await this.getWaitlistEntry(userId, waitlistEntryId);
-    await assertWaitlistAvailableForUser(userId, "Waitlist is not available for the current plan.");
+    await assertWaitlistAvailableForUser(userId, "Waitlist is disabled in booking settings.");
 
     const { data, error } = await supabaseAdmin
       .from("waitlist_entries")

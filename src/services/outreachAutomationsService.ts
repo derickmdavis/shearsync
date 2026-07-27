@@ -3,7 +3,7 @@ import type {
   OutreachAutomationKey,
   OutreachAutomationsContract
 } from "../lib/outreachContracts";
-import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
+import type { AccountCapabilities, AccountFeatureKey } from "../lib/accountCapabilities";
 import { supabaseAdmin } from "../lib/supabase";
 import {
   appointmentEmailTemplatesService,
@@ -23,7 +23,7 @@ import { thankYouEmailSettingsService } from "./thankYouEmailSettingsService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
 
 const SMS_UNAVAILABLE_REASON = "Outbound SMS is not available yet.";
-const FEATURE_UNAVAILABLE_REASON = "This automation is not available for the current plan.";
+const FEATURE_UNAVAILABLE_REASON = "This automation requires an active account.";
 const SUBJECT_MAX_LENGTH = 160;
 const MESSAGE_MAX_LENGTH = 4_000;
 
@@ -45,16 +45,16 @@ const labels: Record<(typeof controls)[number], string> = {
   waitlist_match: "Waitlist Match"
 };
 
-const features: Partial<Record<(typeof controls)[number], PlanFeatureKey>> = {
+const features: Partial<Record<(typeof controls)[number], AccountFeatureKey>> = {
   rebook_nudges: "rebookNudges",
   thank_you_emails: "thankYouEmails",
   birthday_reminders: "birthdayReminders",
   waitlist_match: "waitlistMatch"
 };
 
-const featureAvailable = (entitlements: UserEntitlements, key: (typeof controls)[number]): boolean => {
+const featureAvailable = (entitlements: AccountCapabilities, key: (typeof controls)[number]): boolean => {
   const feature = features[key];
-  return entitlements.status !== "cancelled" && (!feature || entitlements.features[feature]);
+  return entitlements.status === "active" && (!feature || entitlements.features[feature]);
 };
 
 const contentRules = (tokens: readonly string[]) => ({

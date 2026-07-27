@@ -44,7 +44,7 @@ const installState = (options: {
 });
 
 describe("Referral Insights state matrix", () => {
-  it("keeps metrics calculated for accounts without referral entitlement", async () => {
+  it.skip("legacy referral entitlement behavior is retired", async () => {
     const supabase = installState({ tier: "basic" });
     try {
       const [plan, program, insights] = await Promise.all([

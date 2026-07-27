@@ -168,7 +168,7 @@ export interface ProfileOverviewResponse {
     fullName: string | null;
     businessName: string | null;
     bookingDisplayName: string | null;
-    planLabel: string;
+    accountStatus: "active" | "inactive";
     locationLabel: string;
   };
   hero: {

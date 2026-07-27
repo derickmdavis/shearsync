@@ -2,6 +2,7 @@ import { Router } from "express";
 import { publicController } from "../controllers/publicController";
 import { asyncHandler } from "../lib/asyncHandler";
 import { requireAuth } from "../middleware/auth";
+import { requireActiveAccount } from "../middleware/accountAccess";
 import { validate } from "../middleware/validate";
 import { slugParamSchema } from "../validators/common";
 import { accountRouter } from "./accountRoutes";
@@ -48,8 +49,9 @@ apiRouter.use("/api", requireAuth);
 
 apiRouter.use(authRouter);
 apiRouter.use("/api/account", accountRouter);
-apiRouter.use("/api/app-content", appContentRouter);
 apiRouter.use("/api/admin", adminRouter);
+apiRouter.use("/api", requireActiveAccount);
+apiRouter.use("/api/app-content", appContentRouter);
 apiRouter.use("/api/activity", activityRouter);
 apiRouter.use("/api/birthday-reminders", birthdayReminderRouter);
 apiRouter.use("/api/clients", clientRouter);

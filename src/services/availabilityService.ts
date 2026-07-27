@@ -167,7 +167,7 @@ export const availabilityService = {
     }
   ): Promise<RowList> {
     const stylist = await stylistsService.getBySlug(slug);
-    stylistsService.assertPublicBookingEnabled(stylist);
+    await stylistsService.assertPublicBookingEnabled(stylist);
 
     const { data, error } = await supabaseAdmin
       .from("availability")
@@ -293,7 +293,7 @@ export const availabilityService = {
     bookingContextToken?: string
   ): Promise<PublicAvailabilitySlotsResponse> {
     const stylist = await stylistsService.getBySlug(slug);
-    stylistsService.assertPublicBookingEnabled(stylist);
+    await stylistsService.assertPublicBookingEnabled(stylist);
     const userId = stylist.user_id as string;
     const timeZone = await businessTimeZoneService.getForUser(userId);
     const service = await servicesService.getActiveForStylist(userId, serviceId);

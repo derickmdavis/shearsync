@@ -1,6 +1,5 @@
 import { getCurrentLocalDate, resolveBusinessTimeZone } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
-import { PLAN_CONFIG, type PlanTier } from "../lib/plans";
 import { logger } from "../lib/logger";
 import { insightsResponseSchema, type InsightsQuery, type InsightsResponse } from "../validators/insightsValidators";
 import { handleSupabaseError } from "./db";
@@ -13,14 +12,8 @@ import { insightsCampaignPresentationService } from "./insightsCampaignPresentat
 import { insightsReferralPresentationService } from "./insightsReferralPresentationService";
 import { usersService } from "./usersService";
 
-const toPlanTier = (value: unknown): PlanTier | undefined =>
-  value === "basic" || value === "pro" || value === "premium" ? value : undefined;
-
 const hasEmailCampaigns = (user: Record<string, unknown> | null): boolean => {
-  const tier = toPlanTier(user?.plan_tier);
-  return user?.plan_status !== "cancelled"
-    && !!tier
-    && PLAN_CONFIG[tier].features.emailCampaigns;
+  return user?.account_status === "active";
 };
 
 type InsightsSection = "business_snapshot" | "campaigns" | "referrals" | "appointment_changes";
@@ -87,7 +80,6 @@ export const insightsService = {
 
       const snapshot = await insightsSnapshotConfigurationService.buildPagesForUser({
         userId,
-        planTier: toPlanTier(user?.plan_tier),
         appointments: (data ?? []) as Array<{
           appointment_date: string;
           price?: number | string;
@@ -158,7 +150,7 @@ export const insightsService = {
       }
       if (!hasEmailCampaigns(user)) {
         logSectionResult("campaigns", userId, startedAt, "feature_unavailable");
-        return { available: false, reason: "feature_unavailable", message: "Campaign insights are not available for the current plan." };
+        return { available: false, reason: "feature_unavailable", message: "Campaign insights require an active account." };
       }
       try {
       const campaignStats = await insightsCampaignsService.getForUser(userId, accountTimeZone, now);

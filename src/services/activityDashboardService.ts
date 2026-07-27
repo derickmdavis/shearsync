@@ -11,7 +11,7 @@ import { birthdayRemindersService } from "./birthdayRemindersService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
 import { entitlementsService } from "./entitlementsService";
-import type { PlanFeatureKey, UserEntitlements } from "../lib/plans";
+import type { AccountCapabilities, AccountFeatureKey } from "../lib/accountCapabilities";
 import { communicationPreferencesService } from "./communicationPreferences";
 import type { MessageType } from "../lib/communications";
 import { recordProductTelemetry } from "./productTelemetry";
@@ -39,7 +39,7 @@ const AUTOMATION_LABELS: Record<AutomationControlKey, string> = {
   thank_you_emails: "Thank You Emails"
 };
 
-const AUTOMATION_FEATURES: Partial<Record<AutomationControlKey, PlanFeatureKey>> = {
+const AUTOMATION_FEATURES: Partial<Record<AutomationControlKey, AccountFeatureKey>> = {
   rebook_nudges: "rebookNudges",
   birthday_reminders: "birthdayReminders",
   thank_you_emails: "thankYouEmails",
@@ -253,14 +253,14 @@ const loadAutomationSettings = async (userId: string): Promise<Map<AutomationCon
 const getEnabled = (settings: Map<AutomationControlKey, boolean>, key: AutomationControlKey): boolean =>
   settings.get(key) ?? false;
 
-const isAutomationAvailable = (entitlements: UserEntitlements, key: AutomationControlKey): boolean => {
+const isAutomationAvailable = (entitlements: AccountCapabilities, key: AutomationControlKey): boolean => {
   const featureKey = AUTOMATION_FEATURES[key];
-  return !featureKey || (entitlements.status !== "cancelled" && entitlements.features[featureKey]);
+  return entitlements.status === "active" && (!featureKey || entitlements.features[featureKey]);
 };
 
 const getEffectiveEnabled = (
   settings: Map<AutomationControlKey, boolean>,
-  entitlements: UserEntitlements,
+  entitlements: AccountCapabilities,
   key: AutomationControlKey
 ): boolean => isAutomationAvailable(entitlements, key) && getEnabled(settings, key);
 
@@ -268,15 +268,14 @@ const isEmailChannelSendable = (client: Row | undefined, recipientEmail?: unknow
   (typeof recipientEmail === "string" && recipientEmail.trim().length > 0)
   || (typeof client?.email === "string" && client.email.trim().length > 0);
 
-const isSmsChannelSendable = (entitlements: UserEntitlements, client: Row | undefined): boolean =>
-  entitlements.status !== "cancelled"
+const isSmsChannelSendable = (entitlements: AccountCapabilities, client: Row | undefined): boolean =>
+  entitlements.status === "active"
   && entitlements.features.smsReminders
-  && entitlements.smsRemainingThisMonth > 0
   && typeof client?.phone === "string"
   && client.phone.trim().length > 0;
 
 const isChannelSendable = (
-  entitlements: UserEntitlements,
+  entitlements: AccountCapabilities,
   client: Row | undefined,
   channel: unknown,
   recipientEmail?: unknown
@@ -445,7 +444,7 @@ const loadReminderQueue = async (
 const toReminderQueueCandidates = (
   reminders: Row[],
   clientsById: Map<string, Row>,
-  entitlements: UserEntitlements
+  entitlements: AccountCapabilities
 ): AutomationQueueCandidate[] => {
   return reminders.flatMap((reminder) => {
     const clientId = getString(reminder, "client_id");
@@ -514,7 +513,7 @@ const toAppointmentEmailReminderQueueCandidates = (
   emailEvents: Row[],
   appointmentsById: Map<string, Row>,
   clientsById: Map<string, Row>,
-  entitlements: UserEntitlements
+  entitlements: AccountCapabilities
 ): AutomationQueueCandidate[] => {
   return emailEvents.flatMap((emailEvent) => {
     const clientId = getString(emailEvent, "client_id");
@@ -599,7 +598,7 @@ const loadRebookNudgeQueue = async (
 const toRebookNudgeQueueCandidates = (
   rows: Row[],
   clientsById: Map<string, Row>,
-  entitlements: UserEntitlements
+  entitlements: AccountCapabilities
 ): AutomationQueueCandidate[] => {
   return rows.flatMap((row) => {
     const clientId = getString(row, "client_id");
@@ -650,7 +649,7 @@ const loadBirthdayReminderAutomationQueue = async (
 const toBirthdayReminderQueueCandidates = (
   rows: Row[],
   clientsById: Map<string, Row>,
-  entitlements: UserEntitlements
+  entitlements: AccountCapabilities
 ): AutomationQueueCandidate[] => {
   return rows.flatMap((row) => {
     const clientId = getString(row, "client_id");
@@ -705,7 +704,7 @@ const loadThankYouEmailQueue = async (
 const toThankYouEmailQueueCandidates = (
   rows: Row[],
   clientsById: Map<string, Row>,
-  entitlements: UserEntitlements
+  entitlements: AccountCapabilities
 ): AutomationQueueCandidate[] => {
   return rows.flatMap((row) => {
     const clientId = getString(row, "client_id");

@@ -1176,6 +1176,12 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
 
 export const installMockSupabase = (initialState: TableState, options: MockSupabaseOptions = {}) => {
   const state = cloneState(initialState);
+  // Production rows receive `account_status` from the migration/default. Older
+  // fixtures intentionally omit it, so preserve their pre-migration ability to
+  // exercise unrelated behavior unless a test explicitly sets account state.
+  state.users = (state.users ?? []).map((user) =>
+    user.account_status === undefined ? { ...user, account_status: "active" } : user
+  );
   const fromRestore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
   const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
     functionName === "list_clients_with_summaries"

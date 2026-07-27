@@ -12,13 +12,15 @@ const REQUIRED_TABLE_COLUMNS = {
     "location_label",
     "avatar_image_id",
     "timezone",
-    "plan_tier",
-    "plan_status",
+    "account_status",
     "sms_monthly_limit",
     "sms_used_this_month",
     "waitlist_enabled",
-    "plan_started_at",
-    "plan_updated_at"
+    "activated_at",
+    "current_period_ends_at",
+    "deactivated_at",
+    "billing_provider",
+    "billing_customer_id"
   ],
   clients: [
     "id",

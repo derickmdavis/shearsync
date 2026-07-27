@@ -206,7 +206,7 @@ const toNewClientReferralFields = (attribution: ReferralAttribution | null): Row
 export const publicBookingsService = {
   async create(payload: Row): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
-    stylistsService.assertPublicBookingEnabled(stylist);
+    await stylistsService.assertPublicBookingEnabled(stylist);
 
     const userId = stylist.user_id as string;
     const service = await servicesService.getActiveForStylist(userId, payload.service_id as string);

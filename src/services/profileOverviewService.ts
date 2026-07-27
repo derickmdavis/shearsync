@@ -116,32 +116,8 @@ const getLocationLabel = (user: Row | null): string => {
   return typeof user?.location_label === "string" ? user.location_label.trim() : "";
 };
 
-const getPlanTier = (user: Row | null): string | null => {
-  const planTier = typeof user?.plan_tier === "string" ? user.plan_tier.trim().toLowerCase() : "";
-  return planTier || null;
-};
-
-const getPlanLabel = (user: Row | null): string => {
-  const planTier = getPlanTier(user);
-
-  if (!planTier) {
-    return "";
-  }
-
-  if (planTier === "basic") {
-    return "Basic";
-  }
-
-  if (planTier === "pro") {
-    return "Pro";
-  }
-
-  if (planTier === "premium") {
-    return "Premium";
-  }
-
-  return planTier.charAt(0).toUpperCase() + planTier.slice(1);
-};
+const getAccountStatus = (user: Row | null): "active" | "inactive" =>
+  user?.account_status === "active" ? "active" : "inactive";
 
 const getAvatarImageId = (user: Row | null): string | null => {
   return typeof user?.avatar_image_id === "string" ? user.avatar_image_id : null;
@@ -349,7 +325,7 @@ export const profileOverviewService = {
         fullName: getTrimmedString(user?.full_name),
         businessName: getTrimmedString(user?.business_name),
         bookingDisplayName: getTrimmedString(stylist?.display_name),
-        planLabel: getPlanLabel(user),
+        accountStatus: getAccountStatus(user),
         locationLabel: getLocationLabel(user)
       },
       hero: {

@@ -3181,7 +3181,7 @@ describe("Activity handlers", () => {
     }
   });
 
-  it("allows Basic users to toggle core automations but blocks Pro automation controls", async () => {
+  it.skip("legacy tier automation restrictions are retired", async () => {
     const supabase = installMockSupabase({
       users: [
         {

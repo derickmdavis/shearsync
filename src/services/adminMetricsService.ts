@@ -138,7 +138,7 @@ export const adminMetricsService = {
       apiRequestLogs,
       jobRuns
     ] = await Promise.all([
-      selectAll("users", "id, email, business_name, full_name, timezone, plan_tier, plan_status, created_at"),
+      selectAll("users", "id, email, business_name, full_name, timezone, account_status, current_period_ends_at, created_at"),
       selectAll("stylists", "user_id, slug, display_name, booking_enabled, created_at"),
       selectAll("services", "id, user_id, is_active, visible, created_at"),
       selectAll("availability", "id, user_id, is_active, created_at"),

@@ -52,8 +52,7 @@ describe("runtime Insights snapshot configuration", () => {
     const supabase = installMockSupabase({ insight_snapshot_configurations: [activeConfiguration()] });
     try {
       const result = await insightsSnapshotConfigurationService.resolveForUser({
-        userId: "11111111-1111-1111-1111-111111111111",
-        planTier: "pro"
+        userId: "11111111-1111-1111-1111-111111111111"
       });
 
       assert.deepEqual(result, {
@@ -99,14 +98,13 @@ describe("runtime Insights snapshot configuration", () => {
     }
   });
 
-  it("falls back for accounts outside a plan target or rollout", async () => {
+  it("falls back when rollout excludes the account", async () => {
     const supabase = installMockSupabase({
-      insight_snapshot_configurations: [activeConfiguration({ target_plan_tiers: ["premium"], rollout_percentage: 0 })]
+      insight_snapshot_configurations: [activeConfiguration({ rollout_percentage: 0 })]
     });
     try {
       const result = await insightsSnapshotConfigurationService.resolveForUser({
-        userId: "11111111-1111-1111-1111-111111111111",
-        planTier: "pro"
+        userId: "11111111-1111-1111-1111-111111111111"
       });
       assert.equal(result.source, "fallback");
     } finally {

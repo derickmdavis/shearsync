@@ -1,22 +1,12 @@
 import type { Request, Response } from "express";
 import { getAuthUserId } from "../lib/request";
 import { accountDeletionService } from "../services/accountDeletionService";
-import { entitlementsService } from "../services/entitlementsService";
+import { accountAccessService } from "../services/accountAccessService";
 
 export const accountController = {
-  async getPlan(req: Request, res: Response) {
+  async getAccess(req: Request, res: Response) {
     const userId = await getAuthUserId(req);
-    const plan = await entitlementsService.getEntitlementsForUser(userId);
-    res.json({ data: plan });
-  },
-
-  async updatePlan(req: Request, res: Response) {
-    const userId = await getAuthUserId(req);
-    const plan = await entitlementsService.updatePlanForUser(userId, {
-      tier: req.body.tier,
-      status: req.body.status
-    });
-    res.json({ data: plan });
+    res.json({ data: await accountAccessService.getAccountAccess(userId) });
   },
 
   async getDeletionRequest(req: Request, res: Response) {

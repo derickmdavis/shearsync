@@ -17,6 +17,7 @@ import { rebookNudgesService } from "./rebookNudgesService";
 import { thankYouEmailsService } from "./thankYouEmailsService";
 import { appointmentReminderSuppressionsService } from "./appointmentReminderSuppressionsService";
 import { notificationEventsService, type NotificationType } from "./notificationEventsService";
+import { accountAccessService } from "./accountAccessService";
 
 export interface EmailMessage {
   to: string;
@@ -946,6 +947,14 @@ export const appointmentEmailDeliveryService = {
         const clientId = typeof claimedEvent.client_id === "string" ? claimedEvent.client_id : null;
         const messageType = getEmailEventMessageType(claimedEvent);
         const recipientEmail = getString(claimedEvent.recipient_email, "");
+        if (!userId || !(await accountAccessService.isAccountActive(userId))) {
+          await markEmailEvent(String(claimedEvent.id ?? ""), {
+            status: "skipped",
+            error: "Account inactive"
+          });
+          result.skipped += 1;
+          continue;
+        }
         if (
           userId
           && confirmationEmailTypes.includes(claimedEvent.email_type as AppointmentEmailType)
