@@ -32,7 +32,13 @@ app.use(express.json({
     (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
   }
 }));
-app.use(express.urlencoded({ extended: false, limit: "1mb" }));
+app.use(express.urlencoded({
+  extended: false,
+  limit: "1mb",
+  verify(req, _res, buffer) {
+    (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+  }
+}));
 
 app.use(apiRouter);
 app.use(notFoundHandler);

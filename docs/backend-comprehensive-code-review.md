@@ -74,12 +74,11 @@ The service role client bypasses RLS, so code-level scoping is critical. Most se
 |---|---|---:|---|---|---|
 | `GET` | `/book/:slug` | No | slug regex | `302` to `${WEB_APP_URL or CLIENT_APP_URL}/book/:slug` | none |
 
-### Account Plan
+### Account Access
 
 | Method | Path | Body/Query | Response | Database fields |
 |---|---|---|---|---|
-| `GET` | `/api/account/plan` | none | `{ data: UserEntitlements }` | reads `users.plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `waitlist_enabled` |
-| `PATCH` | `/api/account/plan` | `{ tier: "basic"|"pro"|"premium", status?: "trialing"|"active"|"past_due"|"cancelled" }` | `{ data: UserEntitlements }` | updates `users.plan_tier`, `plan_status`, `sms_monthly_limit`, `plan_updated_at` |
+| `GET` | `/api/account/access` | none | `{ data: AccountAccess }` | reads `users.account_status`, activation, billing-period, and deactivation fields |
 
 ### Clients
 
@@ -326,7 +325,7 @@ Primary authored schema is `supabase/schema.sql`; migrations evolve it.
 
 ### `users`
 
-Fields: `id`, `email`, `full_name`, `phone_number`, `business_name`, `location_label`, `avatar_image_id`, timestamps, `timezone`, `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, `waitlist_enabled`. It is the account/profile row and entitlement source.
+Fields: `id`, `email`, `full_name`, `phone_number`, `business_name`, `location_label`, `avatar_image_id`, timestamps, `timezone`, `account_status`, `activated_at`, `current_period_ends_at`, `deactivated_at`, `billing_provider`, `billing_customer_id`, `sms_monthly_limit`, `sms_used_this_month`, `waitlist_enabled`. It is the account/profile row and access source.
 
 ### `clients`
 

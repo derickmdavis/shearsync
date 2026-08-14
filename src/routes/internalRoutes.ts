@@ -7,6 +7,7 @@ import {
   cleanupAppointmentImagesQuerySchema,
   processCampaignDeliveriesQuerySchema,
   processAppointmentEmailsQuerySchema,
+  processSmsQuerySchema,
   processBirthdayRemindersQuerySchema,
   processRebookNudgesQuerySchema,
   processThankYouEmailsQuerySchema,
@@ -31,6 +32,12 @@ internalRouter.post(
   requireInternalApiSecret,
   validate({ query: processAppointmentEmailsQuerySchema }),
   asyncHandler(internalController.processAppointmentEmails)
+);
+internalRouter.post(
+  "/sms/process",
+  requireInternalApiSecret,
+  validate({ query: processSmsQuerySchema }),
+  asyncHandler(internalController.processSms)
 );
 internalRouter.post(
   "/campaign-deliveries/process",

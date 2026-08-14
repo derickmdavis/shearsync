@@ -21,6 +21,7 @@ interface LogCommunicationEventOptions {
   errorCode?: string | null;
   errorMessage?: string | null;
   metadata?: Row | null;
+  smsInboundEventId?: string | null;
 }
 
 interface LogConsentEventOptions {
@@ -36,6 +37,7 @@ interface LogConsentEventOptions {
   ipAddress?: string | null;
   userAgent?: string | null;
   metadata?: Row | null;
+  smsInboundEventId?: string | null;
 }
 
 const logFailure = (label: string, error: unknown): void => {
@@ -58,7 +60,8 @@ export const communicationEventsService = {
         status: options.status,
         error_code: options.errorCode ?? null,
         error_message: options.errorMessage ?? null,
-        metadata: options.metadata ?? {}
+        metadata: options.metadata ?? {},
+        sms_inbound_event_id: options.smsInboundEventId ?? null
       });
 
       if (error) {
@@ -83,7 +86,8 @@ export const communicationEventsService = {
         consent_text: options.consentText ?? null,
         ip_address: options.ipAddress ?? null,
         user_agent: options.userAgent ?? null,
-        metadata: options.metadata ?? {}
+        metadata: options.metadata ?? {},
+        sms_inbound_event_id: options.smsInboundEventId ?? null
       });
 
       if (error) {

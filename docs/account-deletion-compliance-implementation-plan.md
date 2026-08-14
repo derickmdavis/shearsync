@@ -350,13 +350,13 @@ Current checkout:
 
 - No Stripe package in `package.json`.
 - No local Stripe/customer/subscription tables found.
-- Plan state lives on `users`: `plan_tier`, `plan_status`, `sms_monthly_limit`, `sms_used_this_month`, `plan_started_at`, `plan_updated_at`, plus `plan_usage_events`.
-- `PATCH /api/account/plan` is currently user-authenticated and changes plan state directly; do not touch this as part of compliance unless separately requested.
+- Account access lives on `users`: `account_status`, `activated_at`, `current_period_ends_at`, `deactivated_at`, and billing identity fields. SMS usage fields remain separate.
+- Account access is changed only by trusted server-side billing events.
 
 Plan:
 
 - For current code, there are no external billing records to delete or retain.
-- On deletion request, set local plan status to `cancelled` or account status to deletion pending only if product wants entitlement lockout before completion.
+- On deletion request, set local account status to inactive only if product wants entitlement lockout before completion.
 - Future Stripe integration should:
   - Cancel active subscriptions on deletion request or before deletion completion.
   - Retain invoices, charges, tax records, dispute evidence, and payout/accounting records as legally required.

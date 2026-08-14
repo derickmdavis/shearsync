@@ -10,8 +10,28 @@ import { apiRequestLogRetentionService } from "../services/apiRequestLogRetentio
 import { rebookNudgesService } from "../services/rebookNudgesService";
 import { thankYouEmailsService } from "../services/thankYouEmailsService";
 import { campaignDeliveryWorkerService } from "../services/campaignDeliveryWorkerService";
+import { smsDeliveryService } from "../services/smsDeliveryService";
 
 export const internalController = {
+  async processSms(req: Request, res: Response) {
+    const query = req.query as { limit?: number; allow_noop?: boolean };
+    const beforeMetrics = await smsDeliveryService.getSmsQueueMetrics();
+    logger.info("sms_queue_metrics_before_processing", { requestId: req.requestId, ...beforeMetrics });
+    if (beforeMetrics.unknownCount > 0) {
+      logger.warn("sms_queue_unknown_messages_detected", { requestId: req.requestId, unknownCount: beforeMetrics.unknownCount });
+    }
+    const result = await smsDeliveryService.processQueuedSms({
+      limit: query.limit,
+      allowNoopProvider: query.allow_noop === true
+    });
+    const afterMetrics = await smsDeliveryService.getSmsQueueMetrics();
+    logger.info("sms_processing_completed", { requestId: req.requestId, ...result, queue: afterMetrics });
+    if (afterMetrics.unknownCount > 0) {
+      logger.warn("sms_queue_unknown_messages_detected", { requestId: req.requestId, unknownCount: afterMetrics.unknownCount });
+    }
+    res.json({ data: { ...result, queue: afterMetrics } });
+  },
+
   async processAppointmentEmails(req: Request, res: Response) {
     const query = req.query as {
       limit?: number;

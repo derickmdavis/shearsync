@@ -3,6 +3,7 @@ import { communicationsController } from "../controllers/communicationsControlle
 import { asyncHandler } from "../lib/asyncHandler";
 import { validate } from "../middleware/validate";
 import { publicAppointmentManagementTokenParamSchema } from "../validators/common";
+import { requireValidTwilioWebhook } from "../middleware/twilioWebhook";
 
 export const communicationsRouter = Router();
 
@@ -11,4 +12,5 @@ communicationsRouter.get(
   validate({ params: publicAppointmentManagementTokenParamSchema }),
   asyncHandler(communicationsController.unsubscribe)
 );
-communicationsRouter.post("/sms/inbound", asyncHandler(communicationsController.inboundSms));
+communicationsRouter.post("/sms/inbound", requireValidTwilioWebhook, asyncHandler(communicationsController.inboundSms));
+communicationsRouter.post("/sms/status", requireValidTwilioWebhook, asyncHandler(communicationsController.smsStatus));

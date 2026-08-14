@@ -10,6 +10,7 @@
     "process:appointment-emails": "node dist/scripts/processAppointmentEmails.js",
     "process:campaign-deliveries": "node dist/scripts/processCampaignDeliveries.js",
     "cleanup:api-request-logs": "node dist/scripts/cleanupApiRequestLogs.js",
+    "cleanup:sms-inbound-events": "node dist/scripts/cleanupSmsInboundEvents.js",
     "cleanup:archived-client-formulas": "node dist/scripts/purgeArchivedClientFormulas.js",
     "smoke:appointment-images-storage": "tsx src/scripts/smokeAppointmentImageStorage.ts",
     "typecheck": "tsc --noEmit",
@@ -35,6 +36,7 @@
     "morgan": "^1.10.0",
     "qrcode": "^1.5.4",
     "resend": "^6.12.3",
+    "twilio": "^6.1.0",
     "typescript": "^5.9.3",
     "zod": "^3.24.2"
   },

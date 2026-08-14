@@ -460,7 +460,7 @@ Purpose:
 
 - Auth-linked business owner record.
 - Source of business timezone.
-- Holds plan and profile metadata used by settings, entitlements, dashboard, and public profile assembly.
+- Holds account-access and profile metadata used by settings, dashboard, and public profile assembly.
 
 Fields actively used by code:
 
@@ -472,13 +472,13 @@ Fields actively used by code:
 - `location_label`
 - `avatar_image_id`
 - `timezone`
-- `plan_tier`
-- `plan_status`
 - `sms_monthly_limit`
 - `sms_used_this_month`
-- `plan_started_at` (present in the Supabase production column export; not currently read by code)
 - `waitlist_enabled`
-- `plan_updated_at`
+- `account_status`
+- `activated_at`
+- `current_period_ends_at`
+- `deactivated_at`
 
 Relationships:
 
@@ -495,7 +495,7 @@ Important notes:
 - `resolveBusinessTimeZone()` falls back to `"UTC"` if timezone is missing or invalid.
 - `timezone` defaults to `'America/Denver'::text` in the aligned schema.
 - `location_label` and `avatar_image_id` are optional profile/settings fields.
-- `waitlist_enabled` is the stylist-controlled waitlist on/off setting. It defaults to `true` for backwards compatibility, but the public waitlist is only effectively enabled when the plan allows waitlist, `plan_status != "cancelled"`, and `waitlist_enabled = true`.
+- `waitlist_enabled` is the stylist-controlled waitlist on/off setting. It defaults to `true` for backwards compatibility; public waitlist access also requires an active account.
 
 ### `public.stylists`
 

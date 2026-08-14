@@ -635,6 +635,29 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
     let settings: TableRow;
 
     switch (functionName) {
+      case "upsert_sms_template_settings": {
+        const templateType = String(args.p_template_type ?? "");
+        const rows = getRows(state, "sms_template_settings");
+        let setting = rows.find((row) => row.user_id === userId && row.template_type === templateType);
+        if (!setting) {
+          setting = {
+            id: randomUUID(),
+            user_id: userId,
+            template_type: templateType,
+            enabled: args.p_has_enabled === true ? args.p_enabled === true : true,
+            custom_body: args.p_has_custom_body === true ? args.p_custom_body ?? null : null,
+            created_at: timestamp,
+            updated_at: timestamp
+          };
+          rows.push(setting);
+        } else {
+          if (args.p_has_enabled === true) setting.enabled = args.p_enabled === true;
+          if (args.p_has_custom_body === true) setting.custom_body = args.p_custom_body ?? null;
+          setting.updated_at = timestamp;
+        }
+        return { data: cloneRow(setting), error: null };
+      }
+
       case "create_client_formula": {
         const formula = args.p_formula as TableRow;
         const sections = args.p_sections as TableRow[];
@@ -1174,6 +1197,40 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
   }
 };
 
+const executeTwilioSmsDeliveryStatusRpc = (state: TableState, args: Record<string, unknown>) => {
+  const messageSid = String(args.p_provider_message_id ?? "");
+  const status = String(args.p_message_status ?? "").toLowerCase();
+  const message = getRows(state, "sms_messages").find((row) => row.provider === "twilio" && row.provider_message_id === messageSid);
+  if (!message || ["delivered", "failed", "skipped", "cancelled"].includes(String(message.status))) {
+    return { data: [{ updated: false }], error: null };
+  }
+  const mapped = ({ accepted: "sent", queued: "sent", sending: "sent", sent: "sent", delivered: "delivered", failed: "failed", undelivered: "failed" } as Record<string, string>)[status];
+  if (message.status === "unknown" && mapped === "sent") return { data: [{ updated: false }], error: null };
+  const now = new Date().toISOString();
+  const diagnostics = args.p_diagnostics && typeof args.p_diagnostics === "object" ? args.p_diagnostics as TableRow : {};
+  Object.assign(message, {
+    metadata: { ...(message.metadata && typeof message.metadata === "object" ? message.metadata as TableRow : {}), twilio_last_status: status, twilio_last_status_to: args.p_to ?? null, twilio_diagnostics: diagnostics },
+    ...(mapped ? { status: mapped, next_attempt_at: null } : {}),
+    ...(mapped === "sent" ? { sent_at: message.sent_at ?? now, error_code: null, error_message: null } : {}),
+    ...(mapped === "delivered" ? { delivered_at: now, error_code: null, error_message: null } : {}),
+    ...(mapped === "failed" ? { failed_at: now, error_code: args.p_error_code ?? "twilio_undelivered", error_message: args.p_error_message ?? "Twilio reported that the SMS could not be delivered." } : {})
+  });
+  if (mapped === "delivered" || mapped === "failed") {
+    const events = getRows(state, "communication_events");
+    if (!events.some((event) => event.provider === "twilio" && event.provider_message_id === messageSid && event.status === mapped)) {
+      events.push({
+        id: randomUUID(), user_id: message.user_id, client_id: message.client_id ?? null, channel: "sms", message_type: message.message_type ?? null,
+        to_address: message.recipient_phone ?? null, to_normalized: message.recipient_phone_normalized ?? null,
+        provider: "twilio", provider_message_id: messageSid, status: mapped,
+        error_code: mapped === "failed" ? args.p_error_code ?? "twilio_undelivered" : null,
+        error_message: mapped === "failed" ? args.p_error_message ?? "Twilio reported that the SMS could not be delivered." : null,
+        metadata: { sms_message_id: message.id ?? null, twilio_status: status, twilio_error_code: args.p_error_code ?? null, twilio_diagnostics: diagnostics }, created_at: now
+      });
+    }
+  }
+  return { data: [{ updated: true }], error: null };
+};
+
 export const installMockSupabase = (initialState: TableState, options: MockSupabaseOptions = {}) => {
   const state = cloneState(initialState);
   // Production rows receive `account_status` from the migration/default. Older
@@ -1184,7 +1241,9 @@ export const installMockSupabase = (initialState: TableState, options: MockSupab
   );
   const fromRestore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
   const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
-    functionName === "list_clients_with_summaries"
+    functionName === "apply_twilio_sms_delivery_status"
+      ? executeTwilioSmsDeliveryStatusRpc(state, args)
+      : functionName === "list_clients_with_summaries"
       ? executeClientsListRpc(state, args)
       : executeApprovalSettingsRpc(state, functionName, args)
   );

@@ -20,7 +20,8 @@ const REQUIRED_TABLE_COLUMNS = {
     "current_period_ends_at",
     "deactivated_at",
     "billing_provider",
-    "billing_customer_id"
+    "billing_customer_id",
+    "sms_delivery_enabled"
   ],
   clients: [
     "id",
@@ -168,6 +169,19 @@ const REQUIRED_TABLE_COLUMNS = {
     "created_at",
     "updated_at"
   ],
+  sms_messages: [
+    "id", "user_id", "client_id", "appointment_id", "message_type", "recipient_phone",
+    "recipient_phone_normalized", "body", "status", "idempotency_key", "provider",
+    "provider_message_id", "attempt_count", "next_attempt_at", "last_attempt_at",
+    "sending_started_at", "lease_token", "lease_expires_at", "sent_at", "delivered_at",
+    "failed_at", "unknown_at", "skipped_at", "error_code", "error_message", "metadata", "created_at", "updated_at"
+  ],
+  sms_inbound_events: [
+    "id", "provider", "provider_message_id", "from_phone", "from_phone_normalized", "to_phone",
+    "to_phone_normalized", "body", "classification", "classification_source", "provider_metadata", "status",
+    "attempt_count", "lease_token", "lease_expires_at", "processed_at", "failed_at", "error_code", "redacted_at", "received_at", "created_at"
+  ],
+  sms_template_settings: ["id", "user_id", "template_type", "enabled", "custom_body", "created_at", "updated_at"],
   payment_methods: [
     "id",
     "user_id",
@@ -352,6 +366,10 @@ const REQUIRED_TABLE_COLUMNS = {
   app_content_audit_events: [
     "id", "event_type", "definition_key", "locale", "revision_id", "actor_user_id",
     "actor_admin_email", "previous_value", "new_value", "metadata", "created_at"
+  ],
+  early_access_requests: [
+    "id", "full_name", "email", "phone", "status", "source", "utm_source",
+    "utm_medium", "utm_campaign", "notes", "created_at", "updated_at"
   ]
 } as const;
 

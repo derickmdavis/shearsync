@@ -10,6 +10,11 @@ export const processAppointmentEmailsQuerySchema = z.object({
   allow_noop: booleanQuerySchema
 });
 
+export const processSmsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  allow_noop: booleanQuerySchema
+});
+
 export const processCampaignDeliveriesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });

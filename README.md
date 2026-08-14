@@ -34,10 +34,25 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 CLIENT_APP_URL=http://localhost:8081
 WEB_APP_URL=http://localhost:3001
 INTERNAL_API_SECRET=your-long-random-internal-secret
+SMS_DELIVERY_ENABLED=false
+SMS_PROVIDER=none
+SMS_INBOUND_EVENT_RETENTION_DAYS=90
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_API_KEY_SID=SK...
+TWILIO_API_KEY_SECRET=your-twilio-api-key-secret
+TWILIO_MESSAGING_SERVICE_SID=MG...
+TWILIO_AUTH_TOKEN=your-twilio-auth-token
+PUBLIC_API_BASE_URL=https://your-api.up.railway.app
 RESEND_API_KEY=your-resend-api-key
 EMAIL_FROM="DripDesk <appointments@your-verified-domain.com>"
 EMAIL_REPLY_TO=support@your-verified-domain.com
 ```
+
+Inbound SMS consent is currently scoped to DripDesk's shared Twilio Messaging Service: a valid STOP or START applies to every matching recipient preference record. Per-account SMS consent requires a future sender/service-to-account ownership mapping before it can be enabled safely.
+
+Raw inbound SMS bodies and phone data are redacted from `sms_inbound_events` after `SMS_INBOUND_EVENT_RETENTION_DAYS` (90 days by default), while the classification and audit linkage remain. Schedule `npm run cleanup:sms-inbound-events` daily in production.
+
+Keep `SMS_PROVIDER=none` until the Twilio Messaging Service/sender is approved. Do not configure Twilio inbound or delivery-status webhook URLs before that point; the API keeps both callback routes unavailable while this safe default is active.
 
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.
 
@@ -205,6 +220,7 @@ Public booking routes:
 - `GET /api/public/availability/:slug?booking_context_token=...`
 - `GET /api/public/availability/:slug/slots?service_id=...&date=YYYY-MM-DD&booking_context_token=...`
 - `GET /api/public/referrals/:referralCode`
+- `POST /api/public/early-access` (also accepts `/api/public/early-access-requests` for marketing-site compatibility)
 - `POST /api/public/stylists/:slug/waitlist`
 - `POST /api/public/booking-intake`
 - `POST /api/public/bookings`
@@ -213,6 +229,7 @@ Public communication routes:
 
 - `GET /api/communications/unsubscribe/:token`
 - `POST /api/communications/sms/inbound`
+- `POST /api/communications/sms/status`
 
 ## Public Booking Flow
 

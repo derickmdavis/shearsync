@@ -4039,6 +4039,17 @@ describe("appointment email delivery", () => {
       assert.equal(supabase.state.client_communication_preferences[0]?.sms_marketing_enabled, false);
       assert.equal(supabase.state.communication_consent_events[0]?.event_type, "inbound_stop");
       assert.equal(supabase.state.communication_events[0]?.status, "inbound_stop");
+      assert.deepEqual(supabase.state.communication_events[0]?.metadata, {
+        provider: "twilio",
+        provider_message_id: "sms-message-1",
+        destination_number: null,
+        opt_out_type: null,
+        classification: "stop",
+        classification_source: "keyword_fallback",
+        provider_classified: false,
+        consent_scope: "shared_messaging_service",
+        consent_scope_destination: null
+      });
 
       await communicationsService.handleInboundSms({
         from: "(720) 555-0100",
@@ -4051,6 +4062,45 @@ describe("appointment email delivery", () => {
       assert.equal(supabase.state.client_communication_preferences[0]?.sms_reminders_enabled, true);
       assert.equal(supabase.state.client_communication_preferences[0]?.sms_marketing_enabled, false);
       assert.equal(supabase.state.client_communication_preferences[0]?.sms_rebooking_enabled, false);
+      assert.equal(supabase.state.communication_consent_events[1]?.event_type, "inbound_start");
+      assert.equal(supabase.state.communication_events[1]?.status, "inbound_start");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("uses normalized provider classifications and does not rewrite already matching SMS preferences", async () => {
+    const supabase = installMockSupabase({
+      client_communication_preferences: [{
+        id: "preference-1", user_id: TEST_USER_ID, client_id: TEST_CLIENT_ID, phone: "+17205550100",
+        phone_normalized: "+17205550100", sms_transactional_enabled: false, sms_reminders_enabled: false,
+        sms_marketing_enabled: false, sms_rebooking_enabled: false, opted_out_all_sms: true,
+        sms_opted_out_at: "2026-05-10T10:00:00.000Z", sms_opt_out_source: "inbound_sms"
+      }]
+    });
+    try {
+      await communicationsService.handleInboundSms({
+        from: "+17205550100", body: "ordinary message", messageSid: "sms-message-classified",
+        classification: "stop", classificationSource: "twilio_opt_out_type"
+      });
+      assert.equal(supabase.state.client_communication_preferences[0]?.sms_opted_out_at, "2026-05-10T10:00:00.000Z");
+      assert.equal((supabase.state.communication_consent_events[0]?.metadata as { classification_source?: string } | undefined)?.classification_source, "twilio_opt_out_type");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("applies inbound SMS consent across matching records in the shared Messaging Service scope", async () => {
+    const supabase = installMockSupabase({
+      client_communication_preferences: [
+        { id: "preference-1", user_id: TEST_USER_ID, client_id: TEST_CLIENT_ID, phone_normalized: "+17205550100", opted_out_all_sms: false, sms_transactional_enabled: true, sms_reminders_enabled: true, sms_marketing_enabled: true, sms_rebooking_enabled: true },
+        { id: "preference-2", user_id: "33333333-3333-3333-3333-333333333333", client_id: "44444444-4444-4444-4444-444444444444", phone_normalized: "+17205550100", opted_out_all_sms: false, sms_transactional_enabled: true, sms_reminders_enabled: true, sms_marketing_enabled: true, sms_rebooking_enabled: true }
+      ], communication_events: [], communication_consent_events: []
+    });
+    try {
+      await communicationsService.handleInboundSms({ from: "+17205550100", to: "+17205550999", body: "STOP", messageSid: "sms-shared-scope" });
+      assert.ok(supabase.state.client_communication_preferences.every((row) => row.opted_out_all_sms === true));
+      assert.equal((supabase.state.communication_consent_events[0]?.metadata as { consent_scope?: string }).consent_scope, "shared_messaging_service");
     } finally {
       supabase.restore();
     }

@@ -4,16 +4,14 @@ This document covers the stylist settings toggle and the public booking page beh
 
 ## Source Of Truth
 
-Waitlist availability has three layers:
+Waitlist availability has two layers:
 
-- Plan entitlement: `GET /api/account/plan` -> `data.features.waitlist`
-- Stylist setting: `public.users.waitlist_enabled`, exposed as `data.settings.waitlistEnabled`
-- Effective availability: `data.effectiveFeatures.waitlistEnabled` for authenticated app UI and `data.features.waitlistEnabled` on public stylist metadata
+- Account access: `GET /api/account/access` -> `data.isActive`
+- Stylist setting: `public.users.waitlist_enabled`
 
 The backend treats waitlist as usable only when all of these are true:
 
-- the user's tier allows waitlist, currently Pro or Premium
-- `plan_status` is not `cancelled`
+- the stylist account is active
 - `users.waitlist_enabled` is `true`
 
 ## Stylist App Toggle
@@ -58,8 +56,6 @@ The response is the updated raw user profile:
   "data": {
     "id": "uuid",
     "email": "stylist@example.com",
-    "plan_tier": "pro",
-    "plan_status": "active",
     "waitlist_enabled": true
   }
 }
@@ -67,13 +63,11 @@ The response is the updated raw user profile:
 
 Recommended toggle UI:
 
-- Call `GET /api/account/plan`.
-- If `data.features.waitlist === false`, hide the toggle or show an upgrade prompt.
-- If `data.features.waitlist === true`, show the toggle using `data.settings.waitlistEnabled`.
-- If `data.status === "cancelled"`, show the toggle as unavailable or disabled because public waitlist remains off.
-- Treat `data.effectiveFeatures.waitlistEnabled` as the current authenticated app capability.
+- Call `GET /api/account/access`.
+- If `data.isActive === false`, do not show the toggle; product routes are unavailable.
+- Otherwise, show the toggle using `profile.waitlist_enabled`.
 
-Important: Basic users may technically save `waitlist_enabled=true`, but `effectiveFeatures.waitlistEnabled` remains false until their plan allows waitlist.
+The API enforces active-account access; the frontend should not infer access from plan fields.
 
 ## Public Booking Page
 
@@ -103,7 +97,7 @@ Show public waitlist UI only when:
 profile.booking_enabled === true && profile.features.waitlistEnabled === true
 ```
 
-Do not compute public waitlist availability from `plan_tier` in the frontend. The public endpoint already combines plan eligibility, cancelled status, and the stylist setting.
+Do not compute public waitlist availability from account fields in the frontend. The public endpoint already combines account access and the stylist setting.
 
 ## Public Waitlist Create
 

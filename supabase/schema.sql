@@ -55,13 +55,10 @@ create table if not exists public.users (
   deactivated_at timestamptz,
   billing_provider text,
   billing_customer_id text,
-  plan_tier text not null default 'basic' check (plan_tier in ('basic', 'pro', 'premium')),
-  plan_status text not null default 'active' check (plan_status in ('trialing', 'active', 'past_due', 'cancelled')),
+  sms_delivery_enabled boolean not null default true,
   sms_monthly_limit integer not null default 0,
   sms_used_this_month integer not null default 0,
-  plan_started_at timestamptz default now(),
   waitlist_enabled boolean not null default true,
-  plan_updated_at timestamptz default now(),
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   constraint users_billing_identity_check check (
@@ -698,6 +695,88 @@ create table if not exists public.client_communication_preferences (
     check (email_normalized is not null or phone_normalized is not null)
 );
 
+create table if not exists public.sms_messages (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  client_id uuid references public.clients(id) on delete set null,
+  appointment_id uuid references public.appointments(id) on delete set null,
+  message_type text not null check (message_type in (
+    'appointment_confirmation', 'appointment_reminder', 'appointment_cancelled',
+    'appointment_rescheduled', 'waitlist_update', 'rebooking_prompt',
+    'birthday_reminder', 'marketing', 'business_recap'
+  )),
+  recipient_phone text not null,
+  recipient_phone_normalized text not null,
+  body text not null check (char_length(body) between 1 and 1600),
+  status text not null default 'queued' check (status in (
+    'queued', 'sending', 'sent', 'delivered', 'failed', 'unknown', 'skipped', 'cancelled'
+  )),
+  idempotency_key text not null check (char_length(trim(idempotency_key)) between 1 and 200),
+  provider text,
+  provider_message_id text,
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  next_attempt_at timestamptz default now(),
+  last_attempt_at timestamptz,
+  sending_started_at timestamptz,
+  lease_token uuid,
+  lease_expires_at timestamptz,
+  sent_at timestamptz,
+  delivered_at timestamptz,
+  failed_at timestamptz,
+  unknown_at timestamptz,
+  skipped_at timestamptz,
+  error_code text,
+  error_message text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sms_messages_user_idempotency_unique unique (user_id, idempotency_key),
+  constraint sms_messages_provider_length_check check (provider is null or char_length(provider) <= 80),
+  constraint sms_messages_provider_message_length_check check (
+    provider_message_id is null or char_length(provider_message_id) <= 255
+  ),
+  constraint sms_messages_error_length_check check (
+    (error_code is null or char_length(error_code) <= 120)
+    and (error_message is null or char_length(error_message) <= 2000)
+  )
+);
+
+create table if not exists public.sms_inbound_events (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null check (provider in ('twilio')),
+  provider_message_id text not null,
+  from_phone text,
+  from_phone_normalized text,
+  to_phone text,
+  to_phone_normalized text,
+  body text,
+  classification text not null check (classification in ('stop', 'start', 'help', 'other')),
+  classification_source text not null check (classification_source in ('twilio_opt_out_type', 'keyword_fallback')),
+  provider_metadata jsonb not null default '{}'::jsonb,
+  status text not null default 'processing' check (status in ('processing', 'processed', 'failed')),
+  attempt_count integer not null default 1 check (attempt_count >= 1),
+  lease_token uuid,
+  lease_expires_at timestamptz,
+  processed_at timestamptz,
+  failed_at timestamptz,
+  error_code text,
+  redacted_at timestamptz,
+  received_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  constraint sms_inbound_events_provider_message_unique unique (provider, provider_message_id)
+);
+
+create table if not exists public.sms_template_settings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  template_type text not null check (template_type in ('appointment_reminder')),
+  enabled boolean not null default true,
+  custom_body text check (custom_body is null or char_length(custom_body) between 1 and 160),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sms_template_settings_user_type_unique unique (user_id, template_type)
+);
+
 create table if not exists public.communication_events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -712,6 +791,7 @@ create table if not exists public.communication_events (
   error_code text,
   error_message text,
   metadata jsonb not null default '{}'::jsonb,
+  sms_inbound_event_id uuid references public.sms_inbound_events(id) on delete set null,
   created_at timestamptz not null default now(),
   constraint communication_events_channel_check
     check (channel in ('email', 'sms')),
@@ -763,6 +843,7 @@ create table if not exists public.communication_consent_events (
   ip_address text,
   user_agent text,
   metadata jsonb not null default '{}'::jsonb,
+  sms_inbound_event_id uuid references public.sms_inbound_events(id) on delete set null,
   created_at timestamptz not null default now(),
   constraint communication_consent_events_channel_check
     check (channel in ('email', 'sms')),
@@ -1098,6 +1179,30 @@ create table if not exists public.waitlist_entries (
     )
 );
 
+create table if not exists public.early_access_requests (
+  id uuid primary key default gen_random_uuid(),
+  full_name text not null,
+  email text not null,
+  phone text,
+  status text not null default 'new',
+  source text not null default 'homepage_waitlist',
+  utm_source text,
+  utm_medium text,
+  utm_campaign text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint early_access_requests_full_name_check check (char_length(trim(full_name)) between 2 and 120),
+  constraint early_access_requests_email_check check (char_length(trim(email)) between 3 and 254),
+  constraint early_access_requests_phone_length_check check (phone is null or char_length(phone) <= 40),
+  constraint early_access_requests_status_check check (status in ('new', 'contacted', 'invited', 'joined', 'archived')),
+  constraint early_access_requests_source_check check (char_length(trim(source)) between 1 and 100),
+  constraint early_access_requests_utm_source_length_check check (utm_source is null or char_length(utm_source) <= 100),
+  constraint early_access_requests_utm_medium_length_check check (utm_medium is null or char_length(utm_medium) <= 100),
+  constraint early_access_requests_utm_campaign_length_check check (utm_campaign is null or char_length(utm_campaign) <= 150),
+  constraint early_access_requests_notes_length_check check (notes is null or char_length(notes) <= 1000)
+);
+
 create table if not exists public.appointment_action_links (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -1280,6 +1385,10 @@ create index if not exists waitlist_entries_user_id_idx on public.waitlist_entri
 create index if not exists waitlist_entries_user_date_idx on public.waitlist_entries(user_id, requested_date);
 create index if not exists waitlist_entries_user_status_idx on public.waitlist_entries(user_id, status);
 create index if not exists waitlist_entries_user_created_at_idx on public.waitlist_entries(user_id, created_at desc);
+create unique index if not exists early_access_requests_email_lower_uidx
+  on public.early_access_requests(lower(email));
+create index if not exists early_access_requests_status_created_at_idx
+  on public.early_access_requests(status, created_at desc);
 create unique index if not exists appointment_action_links_short_code_idx
   on public.appointment_action_links(short_code);
 create index if not exists appointment_action_links_appointment_id_idx
@@ -1385,6 +1494,40 @@ create unique index if not exists client_communication_preferences_user_phone_id
   where phone_normalized is not null;
 create index if not exists client_communication_preferences_client_id_idx
   on public.client_communication_preferences(client_id);
+create index if not exists sms_messages_delivery_retry_idx
+  on public.sms_messages(status, next_attempt_at, created_at);
+create index if not exists sms_messages_lease_expiry_idx
+  on public.sms_messages(status, lease_expires_at)
+  where status = 'sending';
+create index if not exists sms_messages_user_status_idx
+  on public.sms_messages(user_id, status, created_at);
+create index if not exists sms_messages_provider_message_idx
+  on public.sms_messages(provider, provider_message_id)
+  where provider_message_id is not null;
+create unique index if not exists sms_messages_provider_message_unique
+  on public.sms_messages(provider, provider_message_id)
+  where provider is not null and provider_message_id is not null;
+create index if not exists sms_inbound_events_from_phone_idx
+  on public.sms_inbound_events(from_phone_normalized, received_at desc);
+create index if not exists sms_template_settings_user_id_idx on public.sms_template_settings(user_id);
+create index if not exists sms_inbound_events_processing_lease_idx
+  on public.sms_inbound_events(status, lease_expires_at)
+  where status = 'processing';
+create index if not exists sms_inbound_events_retention_redaction_idx
+  on public.sms_inbound_events(received_at)
+  where redacted_at is null and status in ('processed', 'failed');
+create unique index if not exists communication_events_sms_inbound_event_user_status_unique
+  on public.communication_events(sms_inbound_event_id, user_id, status)
+  where sms_inbound_event_id is not null;
+create unique index if not exists communication_consent_events_sms_inbound_event_user_type_unique
+  on public.communication_consent_events(sms_inbound_event_id, user_id, event_type)
+  where sms_inbound_event_id is not null;
+create unique index if not exists communication_events_twilio_final_status_unique
+  on public.communication_events(provider, provider_message_id, status)
+  where channel = 'sms'
+    and provider = 'twilio'
+    and provider_message_id is not null
+    and status in ('delivered', 'failed');
 create index if not exists communication_events_user_created_at_idx
   on public.communication_events(user_id, created_at desc);
 create index if not exists communication_events_client_created_at_idx
@@ -1436,6 +1579,82 @@ alter table public.rebook_nudge_settings enable row level security;
 alter table public.rebook_nudges enable row level security;
 alter table public.client_rebooking_preferences enable row level security;
 alter table public.client_communication_preferences enable row level security;
+alter table public.sms_messages enable row level security;
+alter table public.sms_inbound_events enable row level security;
+alter table public.sms_template_settings enable row level security;
+
+create or replace function public.set_sms_message_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger sms_messages_set_updated_at
+  before update on public.sms_messages
+  for each row execute function public.set_sms_message_updated_at();
+
+create or replace function public.set_sms_template_settings_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger sms_template_settings_set_updated_at
+  before update on public.sms_template_settings
+  for each row execute function public.set_sms_template_settings_updated_at();
+
+create or replace function public.upsert_sms_template_settings(
+  p_user_id uuid,
+  p_template_type text,
+  p_has_enabled boolean,
+  p_enabled boolean,
+  p_has_custom_body boolean,
+  p_custom_body text
+)
+returns public.sms_template_settings
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  saved public.sms_template_settings;
+begin
+  insert into public.sms_template_settings (user_id, template_type, enabled, custom_body)
+  values (
+    p_user_id,
+    p_template_type,
+    case when p_has_enabled then p_enabled else true end,
+    case when p_has_custom_body then p_custom_body else null end
+  )
+  on conflict (user_id, template_type) do update
+  set
+    enabled = case when p_has_enabled then p_enabled else sms_template_settings.enabled end,
+    custom_body = case when p_has_custom_body then p_custom_body else sms_template_settings.custom_body end
+  returning * into saved;
+
+  return saved;
+end;
+$$;
+
+revoke all on function public.upsert_sms_template_settings(uuid, text, boolean, boolean, boolean, text) from public;
+grant execute on function public.upsert_sms_template_settings(uuid, text, boolean, boolean, boolean, text) to service_role;
+
+create or replace function public.set_early_access_requests_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists early_access_requests_set_updated_at on public.early_access_requests;
+create trigger early_access_requests_set_updated_at
+  before update on public.early_access_requests
+  for each row execute function public.set_early_access_requests_updated_at();
 alter table public.communication_events enable row level security;
 alter table public.communication_consent_events enable row level security;
 alter table public.communication_preference_tokens enable row level security;
@@ -1461,6 +1680,7 @@ alter table public.services enable row level security;
 alter table public.availability enable row level security;
 alter table public.stylist_off_days enable row level security;
 alter table public.waitlist_entries enable row level security;
+alter table public.early_access_requests enable row level security;
 alter table public.appointment_action_links enable row level security;
 
 drop policy if exists client_referral_links_select_own on public.client_referral_links;

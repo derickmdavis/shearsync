@@ -79,7 +79,13 @@ publicRouter.post(
   validate({ body: createPublicBookingIntakeSchema }),
   asyncHandler(publicController.createBookingIntake)
 );
-publicRouter.post("/early-access", publicMutationRateLimiter, asyncHandler(publicController.createEarlyAccessRequest));
+// `/early-access-requests` is retained for the deployed marketing-site proxy.
+// New callers should use the shorter canonical path.
+publicRouter.post(
+  ["/early-access", "/early-access-requests"],
+  publicMutationRateLimiter,
+  asyncHandler(publicController.createEarlyAccessRequest)
+);
 publicRouter.post(
   "/bookings",
   bookingCreateRateLimiter,

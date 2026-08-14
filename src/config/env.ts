@@ -25,10 +25,19 @@ const envSchema = z.object({
   INTERNAL_API_SECRET: z.string().min(16).optional(),
   ADMIN_API_KEY: z.string().min(16).optional(),
   API_REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  SMS_INBOUND_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
   RESEND_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().min(1).optional(),
   EMAIL_REPLY_TO: z.string().email().optional(),
-  RESEND_WEBHOOK_SECRET: z.string().min(1).optional()
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
+  SMS_DELIVERY_ENABLED: envBooleanSchema,
+  SMS_PROVIDER: z.enum(["none", "twilio"]).default("none"),
+  TWILIO_ACCOUNT_SID: z.string().regex(/^AC[a-zA-Z0-9]{32}$/).optional(),
+  TWILIO_API_KEY_SID: z.string().regex(/^SK[a-zA-Z0-9]{32}$/).optional(),
+  TWILIO_API_KEY_SECRET: z.string().min(1).optional(),
+  TWILIO_MESSAGING_SERVICE_SID: z.string().regex(/^MG[a-zA-Z0-9]{32}$/).optional(),
+  TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
+  PUBLIC_API_BASE_URL: z.string().url().optional()
 });
 
 export type AppEnvironment = "development" | "test" | "staging" | "production";
