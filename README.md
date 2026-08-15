@@ -36,6 +36,7 @@ WEB_APP_URL=http://localhost:3001
 INTERNAL_API_SECRET=your-long-random-internal-secret
 SMS_DELIVERY_ENABLED=false
 SMS_APPOINTMENT_CONFIRMATIONS_ENABLED=false
+SMS_APPOINTMENT_REMINDERS_ENABLED=false
 SMS_PROVIDER=none
 SMS_INBOUND_EVENT_RETENTION_DAYS=90
 TWILIO_ACCOUNT_SID=AC...
@@ -54,6 +55,8 @@ Inbound SMS consent is currently scoped to DripDesk's shared Twilio Messaging Se
 Raw inbound SMS bodies and phone data are redacted from `sms_inbound_events` after `SMS_INBOUND_EVENT_RETENTION_DAYS` (90 days by default), while the classification and audit linkage remain. Schedule `npm run cleanup:sms-inbound-events` daily in production.
 
 Keep `SMS_PROVIDER=none` until the Twilio Messaging Service/sender is approved. Do not configure Twilio inbound or delivery-status webhook URLs before that point; the API keeps both callback routes unavailable while this safe default is active.
+
+When appointment reminders are enabled, schedule a trusted Railway Cron (every 5–10 minutes) to `POST /internal/sms/appointment-reminders/process` with `x-internal-api-secret: $INTERNAL_API_SECRET`. This endpoint only queues a capped reminder batch; keep SMS delivery as the separate `/internal/sms/process` job.
 
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.
 

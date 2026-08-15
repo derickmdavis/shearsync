@@ -78,6 +78,12 @@ export const noopSmsProvider: SmsProvider = {
 };
 
 const getString = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+const getMetadataString = (message: Row, key: string): string => {
+  const metadata = message.metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? getString((metadata as Row)[key])
+    : "";
+};
 const errorMessage = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const errorCode = (error: unknown): string => error instanceof SmsProviderError ? error.code : "provider_error";
 
@@ -203,13 +209,47 @@ const logSkipped = async (message: Row, leaseToken: string, reason: string, norm
     status: "skipped", skipped_at: now.toISOString(), next_attempt_at: null, error_code: reason, error_message: reason
   });
   if (!finalized) return false;
+  const status = reason === "missing_sms_consent"
+    ? "skipped_missing_consent"
+    : reason === "appointment_changed"
+      ? "skipped_appointment_changed"
+      : reason === "appointment_cancelled"
+        ? "skipped_appointment_cancelled"
+        : "skipped_opted_out";
   await communicationEventsService.logCommunicationEvent({
     userId: String(message.user_id), clientId: typeof message.client_id === "string" ? message.client_id : null,
     channel: "sms", messageType: message.message_type as MessageType, toAddress: getString(message.recipient_phone),
-    toNormalized: normalized, status: reason === "missing_sms_consent" ? "skipped_missing_consent" : "skipped_opted_out",
+    toNormalized: normalized, status,
     errorCode: reason, metadata: { sms_message_id: message.id ?? null }
   });
   return true;
+};
+
+/**
+ * A reminder belongs to one appointment occurrence. Re-read it after claiming the
+ * outbox row and immediately before provider submission so a cancellation or
+ * reschedule cannot send stale copy.
+ */
+const getAppointmentReminderInvalidationReason = async (message: Row): Promise<string | null> => {
+  if (message.message_type !== "appointment_reminder") return null;
+  const appointmentId = getString(message.appointment_id);
+  const occurrencePrefix = appointmentId ? `appointment-reminder:${appointmentId}:` : "";
+  // Metadata is canonical. The key fallback protects rows queued by the first
+  // reminder implementation, before appointment_start_at was persisted.
+  const expectedStartAt = getMetadataString(message, "appointment_start_at")
+    || (occurrencePrefix && getString(message.idempotency_key).startsWith(occurrencePrefix)
+      ? getString(message.idempotency_key).slice(occurrencePrefix.length)
+      : "");
+  if (!appointmentId || !expectedStartAt) return null;
+  const { data, error } = await supabaseAdmin.from("appointments")
+    .select("status, appointment_date")
+    .eq("id", appointmentId)
+    .eq("user_id", getString(message.user_id))
+    .maybeSingle();
+  handleSupabaseError(error, "Unable to validate appointment reminder occurrence");
+  if (!data || data.status !== "scheduled") return "appointment_cancelled";
+  if (getString(data.appointment_date) !== expectedStartAt) return "appointment_changed";
+  return null;
 };
 
 const isAccountSmsDeliveryEnabled = async (userId: string): Promise<boolean> => {
@@ -305,6 +345,11 @@ export const smsDeliveryService = {
         });
         if (!eligibility.canSend) {
           if (await logSkipped(claimed, claim.leaseToken, eligibility.reason ?? "communication_preference_blocked", eligibility.toNormalized ?? normalized, now)) result.skipped += 1;
+          continue;
+        }
+        const appointmentInvalidationReason = await getAppointmentReminderInvalidationReason(claimed);
+        if (appointmentInvalidationReason) {
+          if (await logSkipped(claimed, claim.leaseToken, appointmentInvalidationReason, eligibility.toNormalized ?? normalized, now)) result.skipped += 1;
           continue;
         }
         let leaseLost = false;

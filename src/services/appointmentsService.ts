@@ -78,7 +78,8 @@ const toStringOrNull = (value: unknown): string | null => (
 );
 
 const queueAppointmentConfirmationSms = async (userId: string, appointment: Row): Promise<void> => {
-  if (!env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED || appointment.status === "cancelled") return;
+  // Pending public bookings are not yet confirmed; acceptance should enqueue its own confirmation later.
+  if (!env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED || appointment.status !== "scheduled") return;
   const appointmentId = toStringOrNull(appointment.id);
   const clientId = toStringOrNull(appointment.client_id);
   const appointmentDate = toStringOrNull(appointment.appointment_date);
@@ -91,7 +92,8 @@ const queueAppointmentConfirmationSms = async (userId: string, appointment: Row)
     supabaseAdmin.from("users").select("business_name, full_name").eq("id", userId).maybeSingle(),
     businessTimeZoneService.getForUser(userId)
   ]);
-  if (!accountActive || !accountSmsEnabled || user.error) return;
+  if (user.error) handleSupabaseError(user.error, "Unable to load appointment SMS business identity");
+  if (!accountActive || !accountSmsEnabled) return;
   const phone = toStringOrNull(client.phone);
   const firstName = toStringOrNull(client.first_name);
   const businessName = toStringOrNull(user.data?.business_name) ?? toStringOrNull(user.data?.full_name);
@@ -108,11 +110,17 @@ const queueAppointmentConfirmationSms = async (userId: string, appointment: Row)
       weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
     }),
     serviceName: toStringOrNull(appointment.service_name)
+    // No appointment-management URL is supplied here yet; URL generation requires a
+    // separate, revocable management-token flow before it can be included safely.
   });
   await smsDeliveryService.queueSms({
     userId, clientId, appointmentId, messageType: "appointment_confirmation", to: phone, body,
     idempotencyKey: `appointment-confirmation:${appointmentId}`,
-    metadata: { template_type: "appointment_confirmation", appointment_id: appointmentId }
+    metadata: {
+      template_type: "appointment_confirmation",
+      appointment_id: appointmentId,
+      management_link_included: false
+    }
   });
 };
 
@@ -435,10 +443,20 @@ export const appointmentsService = {
       await queueAppointmentConfirmationSms(userId, appointment);
     } catch (error) {
       // Confirmation queueing is a non-blocking follow-up; the appointment remains created.
+      const failureClass = error instanceof Error ? error.name : "unknown_error";
       console.error("appointment_confirmation_sms_queue_failed", {
         account_user_id: userId,
         appointment_id: typeof appointment.id === "string" ? appointment.id : null,
-        error: error instanceof Error ? error.name : "unknown_error"
+        error: failureClass
+      });
+      await recordProductTelemetry({
+        accountUserId: userId,
+        clientId: typeof appointment.client_id === "string" ? appointment.client_id : null,
+        appointmentId: typeof appointment.id === "string" ? appointment.id : null,
+        eventType: "automation_failed",
+        eventSource: "backend",
+        dedupeKey: typeof appointment.id === "string" ? `sms_appointment_confirmation_failed:${appointment.id}` : null,
+        metadata: { automation: "sms_appointment_confirmation", failure_class: failureClass }
       });
     }
     if (

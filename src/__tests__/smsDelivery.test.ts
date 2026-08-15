@@ -75,6 +75,48 @@ describe("smsDeliveryService", () => {
     }
   });
 
+  it("skips a claimed reminder when its appointment was cancelled or rescheduled", async () => {
+    const startAt = "2026-08-14T12:00:00.000Z";
+    const supabase = installMockSupabase({
+      users: [{ id: USER_ID, account_status: "active", sms_delivery_enabled: true }],
+      appointments: [{ id: "appointment-1", user_id: USER_ID, status: "cancelled", appointment_date: startAt }],
+      client_communication_preferences: [{
+        id: "preference-1", user_id: USER_ID, client_id: CLIENT_ID, phone_normalized: "+13035550123",
+        sms_opted_in_at: "2026-08-01T00:00:00.000Z", sms_transactional_enabled: true,
+        sms_reminders_enabled: true, opted_out_all_sms: false
+      }], communication_events: []
+    });
+    let sends = 0;
+    try {
+      await smsDeliveryService.queueSms({
+        userId: USER_ID, clientId: CLIENT_ID, appointmentId: "appointment-1", messageType: "appointment_reminder",
+        to: "+13035550123", body: "Reminder", idempotencyKey: `appointment-reminder:appointment-1:${startAt}`,
+        metadata: { template_type: "appointment_reminder", appointment_start_at: startAt }
+      });
+      const cancelled = await smsDeliveryService.processQueuedSms({
+        provider: { async send() { sends += 1; return { status: "sent", provider: "test-sms" }; } }
+      });
+      assert.equal(cancelled.skipped, 1);
+      assert.equal(sends, 0);
+      assert.equal(supabase.state.sms_messages[0]?.error_code, "appointment_cancelled");
+      assert.equal(supabase.state.communication_events[0]?.status, "skipped_appointment_cancelled");
+
+      supabase.state.sms_messages[0]!.status = "queued";
+      supabase.state.sms_messages[0]!.next_attempt_at = new Date().toISOString();
+      supabase.state.appointments[0]!.status = "scheduled";
+      supabase.state.appointments[0]!.appointment_date = "2026-08-14T13:00:00.000Z";
+      const rescheduled = await smsDeliveryService.processQueuedSms({
+        provider: { async send() { sends += 1; return { status: "sent", provider: "test-sms" }; } }
+      });
+      assert.equal(rescheduled.skipped, 1);
+      assert.equal(sends, 0);
+      assert.equal(supabase.state.sms_messages[0]?.error_code, "appointment_changed");
+      assert.equal(supabase.state.communication_events[1]?.status, "skipped_appointment_changed");
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("records provider failures and retries them up to the configured limit", async () => {
     const supabase = installMockSupabase({
       client_communication_preferences: [{

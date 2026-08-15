@@ -29,6 +29,8 @@ export const communicationEventStatuses = [
   "failed",
   "skipped_opted_out",
   "skipped_missing_consent",
+  "skipped_appointment_changed",
+  "skipped_appointment_cancelled",
   "bounced",
   "complained",
   "unsubscribed",

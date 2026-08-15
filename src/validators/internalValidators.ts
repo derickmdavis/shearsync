@@ -15,6 +15,11 @@ export const processSmsQuerySchema = z.object({
   allow_noop: booleanQuerySchema
 });
 
+export const processSmsAppointmentRemindersQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  scan_minutes: z.coerce.number().int().min(1).max(60).optional()
+});
+
 export const processCampaignDeliveriesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });

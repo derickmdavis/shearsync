@@ -11,6 +11,7 @@ import { rebookNudgesService } from "../services/rebookNudgesService";
 import { thankYouEmailsService } from "../services/thankYouEmailsService";
 import { campaignDeliveryWorkerService } from "../services/campaignDeliveryWorkerService";
 import { smsDeliveryService } from "../services/smsDeliveryService";
+import { appointmentSmsRemindersService } from "../services/appointmentSmsRemindersService";
 
 export const internalController = {
   async processSms(req: Request, res: Response) {
@@ -30,6 +31,17 @@ export const internalController = {
       logger.warn("sms_queue_unknown_messages_detected", { requestId: req.requestId, unknownCount: afterMetrics.unknownCount });
     }
     res.json({ data: { ...result, queue: afterMetrics } });
+  },
+
+  /** Queues due reminder rows only. Provider dispatch remains the separate SMS worker job. */
+  async processAppointmentSmsReminders(req: Request, res: Response) {
+    const query = req.query as { limit?: number; scan_minutes?: number };
+    const result = await appointmentSmsRemindersService.processDueReminders({
+      limit: query.limit,
+      scanMinutes: query.scan_minutes
+    });
+    logger.info("sms_appointment_reminders_queued", { requestId: req.requestId, ...result });
+    res.json({ data: result });
   },
 
   async processAppointmentEmails(req: Request, res: Response) {
