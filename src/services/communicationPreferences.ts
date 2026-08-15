@@ -59,6 +59,48 @@ interface OptInSmsOptions {
   enableRebooking?: boolean;
 }
 
+export interface SmsConsentPreference {
+  clientId: string;
+  phone: string;
+  phoneNormalized: string;
+  optedIn: boolean;
+  optedOut: boolean;
+  categories: {
+    transactional: boolean;
+    reminders: boolean;
+    marketing: boolean;
+    rebooking: boolean;
+  };
+  consent: {
+    optedInAt: string | null;
+    optedInSource: string | null;
+    optedInText: string | null;
+    optedOutAt: string | null;
+    optedOutSource: string | null;
+    lastAuditEventId: string | null;
+  };
+  consentScope: "account";
+}
+
+interface ManualSmsPreferenceUpdateOptions {
+  action: "preferences" | "opt_in" | "opt_out";
+  source: ConsentSource;
+  consentText?: string;
+  transactionalEnabled?: boolean;
+  remindersEnabled?: boolean;
+  marketingEnabled?: boolean;
+  rebookingEnabled?: boolean;
+}
+
+interface InboundSmsConsentOptions {
+  from: string;
+  fromNormalized: string;
+  messageSid?: string | null;
+  classification: "stop" | "start" | "help" | "other";
+  inboundEventId: string;
+  metadata: Row;
+}
+
 const isTruthy = (value: unknown): boolean => value === true;
 const isMissing = (value: unknown): boolean => value === null || value === undefined || value === "";
 const CONTACT_LOOKUP_BATCH_SIZE = 200;
@@ -128,6 +170,45 @@ const findPreferenceByContact = async (
 
   return null;
 };
+
+const getClientSmsContact = async (userId: string, clientId: string): Promise<{ phone: string; phoneNormalized: string }> => {
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select("id, phone")
+    .eq("id", clientId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  handleSupabaseError(error, "Unable to load client");
+  if (!data) throw new ApiError(404, "Client not found");
+  const phone = typeof data.phone === "string" ? data.phone : null;
+  const phoneNormalized = normalizePhone(phone);
+  if (!phone || !phoneNormalized) throw new ApiError(400, "Client requires a valid phone number for SMS preferences");
+  return { phone, phoneNormalized };
+};
+
+const toSmsConsentPreference = (clientId: string, preference: Row): SmsConsentPreference => ({
+  clientId,
+  phone: String(preference.phone ?? ""),
+  phoneNormalized: String(preference.phone_normalized ?? ""),
+  optedIn: Boolean(preference.sms_opted_in_at) && !isTruthy(preference.opted_out_all_sms),
+  optedOut: isTruthy(preference.opted_out_all_sms),
+  categories: {
+    transactional: isTruthy(preference.sms_transactional_enabled),
+    reminders: isTruthy(preference.sms_reminders_enabled),
+    marketing: isTruthy(preference.sms_marketing_enabled),
+    rebooking: isTruthy(preference.sms_rebooking_enabled)
+  },
+  consent: {
+    optedInAt: typeof preference.sms_opted_in_at === "string" ? preference.sms_opted_in_at : null,
+    optedInSource: typeof preference.sms_opt_in_source === "string" ? preference.sms_opt_in_source : null,
+    optedInText: typeof preference.sms_opt_in_text === "string" ? preference.sms_opt_in_text : null,
+    optedOutAt: typeof preference.sms_opted_out_at === "string" ? preference.sms_opted_out_at : null,
+    optedOutSource: typeof preference.sms_opt_out_source === "string" ? preference.sms_opt_out_source : null,
+    lastAuditEventId: typeof preference.sms_last_consent_event_id === "string" ? preference.sms_last_consent_event_id : null
+  },
+  consentScope: "account"
+});
 
 const updateMissingPreferenceFields = async (
   preference: Row,
@@ -287,6 +368,74 @@ const loadGlobalUnsubscribedEmails = async (emailNormalizedValues: string[]): Pr
 };
 
 export const communicationPreferencesService = {
+  async getSmsPreferenceForClient(userId: string, clientId: string): Promise<SmsConsentPreference> {
+    const { phone } = await getClientSmsContact(userId, clientId);
+    const preference = await this.getOrCreateCommunicationPreference({ userId, clientId, phone });
+    return toSmsConsentPreference(clientId, preference);
+  },
+
+  async updateSmsPreferenceForClient(
+    userId: string,
+    clientId: string,
+    options: ManualSmsPreferenceUpdateOptions
+  ): Promise<SmsConsentPreference> {
+    const { phone, phoneNormalized } = await getClientSmsContact(userId, clientId);
+    if (options.action === "opt_in" && !options.consentText?.trim()) {
+      throw new ApiError(400, "SMS opt-in requires consent text");
+    }
+    if (
+      options.action === "preferences"
+      && [options.transactionalEnabled, options.remindersEnabled, options.marketingEnabled, options.rebookingEnabled]
+        .every((value) => value === undefined)
+    ) {
+      throw new ApiError(400, "Provide at least one SMS preference category");
+    }
+    if (options.action === "preferences") {
+      const current = await this.getSmsPreferenceForClient(userId, clientId);
+      if (!current.optedIn) throw new ApiError(400, "SMS preferences require an explicit opt-in");
+      const unchanged = (
+        (options.transactionalEnabled === undefined || options.transactionalEnabled === current.categories.transactional)
+        && (options.remindersEnabled === undefined || options.remindersEnabled === current.categories.reminders)
+        && (options.marketingEnabled === undefined || options.marketingEnabled === current.categories.marketing)
+        && (options.rebookingEnabled === undefined || options.rebookingEnabled === current.categories.rebooking)
+      );
+      if (unchanged) return current;
+    }
+
+    const { data, error } = await supabaseAdmin.rpc("apply_manual_sms_preference", {
+      p_user_id: userId,
+      p_client_id: clientId,
+      p_phone: phone,
+      p_phone_normalized: phoneNormalized,
+      p_action: options.action,
+      p_source: options.source,
+      p_consent_text: options.consentText?.trim() ?? null,
+      p_has_transactional: options.transactionalEnabled !== undefined,
+      p_transactional_enabled: options.transactionalEnabled ?? null,
+      p_has_reminders: options.remindersEnabled !== undefined,
+      p_reminders_enabled: options.remindersEnabled ?? null,
+      p_has_marketing: options.marketingEnabled !== undefined,
+      p_marketing_enabled: options.marketingEnabled ?? null,
+      p_has_rebooking: options.rebookingEnabled !== undefined,
+      p_rebooking_enabled: options.rebookingEnabled ?? null
+    });
+    handleSupabaseError(error, "Unable to update SMS communication preferences");
+    return toSmsConsentPreference(clientId, data as Row);
+  },
+
+  async applyInboundSmsConsent(options: InboundSmsConsentOptions): Promise<void> {
+    if (!["stop", "start", "help"].includes(options.classification)) return;
+    const { error } = await supabaseAdmin.rpc("apply_inbound_sms_consent", {
+      p_from: options.from,
+      p_from_normalized: options.fromNormalized,
+      p_provider_message_id: options.messageSid ?? null,
+      p_classification: options.classification,
+      p_inbound_event_id: options.inboundEventId,
+      p_metadata: options.metadata
+    });
+    handleSupabaseError(error, "Unable to apply inbound SMS consent");
+  },
+
   async getOrCreateCommunicationPreference(options: PreferenceContactOptions): Promise<Row> {
     const emailNormalized = normalizeEmail(options.email);
     const phoneNormalized = normalizePhone(options.phone);

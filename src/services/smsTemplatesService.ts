@@ -1,5 +1,6 @@
 import {
   appointmentReminderSmsTemplateTokens,
+  appointmentConfirmationSmsTemplate,
   isSmsTemplateType,
   smsTemplateDefinitions,
   smsTemplateTypes,
@@ -132,6 +133,21 @@ export const smsTemplatesService = {
       ? validateTemplate(normalizedCustomBody)
       : normalizeText(input.serviceName) ? definition.defaultBodies.withService : definition.defaultBodies.withoutService;
     return renderTemplate(template, input);
+  },
+
+  /** Provider-neutral appointment confirmation copy. No queueing, account settings, or provider dispatch occurs here. */
+  renderAppointmentConfirmation(input: AppointmentReminderSmsTemplateInput): string {
+    const template = normalizeText(input.serviceName)
+      ? appointmentConfirmationSmsTemplate.defaultBodies.withService
+      : appointmentConfirmationSmsTemplate.defaultBodies.withoutService;
+    const rendered = renderTemplate(template, input);
+    const bookingUrl = normalizeText(input.bookingManagementUrl);
+    if (!bookingUrl) return rendered;
+    if (!/^https?:\/\/[^\s]+$/i.test(bookingUrl)) {
+      throw new ApiError(400, "SMS bookingManagementUrl must be an absolute HTTP(S) URL");
+    }
+    const withManagementLink = `${rendered} Manage: ${bookingUrl}`;
+    return withManagementLink.length <= MAX_SMS_TEMPLATE_LENGTH ? withManagementLink : rendered;
   },
 
   async renderAppointmentReminderForUser(

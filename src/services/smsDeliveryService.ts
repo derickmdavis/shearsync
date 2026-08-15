@@ -222,6 +222,10 @@ const isAccountSmsDeliveryEnabled = async (userId: string): Promise<boolean> => 
 export const smsDeliveryService = {
   noopSmsProvider,
 
+  async isAccountSmsDeliveryEnabled(userId: string): Promise<boolean> {
+    return isAccountSmsDeliveryEnabled(userId);
+  },
+
   async queueSms(options: QueueSmsOptions): Promise<Row> {
     const phone = normalizePhone(options.to);
     const body = options.body.trim();
@@ -292,7 +296,7 @@ export const smsDeliveryService = {
           if (await logSkipped(claimed, claim.leaseToken, "account_inactive", normalized, now)) result.skipped += 1;
           continue;
         }
-        if (!(await isAccountSmsDeliveryEnabled(userId))) {
+        if (!(await this.isAccountSmsDeliveryEnabled(userId))) {
           if (await logSkipped(claimed, claim.leaseToken, "account_sms_delivery_disabled", normalized, now)) result.skipped += 1;
           continue;
         }

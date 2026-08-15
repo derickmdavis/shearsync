@@ -14,6 +14,9 @@ import {
   listClientsQuerySchema,
   updateClientAvatarSchema,
   updateClientRebookingPreferenceSchema,
+  updateClientSmsPreferencesSchema,
+  optInClientSmsSchema,
+  optOutClientSmsSchema,
   updateClientSchema
 } from "../validators/clientValidators";
 import { attachFormulaPhotoSchema, createClientFormulaSchema, finalizeFormulaImageSchema, formulaParamsSchema, formulaPhotoParamsSchema, formulaImageUploadIntentSchema, listClientFormulasQuerySchema, reorderFormulaPhotosSchema, updateClientFormulaSchema } from "../validators/clientFormulaValidators";
@@ -54,6 +57,22 @@ clientRouter.patch(
   "/:id/rebooking-preference",
   validate({ params: uuidParamSchema, body: updateClientRebookingPreferenceSchema }),
   asyncHandler(clientsController.updateRebookingPreference)
+);
+clientRouter.get("/:id/sms-preferences", validate({ params: uuidParamSchema }), asyncHandler(clientsController.getSmsPreferences));
+clientRouter.patch(
+  "/:id/sms-preferences",
+  validate({ params: uuidParamSchema, body: updateClientSmsPreferencesSchema }),
+  asyncHandler(clientsController.updateSmsPreferences)
+);
+clientRouter.post(
+  "/:id/sms-preferences/opt-in",
+  validate({ params: uuidParamSchema, body: optInClientSmsSchema }),
+  asyncHandler(clientsController.optInSms)
+);
+clientRouter.post(
+  "/:id/sms-preferences/opt-out",
+  validate({ params: uuidParamSchema, body: optOutClientSmsSchema }),
+  asyncHandler(clientsController.optOutSms)
 );
 clientRouter.patch(
   "/:id/avatar",

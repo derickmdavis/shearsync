@@ -635,6 +635,29 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
     let settings: TableRow;
 
     switch (functionName) {
+      case "apply_inbound_sms_consent": {
+        const phoneNormalized = String(args.p_from_normalized ?? "");
+        const classification = String(args.p_classification ?? "");
+        const inboundEventId = String(args.p_inbound_event_id ?? "");
+        for (const preference of getRows(state, "client_communication_preferences").filter((row) => row.phone_normalized === phoneNormalized)) {
+          const alreadyAudited = getRows(state, "communication_consent_events").some((event) => event.sms_inbound_event_id === inboundEventId && event.user_id === preference.user_id);
+          let changed = false;
+          if (classification === "stop") {
+            changed = preference.opted_out_all_sms !== true || preference.sms_transactional_enabled !== false || preference.sms_reminders_enabled !== false || preference.sms_marketing_enabled !== false || preference.sms_rebooking_enabled !== false;
+            if (changed) Object.assign(preference, { opted_out_all_sms: true, sms_transactional_enabled: false, sms_reminders_enabled: false, sms_marketing_enabled: false, sms_rebooking_enabled: false, sms_opted_out_at: timestamp, sms_opt_out_source: "inbound_sms" });
+          } else if (classification === "start") {
+            changed = preference.opted_out_all_sms !== false || preference.sms_transactional_enabled !== true || preference.sms_reminders_enabled !== true || preference.sms_marketing_enabled !== false || preference.sms_rebooking_enabled !== false || !preference.sms_opted_in_at;
+            if (changed) Object.assign(preference, { opted_out_all_sms: false, sms_transactional_enabled: true, sms_reminders_enabled: true, sms_marketing_enabled: false, sms_rebooking_enabled: false, sms_opted_in_at: timestamp, sms_opt_in_source: "inbound_sms", sms_opted_out_at: null, sms_opt_out_source: null });
+          } else if (classification === "help") changed = true;
+          if (changed && !alreadyAudited) {
+            const eventType = `inbound_${classification}`;
+            getRows(state, "communication_consent_events").push({ id: randomUUID(), user_id: preference.user_id, client_id: preference.client_id ?? null, channel: "sms", contact_value: args.p_from, contact_normalized: phoneNormalized, event_type: eventType, source: "inbound_sms", metadata: args.p_metadata ?? {}, sms_inbound_event_id: inboundEventId, created_at: timestamp });
+            getRows(state, "communication_events").push({ id: randomUUID(), user_id: preference.user_id, client_id: preference.client_id ?? null, channel: "sms", to_address: args.p_from, to_normalized: phoneNormalized, provider: "twilio", provider_message_id: args.p_provider_message_id ?? null, status: eventType, metadata: args.p_metadata ?? {}, sms_inbound_event_id: inboundEventId, created_at: timestamp });
+          }
+        }
+        return { data: null, error: null };
+      }
+
       case "upsert_sms_template_settings": {
         const templateType = String(args.p_template_type ?? "");
         const rows = getRows(state, "sms_template_settings");
@@ -656,6 +679,62 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
           setting.updated_at = timestamp;
         }
         return { data: cloneRow(setting), error: null };
+      }
+
+      case "apply_manual_sms_preference": {
+        const clientId = String(args.p_client_id ?? "");
+        const phone = String(args.p_phone ?? "");
+        const phoneNormalized = String(args.p_phone_normalized ?? "");
+        const action = String(args.p_action ?? "");
+        if (!getRows(state, "clients").some((client) => client.id === clientId && client.user_id === userId)) {
+          throw new Error("client_not_found");
+        }
+        const preferences = getRows(state, "client_communication_preferences");
+        let preference = preferences.find((row) => row.user_id === userId && row.phone_normalized === phoneNormalized);
+        if (!preference) {
+          preference = {
+            id: randomUUID(), user_id: userId, client_id: clientId, phone, phone_normalized: phoneNormalized,
+            sms_transactional_enabled: false, sms_reminders_enabled: false,
+            sms_marketing_enabled: false, sms_rebooking_enabled: false, opted_out_all_sms: false,
+            created_at: timestamp, updated_at: timestamp
+          };
+          preferences.push(preference);
+        }
+        if (action === "opt_in") {
+          Object.assign(preference, {
+            opted_out_all_sms: false,
+            sms_transactional_enabled: args.p_has_transactional === true ? args.p_transactional_enabled === true : true,
+            sms_reminders_enabled: args.p_has_reminders === true ? args.p_reminders_enabled === true : true,
+            sms_marketing_enabled: false, sms_rebooking_enabled: false,
+            sms_opted_in_at: timestamp, sms_opt_in_source: args.p_source,
+            sms_opt_in_text: args.p_consent_text, sms_opted_out_at: null, sms_opt_out_source: null
+          });
+        } else if (action === "opt_out") {
+          Object.assign(preference, {
+            opted_out_all_sms: true, sms_transactional_enabled: false, sms_reminders_enabled: false,
+            sms_marketing_enabled: false, sms_rebooking_enabled: false,
+            sms_opted_out_at: timestamp, sms_opted_out_source: args.p_source
+          });
+        } else if (action === "preferences") {
+          if (!preference.sms_opted_in_at || preference.opted_out_all_sms === true) throw new Error("sms_explicit_opt_in_required");
+          if (args.p_has_transactional === true) preference.sms_transactional_enabled = args.p_transactional_enabled === true;
+          if (args.p_has_reminders === true) preference.sms_reminders_enabled = args.p_reminders_enabled === true;
+          if (args.p_has_marketing === true) preference.sms_marketing_enabled = args.p_marketing_enabled === true;
+          if (args.p_has_rebooking === true) preference.sms_rebooking_enabled = args.p_rebooking_enabled === true;
+        } else {
+          throw new Error("invalid_sms_preference_action");
+        }
+        preference.updated_at = timestamp;
+        const eventType = action === "opt_in" ? "opted_in" : action === "opt_out" ? "opted_out" : "preference_updated";
+        const event = {
+          id: randomUUID(), user_id: userId, client_id: clientId, channel: "sms", contact_value: phone,
+          contact_normalized: phoneNormalized, event_type: eventType, source: args.p_source,
+          consent_text: action === "opt_in" ? args.p_consent_text ?? null : null,
+          metadata: { consent_scope: "account", action }, created_at: timestamp
+        };
+        getRows(state, "communication_consent_events").push(event);
+        preference.sms_last_consent_event_id = event.id;
+        return { data: cloneRow(preference), error: null };
       }
 
       case "create_client_formula": {

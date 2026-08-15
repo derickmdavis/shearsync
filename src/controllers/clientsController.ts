@@ -4,6 +4,8 @@ import { clientRebookingPreferencesService } from "../services/clientRebookingPr
 import { clientsDetailService } from "../services/clientsDetailService";
 import { clientsService } from "../services/clientsService";
 import { referralLinksService, type ReferralSource } from "../services/referralLinksService";
+import { communicationPreferencesService } from "../services/communicationPreferences";
+import type { ConsentSource } from "../lib/communications";
 
 export const clientsController = {
   async list(req: Request, res: Response) {
@@ -50,6 +52,46 @@ export const clientsController = {
     await clientRebookingPreferencesService.updateForClient(userId, clientId, req.body);
     const detail = await clientsDetailService.getDetail(userId, clientId);
     res.json({ data: detail.rebooking_preference });
+  },
+
+  async getSmsPreferences(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const preference = await communicationPreferencesService.getSmsPreferenceForClient(userId, getRequiredParam(req, "id"));
+    res.json({ data: preference });
+  },
+
+  async updateSmsPreferences(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const preference = await communicationPreferencesService.updateSmsPreferenceForClient(userId, getRequiredParam(req, "id"), {
+      action: "preferences",
+      source: req.body.source as ConsentSource,
+      transactionalEnabled: req.body.transactional_enabled,
+      remindersEnabled: req.body.reminders_enabled,
+      marketingEnabled: req.body.marketing_enabled,
+      rebookingEnabled: req.body.rebooking_enabled
+    });
+    res.json({ data: preference });
+  },
+
+  async optInSms(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const preference = await communicationPreferencesService.updateSmsPreferenceForClient(userId, getRequiredParam(req, "id"), {
+      action: "opt_in",
+      source: req.body.source as ConsentSource,
+      consentText: req.body.consent_text,
+      transactionalEnabled: req.body.transactional_enabled,
+      remindersEnabled: req.body.reminders_enabled
+    });
+    res.json({ data: preference });
+  },
+
+  async optOutSms(req: Request, res: Response) {
+    const userId = await getAuthUserId(req);
+    const preference = await communicationPreferencesService.updateSmsPreferenceForClient(userId, getRequiredParam(req, "id"), {
+      action: "opt_out",
+      source: req.body.source as ConsentSource
+    });
+    res.json({ data: preference });
   },
 
   async remove(req: Request, res: Response) {

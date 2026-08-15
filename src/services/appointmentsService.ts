@@ -13,6 +13,11 @@ import { referralLinksService } from "./referralLinksService";
 import { rebookNudgesService } from "./rebookNudgesService";
 import { servicesService } from "./servicesService";
 import { recordProductTelemetry } from "./productTelemetry";
+import { env } from "../config/env";
+import { accountAccessService } from "./accountAccessService";
+import { communicationPreferencesService } from "./communicationPreferences";
+import { smsDeliveryService } from "./smsDeliveryService";
+import { smsTemplatesService } from "./smsTemplatesService";
 
 const appointmentSlotConflictMessage = "This time slot is already booked.";
 const appointmentSlotConstraintName = "appointments_user_id_appointment_date_active_idx";
@@ -71,6 +76,45 @@ const toClientName = (client: Row | null): string | undefined => {
 const toStringOrNull = (value: unknown): string | null => (
   typeof value === "string" && value.trim().length > 0 ? value : null
 );
+
+const queueAppointmentConfirmationSms = async (userId: string, appointment: Row): Promise<void> => {
+  if (!env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED || appointment.status === "cancelled") return;
+  const appointmentId = toStringOrNull(appointment.id);
+  const clientId = toStringOrNull(appointment.client_id);
+  const appointmentDate = toStringOrNull(appointment.appointment_date);
+  if (!appointmentId || !clientId || !appointmentDate) return;
+
+  const [accountActive, accountSmsEnabled, client, user, timeZone] = await Promise.all([
+    accountAccessService.isAccountActive(userId),
+    smsDeliveryService.isAccountSmsDeliveryEnabled(userId),
+    clientsService.getById(userId, clientId),
+    supabaseAdmin.from("users").select("business_name, full_name").eq("id", userId).maybeSingle(),
+    businessTimeZoneService.getForUser(userId)
+  ]);
+  if (!accountActive || !accountSmsEnabled || user.error) return;
+  const phone = toStringOrNull(client.phone);
+  const firstName = toStringOrNull(client.first_name);
+  const businessName = toStringOrNull(user.data?.business_name) ?? toStringOrNull(user.data?.full_name);
+  if (!phone || !firstName || !businessName) return;
+
+  const eligibility = await communicationPreferencesService.canSendCommunication({
+    userId, clientId, channel: "sms", to: phone, messageType: "appointment_confirmation"
+  });
+  if (!eligibility.canSend) return;
+  const body = smsTemplatesService.renderAppointmentConfirmation({
+    businessName,
+    clientFirstName: firstName,
+    appointmentDateTime: formatDateInTimeZone(new Date(appointmentDate), timeZone, {
+      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+    }),
+    serviceName: toStringOrNull(appointment.service_name)
+  });
+  await smsDeliveryService.queueSms({
+    userId, clientId, appointmentId, messageType: "appointment_confirmation", to: phone, body,
+    idempotencyKey: `appointment-confirmation:${appointmentId}`,
+    metadata: { template_type: "appointment_confirmation", appointment_id: appointmentId }
+  });
+};
 
 const withAppointmentDetailFields = (appointment: Row, client: Row | null): Row => {
   const appointmentDate = typeof appointment.appointment_date === "string" ? appointment.appointment_date : undefined;
@@ -387,6 +431,16 @@ export const appointmentsService = {
         has_price: appointment.price !== null && appointment.price !== undefined
       }
     });
+    try {
+      await queueAppointmentConfirmationSms(userId, appointment);
+    } catch (error) {
+      // Confirmation queueing is a non-blocking follow-up; the appointment remains created.
+      console.error("appointment_confirmation_sms_queue_failed", {
+        account_user_id: userId,
+        appointment_id: typeof appointment.id === "string" ? appointment.id : null,
+        error: error instanceof Error ? error.name : "unknown_error"
+      });
+    }
     if (
       appointment.status !== "cancelled"
       && typeof appointment.client_id === "string"

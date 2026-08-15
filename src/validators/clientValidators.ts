@@ -37,6 +37,31 @@ export const updateClientRebookingPreferenceSchema = z.object({
   preferred_interval_days: z.number().int().min(1).max(730).nullable()
 });
 
+const smsConsentSourceSchema = z.enum(["staff", "client_portal", "admin"]);
+
+export const updateClientSmsPreferencesSchema = z.object({
+  source: smsConsentSourceSchema,
+  transactional_enabled: z.boolean().optional(),
+  reminders_enabled: z.boolean().optional(),
+  marketing_enabled: z.boolean().optional(),
+  rebooking_enabled: z.boolean().optional()
+}).refine(
+  (value) => [value.transactional_enabled, value.reminders_enabled, value.marketing_enabled, value.rebooking_enabled]
+    .some((entry) => entry !== undefined),
+  "Provide at least one SMS preference category"
+);
+
+export const optInClientSmsSchema = z.object({
+  source: smsConsentSourceSchema,
+  consent_text: z.string().trim().min(1).max(1000),
+  transactional_enabled: z.boolean().optional(),
+  reminders_enabled: z.boolean().optional()
+});
+
+export const optOutClientSmsSchema = z.object({
+  source: smsConsentSourceSchema
+});
+
 export const listClientsQuerySchema = z.object({
   search: z.string().trim().min(1).max(200).optional(),
   page: z.coerce.number().int().positive().default(1),

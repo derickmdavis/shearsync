@@ -31,6 +31,8 @@ const envSchema = z.object({
   EMAIL_REPLY_TO: z.string().email().optional(),
   RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   SMS_DELIVERY_ENABLED: envBooleanSchema,
+  // Controls appointment creation -> SMS outbox only. Provider dispatch remains separately gated.
+  SMS_APPOINTMENT_CONFIRMATIONS_ENABLED: envBooleanSchema,
   SMS_PROVIDER: z.enum(["none", "twilio"]).default("none"),
   TWILIO_ACCOUNT_SID: z.string().regex(/^AC[a-zA-Z0-9]{32}$/).optional(),
   TWILIO_API_KEY_SID: z.string().regex(/^SK[a-zA-Z0-9]{32}$/).optional(),

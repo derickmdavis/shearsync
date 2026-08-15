@@ -54,6 +54,7 @@ export type ConsentEventType = typeof consentEventTypes[number];
 
 export const consentSources = [
   "booking_page",
+  "staff",
   "admin",
   "unsubscribe_link",
   "inbound_sms",

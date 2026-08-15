@@ -1,7 +1,7 @@
 import { ApiError } from "../lib/errors";
 import { normalizeContact, normalizePhone, type CommunicationChannel, type MessageType } from "../lib/communications";
 import { supabaseAdmin } from "../lib/supabase";
-import type { Row, RowList } from "./db";
+import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 import { communicationEventsService } from "./communicationEvents";
 import { communicationPreferenceTokensService } from "./communicationPreferenceTokens";
@@ -65,32 +65,6 @@ const unsubscribeUpdates = (channel: CommunicationChannel): Row => {
 
   return updates;
 };
-
-const getInboundRowsForSharedMessagingService = async (phoneNormalized: string): Promise<RowList> => {
-  const { data, error } = await supabaseAdmin
-    .from("client_communication_preferences")
-    .select("*")
-    .eq("phone_normalized", phoneNormalized);
-
-  handleSupabaseError(error, "Unable to load SMS communication preferences");
-  return (data ?? []) as RowList;
-};
-
-const updateSmsPreferences = async (preferenceIds: string[], updates: Row): Promise<void> => {
-  if (preferenceIds.length === 0) {
-    return;
-  }
-
-  const { error } = await supabaseAdmin
-    .from("client_communication_preferences")
-    .update(updates)
-    .in("id", preferenceIds);
-
-  handleSupabaseError(error, "Unable to update SMS communication preferences");
-};
-
-const hasAllValues = (preference: Row, values: Row): boolean =>
-  Object.entries(values).every(([key, value]) => preference[key] === value);
 
 export const communicationsService = {
   async unsubscribe(rawToken: string, context: RequestContext = {}): Promise<string> {
@@ -191,124 +165,28 @@ export const communicationsService = {
       throw new ApiError(400, "Inbound SMS requires a valid From number");
     }
 
-    const preferences = await getInboundRowsForSharedMessagingService(fromNormalized);
+    if ((classification === "stop" || classification === "start" || classification === "help") && !options.inboundEventId) {
+      throw new ApiError(500, "Inbound SMS event context is required");
+    }
+    if (classification === "stop" || classification === "start" || classification === "help") {
+      await communicationPreferencesService.applyInboundSmsConsent({
+        from: options.from ?? "",
+        fromNormalized,
+        messageSid: options.messageSid,
+        classification,
+        inboundEventId: options.inboundEventId as string,
+        metadata
+      });
+    }
     if (classification === "stop") {
-      const changes: Row = {
-        opted_out_all_sms: true,
-        sms_transactional_enabled: false,
-        sms_reminders_enabled: false,
-        sms_marketing_enabled: false,
-        sms_rebooking_enabled: false
-      };
-      const idsToChange = preferences
-        .filter((preference) => !hasAllValues(preference, changes) || !preference.sms_opted_out_at || preference.sms_opt_out_source !== "inbound_sms")
-        .map((preference) => String(preference.id));
-      if (idsToChange.length > 0) {
-        await updateSmsPreferences(idsToChange, { ...changes, sms_opted_out_at: new Date().toISOString(), sms_opt_out_source: "inbound_sms" });
-      }
-
-      await Promise.all(preferences.map((preference) => communicationEventsService.logConsentEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        contactValue: options.from ?? null,
-        contactNormalized: fromNormalized,
-        eventType: "inbound_stop",
-        source: "inbound_sms",
-        ipAddress: options.ipAddress,
-        userAgent: options.userAgent,
-        metadata,
-        smsInboundEventId: options.inboundEventId
-      })));
-
-      await Promise.all(preferences.map((preference) => communicationEventsService.logCommunicationEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        toAddress: options.from ?? null,
-        toNormalized: fromNormalized,
-        provider: "twilio",
-        providerMessageId: options.messageSid ?? null,
-        status: "inbound_stop",
-        metadata, smsInboundEventId: options.inboundEventId
-      })));
-
       return "You are unsubscribed from DripDesk text messages. Reply START to opt back in.";
     }
 
     if (classification === "start") {
-      const changes: Row = {
-        opted_out_all_sms: false,
-        sms_transactional_enabled: true,
-        sms_reminders_enabled: true,
-        sms_marketing_enabled: false,
-        sms_rebooking_enabled: false
-      };
-      const idsToChange = preferences
-        .filter((preference) => !hasAllValues(preference, changes) || !preference.sms_opted_in_at || preference.sms_opt_in_source !== "inbound_sms")
-        .map((preference) => String(preference.id));
-      if (idsToChange.length > 0) {
-        await updateSmsPreferences(idsToChange, {
-          ...changes, sms_opted_in_at: new Date().toISOString(), sms_opt_in_source: "inbound_sms",
-          sms_opted_out_at: null, sms_opt_out_source: null
-        });
-      }
-
-      await Promise.all(preferences.map((preference) => communicationEventsService.logConsentEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        contactValue: options.from ?? null,
-        contactNormalized: fromNormalized,
-        eventType: "inbound_start",
-        source: "inbound_sms",
-        ipAddress: options.ipAddress,
-        userAgent: options.userAgent,
-        metadata,
-        smsInboundEventId: options.inboundEventId
-      })));
-
-      await Promise.all(preferences.map((preference) => communicationEventsService.logCommunicationEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        toAddress: options.from ?? null,
-        toNormalized: fromNormalized,
-        provider: "twilio",
-        providerMessageId: options.messageSid ?? null,
-        status: "inbound_start",
-        metadata, smsInboundEventId: options.inboundEventId
-      })));
-
       return "You are opted back in to appointment text updates from DripDesk. Reply STOP to opt out.";
     }
 
     if (classification === "help") {
-      await Promise.all(preferences.map((preference) => communicationEventsService.logConsentEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        contactValue: options.from ?? null,
-        contactNormalized: fromNormalized,
-        eventType: "inbound_help",
-        source: "inbound_sms",
-        ipAddress: options.ipAddress,
-        userAgent: options.userAgent,
-        metadata, smsInboundEventId: options.inboundEventId
-      })));
-
-      await Promise.all(preferences.map((preference) => communicationEventsService.logCommunicationEvent({
-        userId: String(preference.user_id ?? ""),
-        clientId: typeof preference.client_id === "string" ? preference.client_id : null,
-        channel: "sms",
-        toAddress: options.from ?? null,
-        toNormalized: fromNormalized,
-        provider: "twilio",
-        providerMessageId: options.messageSid ?? null,
-        status: "inbound_help",
-        metadata, smsInboundEventId: options.inboundEventId
-      })));
-
       return "DripDesk sends appointment messages for your stylist or barber. Reply STOP to opt out.";
     }
 

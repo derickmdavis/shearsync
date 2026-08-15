@@ -9,6 +9,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ??
 
 const { installMockSupabase } = require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
 const { smsTemplatesService } = require("../services/smsTemplatesService") as typeof import("../services/smsTemplatesService");
+const { appointmentConfirmationSmsTemplate } = require("../lib/smsTemplates") as typeof import("../lib/smsTemplates");
 
 describe("SMS templates", () => {
   it("defines appointment_reminder as the only initial provider-neutral SMS template type", () => {
@@ -37,6 +38,22 @@ describe("SMS templates", () => {
       assert.match(body, /Reply STOP to opt out\./);
     }
     assert.match(defaultBodies.withService, /\{\{serviceName\}\}/);
+  });
+
+  it("renders a separate concise appointment confirmation and includes a management link only when it fits", () => {
+    const input = { businessName: "Jordan's Studio", clientFirstName: "Maya", appointmentDateTime: "Friday at 2 PM", serviceName: "haircut" };
+    assert.equal(
+      smsTemplatesService.renderAppointmentConfirmation(input),
+      "Jordan's Studio: Hi Maya, your haircut is booked for Friday at 2 PM. Reply STOP to opt out."
+    );
+    assert.match(appointmentConfirmationSmsTemplate.defaultBodies.withService, /^[\x20-\x7E]+$/);
+    assert.match(appointmentConfirmationSmsTemplate.defaultBodies.withService, /Reply STOP to opt out\./);
+    assert.equal(
+      smsTemplatesService.renderAppointmentConfirmation({ ...input, bookingManagementUrl: "https://example.com/manage" }),
+      "Jordan's Studio: Hi Maya, your haircut is booked for Friday at 2 PM. Reply STOP to opt out. Manage: https://example.com/manage"
+    );
+    const withoutLongLink = smsTemplatesService.renderAppointmentConfirmation({ ...input, bookingManagementUrl: `https://example.com/${"a".repeat(120)}` });
+    assert.equal(withoutLongLink.includes("Manage:"), false);
   });
 
   it("renders normalized default or custom SMS copy and rejects unsafe template input", () => {
