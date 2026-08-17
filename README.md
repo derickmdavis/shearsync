@@ -118,6 +118,11 @@ Authenticated routes:
 - `PATCH /api/reminders/:id`
 - `GET /api/dashboard`
 - `GET /api/insights?business_snapshot_period=week|month&referral_period=this_month|all_time`
+
+Insights contract version `2026-08-17` adds backend-renderable performance and
+today-activity models while preserving the previous fields for migration. See
+[Insights display contract](docs/insights-display-contract.md) for metric
+definitions and unavailable-state behavior.
 - `GET /api/calendar?date=YYYY-MM-DD`
 - `GET /api/settings/profile`
 - `PATCH /api/settings/profile`

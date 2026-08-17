@@ -1,6 +1,6 @@
 {
   "data": {
-  "contract_version": "2026-07-22",
+  "contract_version": "2026-08-17",
   "generated_at": "2026-07-20T18:42:00.000Z",
   "account_timezone": "America/Denver",
   "business_snapshot": {
@@ -134,6 +134,36 @@
     "reason": "temporarily_unavailable",
     "message": "Appointment changes are temporarily unavailable.",
     "retry_after_seconds": 30
+  },
+  "performance_snapshot": {
+    "available": true,
+    "calculated_at": "2026-07-20T18:42:00.000Z",
+    "period_selection": { "active": "week", "options": [{ "id": "week", "label": "This Week" }, { "id": "month", "label": "This Month" }] },
+    "pages": [
+      { "id": "business_metrics", "title": "Business Metrics", "layout": "grid_2x2", "metrics": [
+        { "id": "booked_revenue", "label": "Booked Revenue", "display_value": "$1,245.00", "supporting_text": "12 booked appts", "comparison": { "display_value": "12.5%", "tone": "positive" }, "icon_key": "revenue", "accessibility_label": "$1,245.00 booked revenue, up 12.5%" },
+        { "id": "appointments_booked", "label": "Appts Booked", "display_value": "12", "supporting_text": "All appointments", "comparison": null, "icon_key": "appointments", "accessibility_label": "12 appointments booked" },
+        { "id": "rebooking_rate", "label": "Rebooking Rate", "display_value": "64%", "supporting_text": "Returned clients", "comparison": null, "icon_key": "rebooking", "accessibility_label": "64 percent rebooking rate" },
+        { "id": "average_ticket", "label": "Average Ticket", "display_value": "$103.75", "supporting_text": "Booked appointments", "comparison": null, "icon_key": "average_ticket", "accessibility_label": "$103.75 average ticket" }
+      ] },
+      { "id": "outreach_metrics", "title": "Outreach Metrics", "layout": "grid_2x2", "metrics": [
+        { "id": "emails_sent", "label": "Emails Sent", "display_value": "1,240", "supporting_text": "This Month", "comparison": null, "icon_key": "emails_sent", "accessibility_label": "1,240 emails sent" },
+        { "id": "customers_reached", "label": "Customers Reached", "display_value": "98", "supporting_text": "Unique clients", "comparison": null, "icon_key": "customers_reached", "accessibility_label": "98 customers reached" },
+        { "id": "referral_conversions", "label": "Referral Conversions", "display_value": "0", "supporting_text": "Booked from referrals", "comparison": null, "icon_key": "referral_conversions", "accessibility_label": "0 referral conversions" },
+        { "id": "referrals", "label": "Referrals", "display_value": "2", "supporting_text": "Referral links created", "comparison": null, "icon_key": "referrals", "accessibility_label": "2 referrals" }
+      ] }
+    ],
+    "swipe_hint": { "forward_label": "Swipe to view Outreach metrics", "backward_label": "Swipe to view Business metrics" }
+  },
+  "today_activity": {
+    "available": true,
+    "calculated_at": "2026-07-20T18:42:00.000Z",
+    "heading": "Today • Last 24 Hours",
+    "accessibility_label": "Today’s activity over the last 24 hours",
+    "metrics": [
+      { "id": "new_appointments", "label": "New Appointments", "display_value": "0", "icon_key": "new_appointments", "accessibility_label": "0 new appointments in the last 24 hours" },
+      { "id": "cancellations", "label": "Cancellations", "display_value": "0", "icon_key": "cancellations", "accessibility_label": "0 cancellations in the last 24 hours" }
+    ]
   }
   }
 }

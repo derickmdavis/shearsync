@@ -79,6 +79,25 @@ describe("Insights business snapshot endpoint service", () => {
         // correctly counted in the preceding week, never the current one.
         label: "vs last week", percent_change: -86, trend: "down"
       });
+      assert.equal(response.contract_version, "2026-08-17");
+      assert.equal(response.performance_snapshot.available, true);
+      if (!response.performance_snapshot.available) throw new Error("Expected available performance snapshot");
+      assert.deepEqual(response.performance_snapshot.pages.map((page) => ({
+        id: page.id,
+        title: page.title,
+        layout: page.layout,
+        metricIds: page.metrics.map((metric) => metric.id)
+      })), [
+        { id: "business_metrics", title: "Business Metrics", layout: "grid_2x2", metricIds: ["booked_revenue", "appointments_booked", "rebooking_rate", "average_ticket"] },
+        { id: "outreach_metrics", title: "Outreach Metrics", layout: "grid_2x2", metricIds: ["emails_sent", "customers_reached", "referral_conversions", "referrals"] }
+      ]);
+      assert.equal(response.performance_snapshot.pages[0].metrics[0].display_value, "$150.00");
+      assert.deepEqual(response.performance_snapshot.pages[0].metrics[0].comparison, {
+        display_value: "86%", tone: "negative"
+      });
+      assert.equal(response.today_activity.available, true);
+      if (!response.today_activity.available) throw new Error("Expected available today activity");
+      assert.deepEqual(response.today_activity.metrics.map((metric) => metric.label), ["New Appointments", "Cancellations"]);
       assert.equal(response.campaigns.available, true);
       if (!response.campaigns.available) throw new Error("Expected available campaigns");
       assert.deepEqual({

@@ -11,6 +11,7 @@ import { insightsCampaignsService } from "./insightsCampaignsService";
 import { insightsCampaignPresentationService } from "./insightsCampaignPresentationService";
 import { insightsReferralPresentationService } from "./insightsReferralPresentationService";
 import { usersService } from "./usersService";
+import { insightsDisplayService } from "./insightsDisplayService";
 
 const hasEmailCampaigns = (user: Record<string, unknown> | null): boolean => {
   return user?.account_status === "active";
@@ -219,23 +220,29 @@ export const insightsService = {
       }
     };
 
-    const [businessSnapshot, referrals, campaigns, appointmentChanges] = await Promise.all([
+    const [businessSnapshot, referrals, campaigns, appointmentChanges, performanceSnapshot, todayActivity] = await Promise.all([
       getBusinessSnapshot(),
       getReferrals(),
       getCampaigns(),
-      getAppointmentChanges()
+      getAppointmentChanges(),
+      insightsDisplayService.getPerformanceSnapshot({
+        userId, accountTimeZone, query, now, calculatedAt: generatedAt
+      }),
+      insightsDisplayService.getTodayActivity({ userId, now, calculatedAt: generatedAt })
     ]);
 
     // These are reserved contract sections. They intentionally remain explicit
     // unavailable states until their dedicated aggregate implementations ship.
     return insightsResponseSchema.parse({
-      contract_version: "2026-07-22",
+      contract_version: "2026-08-17",
       generated_at: generatedAt,
       account_timezone: accountTimeZone,
       business_snapshot: businessSnapshot,
       campaigns,
       referrals,
-      appointment_changes: appointmentChanges
+      appointment_changes: appointmentChanges,
+      performance_snapshot: performanceSnapshot,
+      today_activity: todayActivity
     });
   }
 };

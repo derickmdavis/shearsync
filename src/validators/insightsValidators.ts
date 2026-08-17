@@ -7,7 +7,10 @@ import { timeZoneSchema } from "./common";
  */
 // This version removes the legacy fixed Referral Insights aggregate in favor
 // of the server-rendered Referral Impact model.
-export const insightsContractVersion = "2026-07-22" as const;
+// 2026-08-17 introduces the canonical, fully display-ready Insights models:
+// performance_snapshot and today_activity. The existing sections remain for
+// migration compatibility.
+export const insightsContractVersion = "2026-08-17" as const;
 
 export const insightsQuerySchema = z.object({
   business_snapshot_period: z.enum(["week", "month"]).default("week"),
@@ -249,6 +252,74 @@ export const insightsAppointmentChangesSectionSchema = z.discriminatedUnion("ava
   unavailableSectionSchema
 ]);
 
+const insightsDisplayIconKeySchema = z.enum([
+  "revenue", "appointments", "rebooking", "average_ticket",
+  "emails_sent", "customers_reached", "referral_conversions", "referrals",
+  "new_appointments", "cancellations"
+]);
+
+const insightsDisplayComparisonSchema = z.object({
+  display_value: z.string().min(1).max(80),
+  tone: z.enum(["positive", "negative", "neutral", "warning"])
+});
+
+const insightsDisplayMetricSchema = z.object({
+  id: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/),
+  label: z.string().min(1).max(80),
+  display_value: z.string().min(1).max(80),
+  supporting_text: z.string().min(1).max(160),
+  comparison: insightsDisplayComparisonSchema.nullable(),
+  icon_key: insightsDisplayIconKeySchema,
+  accessibility_label: z.string().min(1).max(280)
+});
+
+const availablePerformanceSnapshotSchema = sectionTimingSchema.extend({
+  available: z.literal(true),
+  period_selection: z.object({
+    active: z.enum(["week", "month"]),
+    options: z.tuple([
+      z.object({ id: z.literal("week"), label: z.string().min(1).max(80) }),
+      z.object({ id: z.literal("month"), label: z.string().min(1).max(80) })
+    ])
+  }),
+  pages: z.tuple([
+    z.object({
+      id: z.literal("business_metrics"), title: z.string().min(1).max(80), layout: z.literal("grid_2x2"),
+      metrics: z.tuple([insightsDisplayMetricSchema, insightsDisplayMetricSchema, insightsDisplayMetricSchema, insightsDisplayMetricSchema])
+    }),
+    z.object({
+      id: z.literal("outreach_metrics"), title: z.string().min(1).max(80), layout: z.literal("grid_2x2"),
+      metrics: z.tuple([insightsDisplayMetricSchema, insightsDisplayMetricSchema, insightsDisplayMetricSchema, insightsDisplayMetricSchema])
+    })
+  ]),
+  swipe_hint: z.object({ forward_label: z.string().min(1).max(160), backward_label: z.string().min(1).max(160) })
+});
+
+export const insightsPerformanceSnapshotSchema = z.discriminatedUnion("available", [
+  availablePerformanceSnapshotSchema,
+  unavailableSectionSchema
+]);
+
+const todayActivityMetricSchema = z.object({
+  id: z.enum(["new_appointments", "cancellations"]),
+  label: z.string().min(1).max(80),
+  display_value: z.string().min(1).max(80),
+  icon_key: z.enum(["new_appointments", "cancellations"]),
+  accessibility_label: z.string().min(1).max(280)
+});
+
+const availableTodayActivitySchema = sectionTimingSchema.extend({
+  available: z.literal(true),
+  heading: z.string().min(1).max(80),
+  accessibility_label: z.string().min(1).max(280),
+  metrics: z.tuple([todayActivityMetricSchema, todayActivityMetricSchema])
+});
+
+export const insightsTodayActivitySchema = z.discriminatedUnion("available", [
+  availableTodayActivitySchema,
+  unavailableSectionSchema
+]);
+
 export const insightsResponseSchema = z.object({
   contract_version: z.literal(insightsContractVersion),
   generated_at: utcInstantSchema,
@@ -256,7 +327,9 @@ export const insightsResponseSchema = z.object({
   business_snapshot: insightsBusinessSnapshotSectionSchema,
   campaigns: insightsCampaignsSectionSchema,
   referrals: insightsReferralsSectionSchema,
-  appointment_changes: insightsAppointmentChangesSectionSchema
+  appointment_changes: insightsAppointmentChangesSectionSchema,
+  performance_snapshot: insightsPerformanceSnapshotSchema,
+  today_activity: insightsTodayActivitySchema
 });
 
 // All authenticated screen read endpoints use a data envelope. The inner
