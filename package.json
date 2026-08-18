@@ -33,6 +33,7 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "qrcode": "^1.5.4",
+    "redis": "^6.2.1",
     "resend": "^6.12.3",
     "twilio": "^6.1.0",
     "typescript": "^5.9.3",

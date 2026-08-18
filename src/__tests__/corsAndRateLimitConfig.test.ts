@@ -26,23 +26,21 @@ describe("production CORS and rate-limit configuration", () => {
     );
   });
 
-  it("requires Redis REST credentials in production", () => {
+  it("requires a Redis connection URL in production", () => {
     assert.throws(
       () => parseEnv({ ...requiredEnvironment, CLIENT_APP_URL: "https://app.example.com" }),
-      /RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN are required/
+      /REDIS_URL is required/
     );
   });
 
-  it("requires both Redis REST configuration values when either is set", () => {
-    assert.throws(
-      () =>
-        parseEnv({
-          ...requiredEnvironment,
-          CLIENT_APP_URL: "https://app.example.com",
-          RATE_LIMIT_REDIS_REST_URL: "https://rate-limit.example.com"
-        }),
-      /must be configured together/
-    );
+  it("accepts Railway's Redis connection URL in production", () => {
+    const parsed = parseEnv({
+      ...requiredEnvironment,
+      CLIENT_APP_URL: "https://app.example.com",
+      REDIS_URL: "redis://default:password@redis.railway.internal:6379"
+    });
+
+    assert.equal(parsed.REDIS_URL, "redis://default:password@redis.railway.internal:6379");
   });
 
   it("rejects unknown browser origins in production", () => {

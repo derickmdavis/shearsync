@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 import rateLimit, { ipKeyGenerator, type Store } from "express-rate-limit";
+import { createClient, type RedisClientType } from "redis";
 import { env } from "../config/env";
-import { RedisRestRateLimitStore } from "./redisRateLimitStore";
+import { RedisRateLimitStore } from "./redisRateLimitStore";
 
 const minutes = (value: number): number => value * 60 * 1000;
 
@@ -19,6 +20,33 @@ const manageLinkTooManyRequestsResponse = {
 
 const sendJson = (res: Response, statusCode: number, payload: unknown): void => {
   res.status(statusCode).json(payload);
+};
+
+let rateLimitRedisClient: RedisClientType | undefined;
+let rateLimitRedisConnection: Promise<RedisClientType> | undefined;
+
+const getRateLimitRedisClient = async (): Promise<RedisClientType> => {
+  if (!rateLimitRedisClient) {
+    rateLimitRedisClient = createClient({ url: env.REDIS_URL });
+    rateLimitRedisClient.on("error", (error) => {
+      console.error("Rate-limit Redis client error", error);
+    });
+  }
+
+  if (rateLimitRedisClient.isOpen) {
+    return rateLimitRedisClient;
+  }
+
+  if (!rateLimitRedisConnection) {
+    rateLimitRedisConnection = rateLimitRedisClient
+      .connect()
+      .then(() => rateLimitRedisClient!)
+      .finally(() => {
+        rateLimitRedisConnection = undefined;
+      });
+  }
+
+  return rateLimitRedisConnection;
 };
 
 export type PublicRateLimitPolicy =
@@ -44,9 +72,8 @@ const createRateLimitStore = (windowMs: number): Store | undefined => {
   }
 
   // Production configuration is validated in config/env before this module is used.
-  return new RedisRestRateLimitStore({
-    url: env.RATE_LIMIT_REDIS_REST_URL!,
-    token: env.RATE_LIMIT_REDIS_REST_TOKEN!,
+  return new RedisRateLimitStore({
+    getClient: getRateLimitRedisClient,
     prefix: "shearsync:rate-limit:",
     windowMs
   });

@@ -33,8 +33,7 @@ SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 CLIENT_APP_URL=http://localhost:8081
 WEB_APP_URL=http://localhost:3001
-RATE_LIMIT_REDIS_REST_URL=https://your-redis-rest-gateway.example.com
-RATE_LIMIT_REDIS_REST_TOKEN=your-redis-rest-token
+REDIS_URL=redis://default:your-redis-password@redis.railway.internal:6379
 INTERNAL_API_SECRET=your-long-random-internal-secret
 SMS_DELIVERY_ENABLED=false
 SMS_APPOINTMENT_CONFIRMATIONS_ENABLED=false
@@ -62,7 +61,7 @@ When appointment reminders are enabled, schedule a trusted Railway Cron (every 5
 
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.
 
-When `NODE_ENV=production`, configure at least one explicit browser origin with `CLIENT_APP_URL` or `WEB_APP_URL`, plus both Redis REST rate-limit variables. The API refuses to start without them. The Redis endpoint must support the Upstash-compatible `POST /multi-exec` transaction format.
+When `NODE_ENV=production`, configure at least one explicit browser origin with `CLIENT_APP_URL` or `WEB_APP_URL`, plus `REDIS_URL`. Add a Railway Redis service and set `REDIS_URL=${{Redis.REDIS_URL}}` on the API service. The API refuses to start without these safeguards.
 
 ## Scripts
 
