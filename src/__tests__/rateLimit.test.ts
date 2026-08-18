@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { NextFunction, Request, Response } from "express";
-import { createPublicRateLimiter } from "../middleware/rateLimit";
 
 process.env.NODE_ENV = "test";
 process.env.AUTH_MODE = process.env.AUTH_MODE ?? "production";
@@ -9,6 +8,7 @@ process.env.SUPABASE_URL = process.env.SUPABASE_URL ?? "https://example.supabase
 process.env.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
 
+const { createPublicRateLimiter } = require("../middleware/rateLimit") as typeof import("../middleware/rateLimit");
 const { app: apiApp } = require("../app") as typeof import("../app");
 
 interface CapturedResponse {

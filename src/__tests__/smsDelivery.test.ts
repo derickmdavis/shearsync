@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 
 process.env.NODE_ENV = "test";
 process.env.AUTH_MODE = process.env.AUTH_MODE ?? "production";
@@ -11,10 +11,12 @@ process.env.SMS_DELIVERY_ENABLED = "true";
 const { installMockSupabase } = require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
 const { smsDeliveryService } = require("../services/smsDeliveryService") as typeof import("../services/smsDeliveryService");
 const { env } = require("../config/env") as typeof import("../config/env");
+const { logger } = require("../lib/logger") as typeof import("../lib/logger");
 import type { SmsProvider } from "../services/smsDeliveryService";
 
 const USER_ID = "11111111-1111-1111-1111-111111111111";
 const CLIENT_ID = "22222222-2222-2222-2222-222222222222";
+const thisMonth = () => new Date().toISOString().slice(0, 7) + "-01";
 
 describe("smsDeliveryService", () => {
   it("queues idempotently and sends only explicitly opted-in recipients", async () => {
@@ -149,6 +151,57 @@ describe("smsDeliveryService", () => {
     }
   });
 
+  it("counts successful sends automatically and permanently skips work after the 500-message monthly cap", async () => {
+    const supabase = installMockSupabase({
+      users: [{
+        id: USER_ID, account_status: "active", sms_delivery_enabled: true,
+        sms_monthly_limit: 500, sms_used_this_month: 499, sms_usage_period_started_at: thisMonth()
+      }],
+      client_communication_preferences: [{
+        id: "preference-1", user_id: USER_ID, phone_normalized: "+13035550123", sms_opted_in_at: "2026-08-01T00:00:00.000Z",
+        sms_transactional_enabled: true, sms_reminders_enabled: true, opted_out_all_sms: false
+      }], communication_events: []
+    });
+    let sends = 0;
+    try {
+      await smsDeliveryService.queueSms({ userId: USER_ID, messageType: "appointment_reminder", to: "+13035550123", body: "First", idempotencyKey: "monthly-limit-first" });
+      await smsDeliveryService.queueSms({ userId: USER_ID, messageType: "appointment_reminder", to: "+13035550123", body: "Second", idempotencyKey: "monthly-limit-second" });
+      const result = await smsDeliveryService.processQueuedSms({
+        limit: 2, provider: { async send() { sends += 1; return { status: "sent", provider: "test-sms" }; } }
+      });
+      assert.deepEqual(result, { processed: 2, sent: 1, skipped: 1, failed: 0 });
+      assert.equal(sends, 1);
+      assert.equal(supabase.state.users[0]?.sms_used_this_month, 500);
+      assert.ok(supabase.state.sms_messages[0]?.sms_usage_counted_at);
+      assert.equal(supabase.state.sms_messages[1]?.status, "skipped");
+      assert.equal(supabase.state.sms_messages[1]?.error_code, "sms_monthly_limit_reached");
+    } finally {
+      supabase.restore();
+    }
+  });
+
+  it("releases a reserved monthly message when the provider fails before sending", async () => {
+    const supabase = installMockSupabase({
+      users: [{
+        id: USER_ID, account_status: "active", sms_delivery_enabled: true,
+        sms_monthly_limit: 500, sms_used_this_month: 499, sms_usage_period_started_at: thisMonth()
+      }],
+      client_communication_preferences: [{
+        id: "preference-1", user_id: USER_ID, phone_normalized: "+13035550123", sms_opted_in_at: "2026-08-01T00:00:00.000Z",
+        sms_transactional_enabled: true, sms_reminders_enabled: true, opted_out_all_sms: false
+      }], communication_events: []
+    });
+    try {
+      await smsDeliveryService.queueSms({ userId: USER_ID, messageType: "appointment_reminder", to: "+13035550123", body: "Retry", idempotencyKey: "monthly-limit-retry" });
+      const result = await smsDeliveryService.processQueuedSms({ provider: { async send() { throw new Error("provider unavailable"); } } });
+      assert.equal(result.failed, 1);
+      assert.equal(supabase.state.users[0]?.sms_used_this_month, 499);
+      assert.equal(supabase.state.sms_messages[0]?.sms_usage_counted_at, null);
+    } finally {
+      supabase.restore();
+    }
+  });
+
   it("does not let a second worker claim a live lease", async () => {
     const supabase = installMockSupabase({
       client_communication_preferences: [{
@@ -240,6 +293,8 @@ describe("smsDeliveryService", () => {
         sms_transactional_enabled: true, sms_reminders_enabled: true, opted_out_all_sms: false
       }], communication_events: []
     });
+    const alerts: Array<{ event: string; fields: Record<string, unknown> | undefined }> = [];
+    const loggerError = mock.method(logger, "error", (event: string, fields?: Record<string, unknown>) => { alerts.push({ event, fields }); });
     try {
       await smsDeliveryService.queueSms({
         userId: USER_ID, messageType: "appointment_reminder", to: "+13035550123", body: "Reminder", idempotencyKey: "reminder:timeout"
@@ -255,7 +310,12 @@ describe("smsDeliveryService", () => {
       assert.equal(supabase.state.sms_messages[0]?.status, "unknown");
       assert.equal(supabase.state.sms_messages[0]?.next_attempt_at, null);
       assert.equal(supabase.state.sms_messages[0]?.error_code, "provider_timeout_ambiguous");
+      assert.deepEqual(alerts, [{
+        event: "sms_delivery_outcome_unknown",
+        fields: { smsMessageId: supabase.state.sms_messages[0]?.id, accountUserId: USER_ID, errorCode: "provider_timeout_ambiguous" }
+      }]);
     } finally {
+      loggerError.mock.restore();
       supabase.restore();
     }
   });

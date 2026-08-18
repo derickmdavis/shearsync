@@ -12,10 +12,12 @@ import { thankYouEmailsService } from "../services/thankYouEmailsService";
 import { campaignDeliveryWorkerService } from "../services/campaignDeliveryWorkerService";
 import { smsDeliveryService } from "../services/smsDeliveryService";
 import { appointmentSmsRemindersService } from "../services/appointmentSmsRemindersService";
+import { appointmentSmsConfirmationsService } from "../services/appointmentSmsConfirmationsService";
 
 export const internalController = {
   async processSms(req: Request, res: Response) {
     const query = req.query as { limit?: number; allow_noop?: boolean };
+    const confirmations = await appointmentSmsConfirmationsService.processPendingConfirmations({ limit: query.limit });
     const beforeMetrics = await smsDeliveryService.getSmsQueueMetrics();
     logger.info("sms_queue_metrics_before_processing", { requestId: req.requestId, ...beforeMetrics });
     if (beforeMetrics.unknownCount > 0) {
@@ -26,11 +28,11 @@ export const internalController = {
       allowNoopProvider: query.allow_noop === true
     });
     const afterMetrics = await smsDeliveryService.getSmsQueueMetrics();
-    logger.info("sms_processing_completed", { requestId: req.requestId, ...result, queue: afterMetrics });
+    logger.info("sms_processing_completed", { requestId: req.requestId, ...result, confirmations, queue: afterMetrics });
     if (afterMetrics.unknownCount > 0) {
       logger.warn("sms_queue_unknown_messages_detected", { requestId: req.requestId, unknownCount: afterMetrics.unknownCount });
     }
-    res.json({ data: { ...result, queue: afterMetrics } });
+    res.json({ data: { ...result, confirmations, queue: afterMetrics } });
   },
 
   /** Queues due reminder rows only. Provider dispatch remains the separate SMS worker job. */
@@ -40,7 +42,8 @@ export const internalController = {
       limit: query.limit,
       scanMinutes: query.scan_minutes
     });
-    logger.info("sms_appointment_reminders_queued", { requestId: req.requestId, ...result });
+    const log = result.errors > 0 ? logger.error : logger.info;
+    log("sms_appointment_reminders_queued", { requestId: req.requestId, ...result });
     res.json({ data: result });
   },
 

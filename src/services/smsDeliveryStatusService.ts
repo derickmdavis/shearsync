@@ -1,4 +1,6 @@
 import { supabaseAdmin } from "../lib/supabase";
+import { normalizePhone } from "../lib/communications";
+import { logger } from "../lib/logger";
 import type { Row } from "./db";
 import { handleSupabaseError } from "./db";
 
@@ -42,11 +44,19 @@ export const smsDeliveryStatusService = {
       p_message_status: messageStatus,
       p_error_code: safeErrorCode(options.errorCode),
       p_error_message: safeProviderMessage(options.errorMessage),
-      p_to: text(options.to),
+      p_to: normalizePhone(text(options.to) ?? ""),
       p_diagnostics: diagnostics
     });
     handleSupabaseError(error, "Unable to apply Twilio SMS delivery status");
     const result = Array.isArray(data) ? data[0] : data;
+    if (result?.unmatched === true) {
+      // Intentionally only emit the provider SID. Phone numbers are stored as
+      // diagnostics for an operator, never used to auto-associate a callback.
+      logger.error("sms_twilio_delivery_status_unmatched", {
+        providerMessageId: messageSid,
+        messageStatus
+      });
+    }
     return { updated: result?.updated === true };
   }
 };

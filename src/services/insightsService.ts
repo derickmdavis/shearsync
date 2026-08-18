@@ -12,6 +12,7 @@ import { insightsCampaignPresentationService } from "./insightsCampaignPresentat
 import { insightsReferralPresentationService } from "./insightsReferralPresentationService";
 import { usersService } from "./usersService";
 import { insightsDisplayService } from "./insightsDisplayService";
+import { insightsContentService } from "./insightsContentService";
 
 const hasEmailCampaigns = (user: Record<string, unknown> | null): boolean => {
   return user?.account_status === "active";
@@ -51,6 +52,7 @@ export const insightsService = {
     const generatedAt = now.toISOString();
     const user = await usersService.getById(userId);
     const accountTimeZone = resolveBusinessTimeZone(user);
+    const content = await insightsContentService.load();
 
     const getBusinessSnapshot = async (): Promise<InsightsResponse["business_snapshot"]> => {
       const startedAt = Date.now();
@@ -128,7 +130,7 @@ export const insightsService = {
           start_at: referralStats.period.startAt,
           end_at: referralStats.period.endAt
         },
-        ...insightsReferralPresentationService.build(referralStats)
+        ...insightsReferralPresentationService.build(referralStats, content)
       };
         logSectionResult("referrals", userId, startedAt);
         return referrals;
@@ -163,7 +165,7 @@ export const insightsService = {
           start_at: campaignStats.period.startAt,
           end_at: campaignStats.period.endAt
         },
-        ...insightsCampaignPresentationService.build(campaignStats)
+        ...insightsCampaignPresentationService.build(campaignStats, content)
       };
         logSectionResult("campaigns", userId, startedAt);
         return campaigns;

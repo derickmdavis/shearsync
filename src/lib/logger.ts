@@ -67,15 +67,33 @@ const getPublicStylistSlug = (req: Request): string | undefined => {
   return match?.[1];
 };
 
-const getRoute = (req: Request): string => {
+const getRoutePattern = (req: Request): string | null => {
   const baseUrl = req.baseUrl ?? "";
   const routePath = req.route?.path;
 
   if (typeof routePath === "string") {
-    return `${baseUrl}${routePath}` || req.path;
+    return `${baseUrl}${routePath}` || "/";
   }
 
-  return req.path ?? req.originalUrl ?? req.url ?? "unknown";
+  return null;
+};
+
+const redactedRoutePath = (routePattern: string): string =>
+  routePattern.replace(/:[A-Za-z_][A-Za-z0-9_]*(?:[?+*])?/g, "[redacted]");
+
+const rawPathname = (req: Request): string => {
+  const path = req.path ?? req.originalUrl ?? req.url ?? "/";
+  return path.split(/[?#]/, 1)[0] || "/";
+};
+
+/**
+ * Never return a raw request URL. Matched routes retain static endpoint context
+ * while every parameter is redacted; unmatched paths reveal only segment count.
+ */
+const getRedactedRequestPath = (req: Request, routePattern: string | null): string => {
+  if (routePattern) return redactedRoutePath(routePattern);
+  const segments = rawPathname(req).split("/").filter(Boolean);
+  return segments.length > 0 ? `/${segments.map(() => "[redacted]").join("/")}` : "/";
 };
 
 export const requestObservability = (req: Request, res: Response, next: NextFunction) => {
@@ -89,12 +107,14 @@ export const requestObservability = (req: Request, res: Response, next: NextFunc
     const latencyMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     const statusCode = res.statusCode;
     const error = res.locals.error as { code?: unknown; message?: unknown; severity?: unknown } | undefined;
+    const routePattern = getRoutePattern(req);
+    const path = getRedactedRequestPath(req, routePattern);
 
     logger.info("http_request_completed", {
       requestId,
       method: req.method,
-      route: getRoute(req),
-      path: req.originalUrl ?? req.url,
+      route: routePattern ?? "unmatched",
+      path,
       statusCode,
       latencyMs: Math.round(latencyMs * 100) / 100,
       userId: req.auth?.userId,
@@ -106,8 +126,8 @@ export const requestObservability = (req: Request, res: Response, next: NextFunc
     void apiRequestLogsService.record({
       requestId,
       method: req.method,
-      routePattern: getRoute(req),
-      path: req.originalUrl ?? req.url,
+      routePattern,
+      path,
       statusCode,
       durationMs: latencyMs,
       accountUserId: req.auth?.userId,

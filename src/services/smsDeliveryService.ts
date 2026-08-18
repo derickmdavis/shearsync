@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { env } from "../config/env";
 import { ApiError } from "../lib/errors";
+import { logger } from "../lib/logger";
 import { normalizePhone, type MessageType } from "../lib/communications";
 import { supabaseAdmin } from "../lib/supabase";
 import type { Row, RowList } from "./db";
@@ -119,6 +120,27 @@ const getProvider = (options: ProcessSmsOptions): SmsProvider => {
 };
 
 const isUniqueViolation = (error: { code?: string } | null): boolean => error?.code === "23505";
+
+type SmsUsageReservation = "allowed" | "limit_reached" | "not_claimed" | "not_available";
+
+const reserveSmsUsage = async (messageId: string, leaseToken: string): Promise<SmsUsageReservation> => {
+  const { data, error } = await supabaseAdmin.rpc("reserve_sms_monthly_usage", {
+    p_message_id: messageId,
+    p_lease_token: leaseToken
+  });
+  handleSupabaseError(error, "Unable to reserve SMS monthly usage");
+  return data === "allowed" || data === "limit_reached" || data === "not_claimed" || data === "not_available"
+    ? data
+    : "not_available";
+};
+
+const releaseSmsUsage = async (messageId: string, leaseToken: string): Promise<void> => {
+  const { error } = await supabaseAdmin.rpc("release_sms_monthly_usage", {
+    p_message_id: messageId,
+    p_lease_token: leaseToken
+  });
+  handleSupabaseError(error, "Unable to release SMS monthly usage");
+};
 
 const retryDelayMinutes = (attemptCount: number): number | null => {
   if (attemptCount <= 1) return 1;
@@ -331,6 +353,7 @@ export const smsDeliveryService = {
       const clientId = typeof claimed.client_id === "string" ? claimed.client_id : null;
       const recipient = getString(claimed.recipient_phone);
       const normalized = normalizePhone(recipient);
+      let usageReserved = false;
       try {
         if (!userId || !(await accountAccessService.isAccountActive(userId))) {
           if (await logSkipped(claimed, claim.leaseToken, "account_inactive", normalized, now)) result.skipped += 1;
@@ -352,6 +375,14 @@ export const smsDeliveryService = {
           if (await logSkipped(claimed, claim.leaseToken, appointmentInvalidationReason, eligibility.toNormalized ?? normalized, now)) result.skipped += 1;
           continue;
         }
+        const usageReservation = await reserveSmsUsage(String(claimed.id), claim.leaseToken);
+        if (usageReservation === "not_claimed") continue;
+        if (usageReservation !== "allowed") {
+          const reason = usageReservation === "limit_reached" ? "sms_monthly_limit_reached" : "sms_usage_unavailable";
+          if (await logSkipped(claimed, claim.leaseToken, reason, eligibility.toNormalized ?? normalized, now)) result.skipped += 1;
+          continue;
+        }
+        usageReserved = true;
         let leaseLost = false;
         const leaseHeartbeat = setInterval(() => {
           void renewLease(String(claimed.id), claim.leaseToken, new Date(), leaseMinutes)
@@ -372,11 +403,14 @@ export const smsDeliveryService = {
           const finalized = await updateClaimedMessage(String(claimed.id), claim.leaseToken, { status: "sent", provider: providerResult.provider,
             provider_message_id: providerResult.providerMessageId ?? null, sent_at: now.toISOString(), next_attempt_at: null });
           if (!finalized) continue;
+          usageReserved = false;
           await communicationEventsService.logCommunicationEvent({ userId, clientId, channel: "sms", messageType: claimed.message_type as MessageType,
             toAddress: recipient, toNormalized: eligibility.toNormalized ?? normalized, provider: providerResult.provider,
             providerMessageId: providerResult.providerMessageId ?? null, status: "sent", metadata: { sms_message_id: claimed.id ?? null } });
           result.sent += 1;
         } else {
+          await releaseSmsUsage(String(claimed.id), claim.leaseToken);
+          usageReserved = false;
           const finalized = await updateClaimedMessage(String(claimed.id), claim.leaseToken, { status: "skipped", provider: providerResult.provider,
             provider_message_id: providerResult.providerMessageId ?? null, skipped_at: now.toISOString(),
             next_attempt_at: null, error_code: "provider_skipped", error_message: providerResult.error ?? "Provider skipped SMS delivery" });
@@ -386,6 +420,14 @@ export const smsDeliveryService = {
       } catch (error) {
         const messageText = errorMessage(error).slice(0, 2000);
         const ambiguousTimeout = error instanceof SmsProviderTimeoutError;
+        if (!ambiguousTimeout && usageReserved) {
+          try {
+            await releaseSmsUsage(String(claimed.id), claim.leaseToken);
+          } catch {
+            // Retain the reservation when release cannot be confirmed. This is safer than
+            // allowing the monthly cap to be exceeded while the database is unavailable.
+          }
+        }
         const delayMinutes = retryDelayMinutes(Number(claimed.attempt_count ?? 0));
         const finalized = await updateClaimedMessage(String(claimed.id), claim.leaseToken, {
           status: ambiguousTimeout ? "unknown" : "failed", failed_at: ambiguousTimeout ? null : now.toISOString(),
@@ -394,6 +436,13 @@ export const smsDeliveryService = {
           error_code: ambiguousTimeout ? errorCode(error) : delayMinutes === null ? `${errorCode(error)}_final` : errorCode(error), error_message: messageText
         });
         if (!finalized) continue;
+        if (ambiguousTimeout) {
+          logger.error("sms_delivery_outcome_unknown", {
+            smsMessageId: claimed.id ?? null,
+            accountUserId: userId || null,
+            errorCode: errorCode(error)
+          });
+        }
         await communicationEventsService.logCommunicationEvent({ userId, clientId, channel: "sms", messageType: claimed.message_type as MessageType,
           toAddress: recipient, toNormalized: normalized, status: "failed", errorCode: ambiguousTimeout ? errorCode(error) : delayMinutes === null ? `${errorCode(error)}_final` : errorCode(error), errorMessage: messageText,
           metadata: { sms_message_id: claimed.id ?? null } });

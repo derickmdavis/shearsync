@@ -4,6 +4,18 @@ import { supabaseAdmin } from "../lib/supabase";
 import { getMissingColumnName } from "./db";
 
 const REQUIRED_SCHEMA_VERSION = "campaign_delivery_analytics_2026_07_18";
+const READINESS_CACHE_TTL_MS = 60_000;
+
+type ReadinessCacheEntry = {
+  checkedAt: Date;
+  expiresAt: number;
+} & (
+  | { failed: false }
+  | { failed: true; error: unknown }
+);
+
+let readinessCache: ReadinessCacheEntry | undefined;
+let readinessCheckInFlight: Promise<void> | undefined;
 
 const REQUIRED_TABLE_COLUMNS = {
   users: [
@@ -15,6 +27,7 @@ const REQUIRED_TABLE_COLUMNS = {
     "account_status",
     "sms_monthly_limit",
     "sms_used_this_month",
+    "sms_usage_period_started_at",
     "waitlist_enabled",
     "activated_at",
     "current_period_ends_at",
@@ -174,12 +187,26 @@ const REQUIRED_TABLE_COLUMNS = {
     "recipient_phone_normalized", "body", "status", "idempotency_key", "provider",
     "provider_message_id", "attempt_count", "next_attempt_at", "last_attempt_at",
     "sending_started_at", "lease_token", "lease_expires_at", "sent_at", "delivered_at",
-    "failed_at", "unknown_at", "skipped_at", "error_code", "error_message", "metadata", "created_at", "updated_at"
+    "failed_at", "unknown_at", "skipped_at", "sms_usage_counted_at", "sms_usage_counted_month",
+    "error_code", "error_message", "metadata", "created_at", "updated_at"
   ],
   sms_inbound_events: [
     "id", "provider", "provider_message_id", "from_phone", "from_phone_normalized", "to_phone",
     "to_phone_normalized", "body", "classification", "classification_source", "provider_metadata", "status",
     "attempt_count", "lease_token", "lease_expires_at", "processed_at", "failed_at", "error_code", "redacted_at", "received_at", "created_at"
+  ],
+  appointment_sms_confirmation_jobs: [
+    "id", "appointment_id", "user_id", "status", "attempt_count", "last_attempt_at",
+    "next_attempt_at", "completed_at", "error_code", "error_message", "created_at", "updated_at"
+  ],
+  appointment_sms_reminder_failures: [
+    "id", "appointment_id", "user_id", "appointment_start_at", "error_code",
+    "error_message", "occurred_at", "created_at"
+  ],
+  sms_unmatched_delivery_status_callbacks: [
+    "id", "provider", "provider_message_id", "message_status", "to_phone_normalized",
+    "error_code", "error_message", "provider_diagnostics", "callback_count",
+    "first_received_at", "last_received_at", "resolved_sms_message_id", "resolved_at", "created_at", "updated_at"
   ],
   sms_template_settings: ["id", "user_id", "template_type", "enabled", "custom_body", "created_at", "updated_at"],
   payment_methods: [
@@ -445,5 +472,65 @@ export const schemaReadinessService = {
         { exposeDetails: true }
       );
     }
+  },
+
+  /**
+   * Runs the expensive schema/storage readiness verification at most once per
+   * minute per process. Both successful and failed checks are cached so an
+   * unhealthy dependency cannot be amplified by readiness probes.
+   */
+  async assertReadyCached(): Promise<{ checkedAt: string }> {
+    const cached = readinessCache;
+
+    if (cached && cached.expiresAt > Date.now()) {
+      if (cached.failed) {
+        throw cached.error;
+      }
+
+      return { checkedAt: cached.checkedAt.toISOString() };
+    }
+
+    if (!readinessCheckInFlight) {
+      readinessCheckInFlight = (async () => {
+        const checkedAt = new Date();
+
+        try {
+          await schemaReadinessService.assertReady();
+          readinessCache = {
+            checkedAt,
+            expiresAt: Date.now() + READINESS_CACHE_TTL_MS,
+            failed: false
+          };
+        } catch (error) {
+          readinessCache = {
+            checkedAt,
+            expiresAt: Date.now() + READINESS_CACHE_TTL_MS,
+            failed: true,
+            error
+          };
+          throw error;
+        } finally {
+          readinessCheckInFlight = undefined;
+        }
+      })();
+    }
+
+    await readinessCheckInFlight;
+    const result = readinessCache;
+
+    if (!result) {
+      throw new Error("Schema readiness check completed without a result");
+    }
+
+    if (result.failed) {
+      throw result.error;
+    }
+
+    return { checkedAt: result.checkedAt.toISOString() };
+  },
+
+  clearCachedReadiness(): void {
+    readinessCache = undefined;
+    readinessCheckInFlight = undefined;
   }
 };

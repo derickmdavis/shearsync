@@ -69,11 +69,28 @@ describe("SMS delivery status service", () => {
     }
   });
 
-  it("acknowledges an unknown provider SID without updating an outbox row or audit trail", async () => {
-    const supabase = installMockSupabase({ sms_messages: [], communication_events: [] });
+  it("persists an unknown provider SID for manual reconciliation without guessing an outbox match", async () => {
+    const supabase = installMockSupabase({
+      sms_messages: [{
+        id: "timed-out", user_id: "11111111-1111-1111-1111-111111111111", provider: null,
+        provider_message_id: null, status: "unknown", recipient_phone_normalized: "+13035550123", metadata: {}
+      }], communication_events: [], sms_unmatched_delivery_status_callbacks: []
+    });
     try {
-      assert.deepEqual(await smsDeliveryStatusService.applyTwilioStatus({ messageSid: "SM-unknown", messageStatus: "delivered" }), { updated: false });
+      assert.deepEqual(await smsDeliveryStatusService.applyTwilioStatus({
+        messageSid: "SM-unknown", messageStatus: "delivered", to: "+13035550123"
+      }), { updated: false });
       assert.equal(supabase.state.communication_events.length, 0);
+      assert.equal(supabase.state.sms_messages[0]?.status, "unknown");
+      const callback = supabase.state.sms_unmatched_delivery_status_callbacks[0];
+      assert.equal(callback?.provider_message_id, "SM-unknown");
+      assert.equal(callback?.message_status, "delivered");
+      assert.equal(callback?.to_phone_normalized, "+13035550123");
+
+      await smsDeliveryStatusService.applyTwilioStatus({ messageSid: "SM-unknown", messageStatus: "failed" });
+      assert.equal(supabase.state.sms_unmatched_delivery_status_callbacks.length, 1);
+      assert.equal(supabase.state.sms_unmatched_delivery_status_callbacks[0]?.callback_count, 2);
+      assert.equal(supabase.state.sms_unmatched_delivery_status_callbacks[0]?.message_status, "failed");
     } finally {
       supabase.restore();
     }

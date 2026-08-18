@@ -2,22 +2,23 @@ import { supabaseAdmin } from "../lib/supabase";
 import { handleSupabaseError } from "./db";
 import { entitlementsService } from "./entitlementsService";
 import { referralProgramSettingsService } from "./referralProgramSettingsService";
+import { insightsContentService } from "./insightsContentService";
 
 const ACTIVE_REFERRAL_CAMPAIGN_STATUSES = ["scheduled", "sending"] as const;
 
-const referralSetupState = {
+const referralSetupState = (content: Record<string, string>) => ({
   icon_key: "referral_program" as const,
-  title: "Turn happy clients into new bookings",
-  body: "Create a referral offer and share your personal links to start earning more clients.",
-  cta_label: "Start referral program",
-  accessibility_label: "Set up your referral program"
-};
+  title: content["referrals.setup.title"] ?? "Turn happy clients into new bookings",
+  body: content["referrals.setup.body"] ?? "Create a referral offer and share your personal links to start earning more clients.",
+  cta_label: content["referrals.setup.cta"] ?? "Start referral program",
+  accessibility_label: content["referrals.setup.accessibility"] ?? "Set up your referral program"
+});
 
 export const referralProgramStatusService = {
   activeCampaignStatuses: [...ACTIVE_REFERRAL_CAMPAIGN_STATUSES],
 
   async getForUser(userId: string) {
-    const [program, referralEntitled, thankYouAutomationResult, activeCampaignsResult] = await Promise.all([
+    const [program, referralEntitled, thankYouAutomationResult, activeCampaignsResult, content] = await Promise.all([
       referralProgramSettingsService.getForUser(userId),
       entitlementsService.isFeatureAllowed(userId, "referrals"),
       supabaseAdmin
@@ -31,7 +32,8 @@ export const referralProgramStatusService = {
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
         .eq("link_type", "referral_link")
-        .in("status", [...ACTIVE_REFERRAL_CAMPAIGN_STATUSES])
+        .in("status", [...ACTIVE_REFERRAL_CAMPAIGN_STATUSES]),
+      insightsContentService.load()
     ]);
 
     handleSupabaseError(thankYouAutomationResult.error, "Unable to load thank you referral automation status");
@@ -53,7 +55,7 @@ export const referralProgramStatusService = {
       offer_configured: offerConfigured,
       thank_you_referral_enabled: thankYouReferralEnabled,
       active_campaign_count: activeCampaignCount,
-      setup_state: referralSetupState
+      setup_state: referralSetupState(content)
     };
   }
 };

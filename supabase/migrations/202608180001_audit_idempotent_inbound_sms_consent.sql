@@ -1,5 +1,6 @@
--- The function runs as one transaction: preference mutations and their audit rows
--- either both commit or both roll back, leaving the inbound event retryable.
+-- Audit each distinct inbound STOP, START, or HELP callback even when it does
+-- not change an already-correct preference state. The unique inbound-event
+-- indexes keep provider retries idempotent.
 create or replace function public.apply_inbound_sms_consent(
   p_from text, p_from_normalized text, p_provider_message_id text,
   p_classification text, p_inbound_event_id uuid, p_metadata jsonb
@@ -26,17 +27,14 @@ begin
       if changed then
         update public.client_communication_preferences set opted_out_all_sms = false, sms_transactional_enabled = true,
           sms_reminders_enabled = true, sms_marketing_enabled = false, sms_rebooking_enabled = false,
-          sms_opted_in_at = now(), sms_opt_in_source = 'inbound_sms', sms_opted_out_at = null, sms_opt_out_source = null,
+          sms_opted_in_at = now(), sms_opt_in_source = 'inbound_sms', sms_opted_out_at = null, sms_opted_out_source = null,
           updated_at = now() where id = r.id;
       end if;
       v_event_type := 'inbound_start';
     else
-      changed := true;
       v_event_type := 'inbound_help';
     end if;
-    -- Every distinct provider callback is auditable, even when the requested
-    -- preference state was already in effect. The event-level uniqueness check
-    -- keeps webhook retries idempotent without losing a separate STOP/START.
+
     if not exists (
       select 1 from public.communication_consent_events where sms_inbound_event_id = p_inbound_event_id and user_id = r.user_id and event_type = v_event_type
     ) then

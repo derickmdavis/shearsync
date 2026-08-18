@@ -107,4 +107,77 @@ describe("appointment SMS reminders", () => {
       supabase.restore();
     }
   });
+
+  it("keyset-drains every appointment in the window even when it exceeds one bounded page", async () => {
+    const previous = env.SMS_APPOINTMENT_REMINDERS_ENABLED;
+    const appointments = Array.from({ length: 125 }, (_, index) => ({
+      id: `appointment-${String(index).padStart(3, "0")}`,
+      user_id: USER_ID,
+      client_id: CLIENT_ID,
+      status: "scheduled",
+      appointment_date: isoOffset(24 * 60),
+      service_name: "Haircut"
+    }));
+    const supabase = installMockSupabase({
+      users: [{ id: USER_ID, business_name: "Jordan Studio", sms_delivery_enabled: true }],
+      appointments, sms_messages: [], sms_template_settings: []
+    });
+    let queueCalls = 0;
+    const restorers = [
+      mock.method(accountAccessService, "isAccountActive", async () => true),
+      mock.method(smsDeliveryService, "isAccountSmsDeliveryEnabled", async () => true),
+      mock.method(clientsService, "getById", async () => ({ id: CLIENT_ID, first_name: "Maya", phone: "+15555550123" })),
+      mock.method(communicationPreferencesService, "canSendCommunication", async () => ({ canSend: true, toNormalized: "+15555550123" })),
+      mock.method(businessTimeZoneService, "getForUser", async () => "America/Denver"),
+      mock.method(smsDeliveryService, "queueSms", async () => { queueCalls += 1; return { id: `sms-${queueCalls}` }; })
+    ];
+    try {
+      env.SMS_APPOINTMENT_REMINDERS_ENABLED = true;
+      assert.deepEqual(await appointmentSmsRemindersService.processDueReminders({ now: baseNow, limit: 50 }), {
+        considered: 125, queued: 125, skipped: 0, errors: 0
+      });
+      assert.equal(queueCalls, 125);
+    } finally {
+      env.SMS_APPOINTMENT_REMINDERS_ENABLED = previous;
+      restorers.forEach((restore) => restore.mock.restore());
+      supabase.restore();
+    }
+  });
+
+  it("persists an appointment-specific failure when reminder queueing fails", async () => {
+    const previous = env.SMS_APPOINTMENT_REMINDERS_ENABLED;
+    const appointment = {
+      id: "appointment-failure", user_id: USER_ID, client_id: CLIENT_ID, status: "scheduled",
+      appointment_date: isoOffset(24 * 60), service_name: "Haircut"
+    };
+    const supabase = installMockSupabase({
+      users: [{ id: USER_ID, business_name: "Jordan Studio", sms_delivery_enabled: true }],
+      appointments: [appointment], sms_messages: [], sms_template_settings: [], appointment_sms_reminder_failures: []
+    });
+    const restorers = [
+      mock.method(accountAccessService, "isAccountActive", async () => true),
+      mock.method(smsDeliveryService, "isAccountSmsDeliveryEnabled", async () => true),
+      mock.method(clientsService, "getById", async () => ({ id: CLIENT_ID, first_name: "Maya", phone: "+15555550123" })),
+      mock.method(communicationPreferencesService, "canSendCommunication", async () => ({ canSend: true, toNormalized: "+15555550123" })),
+      mock.method(businessTimeZoneService, "getForUser", async () => "America/Denver"),
+      mock.method(smsDeliveryService, "queueSms", async () => { throw new Error("outbox unavailable"); })
+    ];
+    try {
+      env.SMS_APPOINTMENT_REMINDERS_ENABLED = true;
+      assert.deepEqual(await appointmentSmsRemindersService.processDueReminders({ now: baseNow }), {
+        considered: 1, queued: 0, skipped: 0, errors: 1
+      });
+      const failure = supabase.state.appointment_sms_reminder_failures[0];
+      assert.equal(failure?.appointment_id, appointment.id);
+      assert.equal(failure?.user_id, USER_ID);
+      assert.equal(failure?.appointment_start_at, appointment.appointment_date);
+      assert.equal(failure?.error_code, "Error");
+      assert.equal(failure?.error_message, "outbox unavailable");
+      assert.equal(failure?.occurred_at, baseNow.toISOString());
+    } finally {
+      env.SMS_APPOINTMENT_REMINDERS_ENABLED = previous;
+      restorers.forEach((restore) => restore.mock.restore());
+      supabase.restore();
+    }
+  });
 });

@@ -9,6 +9,8 @@ contains the app-content routes:
 2. `202607220002_app_content_draft_audit.sql`
 3. `202607220003_app_content_publication.sql`
 4. `202607220004_app_content_publication_function_privileges.sql`
+5. `202608170001_seed_insights_app_content_defaults.sql`
+6. `202608170002_seed_backend_presentation_defaults.sql`
 
 Run the matching files under `supabase/smoke/`. Supabase SQL Editor reporting
 `Success. No rows returned` means a smoke script passed.
@@ -84,6 +86,14 @@ POST /api/admin/app-content/rollback
 
 Do not update `app_content_*` rows directly for routine content changes. That
 bypasses the API's validation and optimistic-concurrency contract.
+
+The seed migrations create the current backend-owned presentation copy as
+active definitions plus valid `en-US` drafts. This includes Insights, Campaign
+and Referral cards, referral setup, automation labels, profile summaries, and
+other static API presentation values. Rows are deliberately not published by
+the migrations: review them in the admin content table, then use the validate
+and publish flow above. This preserves any existing publication and makes the
+new copy live atomically.
 
 ## Client bundle behavior
 

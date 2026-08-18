@@ -33,6 +33,8 @@ SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 CLIENT_APP_URL=http://localhost:8081
 WEB_APP_URL=http://localhost:3001
+RATE_LIMIT_REDIS_REST_URL=https://your-redis-rest-gateway.example.com
+RATE_LIMIT_REDIS_REST_TOKEN=your-redis-rest-token
 INTERNAL_API_SECRET=your-long-random-internal-secret
 SMS_DELIVERY_ENABLED=false
 SMS_APPOINTMENT_CONFIRMATIONS_ENABLED=false
@@ -56,9 +58,11 @@ Raw inbound SMS bodies and phone data are redacted from `sms_inbound_events` aft
 
 Keep `SMS_PROVIDER=none` until the Twilio Messaging Service/sender is approved. Do not configure Twilio inbound or delivery-status webhook URLs before that point; the API keeps both callback routes unavailable while this safe default is active.
 
-When appointment reminders are enabled, schedule a trusted Railway Cron (every 5–10 minutes) to `POST /internal/sms/appointment-reminders/process` with `x-internal-api-secret: $INTERNAL_API_SECRET`. This endpoint only queues a capped reminder batch; keep SMS delivery as the separate `/internal/sms/process` job.
+When appointment reminders are enabled, schedule a trusted Railway Cron (every 5–10 minutes) to `POST /internal/sms/appointment-reminders/process` with `x-internal-api-secret: $INTERNAL_API_SECRET`. This endpoint only queues a capped reminder batch; keep SMS delivery as the separate `/internal/sms/process` job. The delivery job also drains durable appointment-confirmation queue jobs before sending the SMS outbox.
 
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.
+
+When `NODE_ENV=production`, configure at least one explicit browser origin with `CLIENT_APP_URL` or `WEB_APP_URL`, plus both Redis REST rate-limit variables. The API refuses to start without them. The Redis endpoint must support the Upstash-compatible `POST /multi-exec` transaction format.
 
 ## Scripts
 
@@ -89,7 +93,10 @@ The API requires the production schema through `202606160001_client_soft_delete_
 Health and identity:
 
 - `GET /health`
+- `GET /health/ready`
 - `GET /me`
+
+`/health` is a cheap process-liveness probe. `/health/ready` performs the deep database schema and Storage bucket verification, caching each result for one minute per API process; use it for deployment readiness monitoring.
 
 Authenticated routes:
 

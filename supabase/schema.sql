@@ -56,8 +56,9 @@ create table if not exists public.users (
   billing_provider text,
   billing_customer_id text,
   sms_delivery_enabled boolean not null default true,
-  sms_monthly_limit integer not null default 0,
+  sms_monthly_limit integer not null default 500,
   sms_used_this_month integer not null default 0,
+  sms_usage_period_started_at date not null default date_trunc('month', now() at time zone 'UTC')::date,
   waitlist_enabled boolean not null default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
@@ -69,7 +70,9 @@ create table if not exists public.users (
       and char_length(trim(billing_provider)) > 0
       and char_length(trim(billing_customer_id)) > 0
     )
-  )
+  ),
+  constraint users_sms_monthly_limit_check check (sms_monthly_limit between 0 and 500),
+  constraint users_sms_used_this_month_check check (sms_used_this_month >= 0)
 );
 
 create index if not exists users_account_status_idx on public.users (account_status);
@@ -726,6 +729,8 @@ create table if not exists public.sms_messages (
   failed_at timestamptz,
   unknown_at timestamptz,
   skipped_at timestamptz,
+  sms_usage_counted_at timestamptz,
+  sms_usage_counted_month date,
   error_code text,
   error_message text,
   metadata jsonb not null default '{}'::jsonb,
@@ -739,6 +744,59 @@ create table if not exists public.sms_messages (
   constraint sms_messages_error_length_check check (
     (error_code is null or char_length(error_code) <= 120)
     and (error_message is null or char_length(error_message) <= 2000)
+  )
+);
+
+create table if not exists public.appointment_sms_confirmation_jobs (
+  id uuid primary key default gen_random_uuid(),
+  appointment_id uuid not null unique references public.appointments(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'queued', 'skipped')),
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  last_attempt_at timestamptz,
+  next_attempt_at timestamptz not null default now(),
+  completed_at timestamptz,
+  error_code text,
+  error_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint appointment_sms_confirmation_jobs_error_length_check check (
+    (error_code is null or char_length(error_code) <= 120)
+    and (error_message is null or char_length(error_message) <= 2000)
+  )
+);
+
+create table if not exists public.appointment_sms_reminder_failures (
+  id uuid primary key default gen_random_uuid(),
+  appointment_id uuid not null references public.appointments(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  appointment_start_at timestamptz not null,
+  error_code text not null check (char_length(error_code) between 1 and 120),
+  error_message text not null check (char_length(error_message) between 1 and 2000),
+  occurred_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.sms_unmatched_delivery_status_callbacks (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null default 'twilio' check (provider = 'twilio'),
+  provider_message_id text not null check (char_length(provider_message_id) between 1 and 255),
+  message_status text not null check (char_length(message_status) between 1 and 64),
+  to_phone_normalized text,
+  error_code text,
+  error_message text,
+  provider_diagnostics jsonb not null default '{}'::jsonb,
+  callback_count integer not null default 1 check (callback_count >= 1),
+  first_received_at timestamptz not null default now(),
+  last_received_at timestamptz not null default now(),
+  resolved_sms_message_id uuid references public.sms_messages(id) on delete set null,
+  resolved_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sms_unmatched_delivery_status_callback_unique unique (provider, provider_message_id),
+  constraint sms_unmatched_delivery_status_error_length_check check (
+    (error_code is null or char_length(error_code) <= 120)
+    and (error_message is null or char_length(error_message) <= 500)
   )
 );
 
@@ -1514,6 +1572,16 @@ create index if not exists sms_messages_provider_message_idx
 create unique index if not exists sms_messages_provider_message_unique
   on public.sms_messages(provider, provider_message_id)
   where provider is not null and provider_message_id is not null;
+create index if not exists appointment_sms_confirmation_jobs_pending_idx
+  on public.appointment_sms_confirmation_jobs(status, next_attempt_at, created_at)
+  where status = 'pending';
+create index if not exists appointment_sms_reminder_failures_occurred_idx
+  on public.appointment_sms_reminder_failures(occurred_at desc);
+create index if not exists appointment_sms_reminder_failures_appointment_idx
+  on public.appointment_sms_reminder_failures(appointment_id, appointment_start_at, occurred_at desc);
+create index if not exists sms_unmatched_delivery_status_callbacks_open_idx
+  on public.sms_unmatched_delivery_status_callbacks(last_received_at desc)
+  where resolved_at is null;
 create index if not exists sms_inbound_events_from_phone_idx
   on public.sms_inbound_events(from_phone_normalized, received_at desc);
 create index if not exists sms_template_settings_user_id_idx on public.sms_template_settings(user_id);
@@ -1587,6 +1655,9 @@ alter table public.rebook_nudges enable row level security;
 alter table public.client_rebooking_preferences enable row level security;
 alter table public.client_communication_preferences enable row level security;
 alter table public.sms_messages enable row level security;
+alter table public.appointment_sms_confirmation_jobs enable row level security;
+alter table public.appointment_sms_reminder_failures enable row level security;
+alter table public.sms_unmatched_delivery_status_callbacks enable row level security;
 alter table public.sms_inbound_events enable row level security;
 alter table public.sms_template_settings enable row level security;
 
@@ -1601,6 +1672,170 @@ $$;
 create trigger sms_messages_set_updated_at
   before update on public.sms_messages
   for each row execute function public.set_sms_message_updated_at();
+
+create or replace function public.set_appointment_sms_confirmation_job_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger appointment_sms_confirmation_jobs_set_updated_at
+  before update on public.appointment_sms_confirmation_jobs
+  for each row execute function public.set_appointment_sms_confirmation_job_updated_at();
+
+create or replace function public.enqueue_appointment_sms_confirmation_job()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if (tg_op = 'INSERT' and new.status = 'scheduled')
+    or (tg_op = 'UPDATE' and new.status = 'scheduled' and old.status is distinct from 'scheduled') then
+    insert into public.appointment_sms_confirmation_jobs (appointment_id, user_id)
+    values (new.id, new.user_id)
+    on conflict (appointment_id) do update
+    set status = 'pending', attempt_count = 0, last_attempt_at = null, next_attempt_at = now(), completed_at = null,
+        error_code = null, error_message = null, updated_at = now();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger appointments_enqueue_sms_confirmation_job
+  after insert or update of status on public.appointments
+  for each row execute function public.enqueue_appointment_sms_confirmation_job();
+
+revoke all on function public.enqueue_appointment_sms_confirmation_job() from public, anon, authenticated;
+grant execute on function public.enqueue_appointment_sms_confirmation_job() to service_role;
+
+create or replace function public.reserve_sms_monthly_usage(p_message_id uuid, p_lease_token uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare
+  v_user_id uuid; v_used integer; v_limit integer; v_period date;
+  v_current_period date := date_trunc('month', now() at time zone 'UTC')::date;
+begin
+  select user_id into v_user_id from public.sms_messages
+  where id = p_message_id and status = 'sending' and lease_token = p_lease_token and sms_usage_counted_at is null
+  for update;
+  if not found then return 'not_claimed'; end if;
+
+  select sms_used_this_month, sms_monthly_limit, sms_usage_period_started_at into v_used, v_limit, v_period
+  from public.users where id = v_user_id for update;
+  if not found then return 'not_available'; end if;
+
+  if v_period < v_current_period then
+    update public.users set sms_used_this_month = 1, sms_usage_period_started_at = v_current_period where id = v_user_id;
+  elsif v_used >= v_limit then
+    return 'limit_reached';
+  else
+    update public.users set sms_used_this_month = v_used + 1 where id = v_user_id;
+  end if;
+
+  update public.sms_messages set sms_usage_counted_at = now(), sms_usage_counted_month = v_current_period where id = p_message_id;
+  return 'allowed';
+end;
+$$;
+
+create or replace function public.release_sms_monthly_usage(p_message_id uuid, p_lease_token uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare
+  v_user_id uuid; v_counted_month date;
+  v_current_period date := date_trunc('month', now() at time zone 'UTC')::date;
+begin
+  select user_id, sms_usage_counted_month into v_user_id, v_counted_month from public.sms_messages
+  where id = p_message_id and lease_token = p_lease_token and sms_usage_counted_at is not null
+  for update;
+  if not found then return false; end if;
+
+  update public.sms_messages set sms_usage_counted_at = null, sms_usage_counted_month = null where id = p_message_id;
+  if v_counted_month = v_current_period then
+    update public.users set sms_used_this_month = greatest(0, sms_used_this_month - 1)
+    where id = v_user_id and sms_usage_period_started_at = v_current_period;
+  end if;
+  return true;
+end;
+$$;
+
+revoke all on function public.reserve_sms_monthly_usage(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.release_sms_monthly_usage(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.reserve_sms_monthly_usage(uuid, uuid) to service_role;
+grant execute on function public.release_sms_monthly_usage(uuid, uuid) to service_role;
+
+create or replace function public.apply_twilio_sms_delivery_status(
+  p_provider_message_id text, p_message_status text, p_error_code text default null,
+  p_error_message text default null, p_to text default null, p_diagnostics jsonb default '{}'::jsonb
+)
+returns table(updated boolean, unmatched boolean)
+language plpgsql security definer set search_path = public as $$
+declare
+  v_message public.sms_messages%rowtype; v_internal_status text; v_now timestamptz := now();
+begin
+  select * into v_message from public.sms_messages
+  where provider = 'twilio' and provider_message_id = p_provider_message_id for update;
+  if not found then
+    insert into public.sms_unmatched_delivery_status_callbacks (
+      provider, provider_message_id, message_status, to_phone_normalized,
+      error_code, error_message, provider_diagnostics, last_received_at
+    ) values (
+      'twilio', p_provider_message_id, lower(p_message_status), p_to,
+      p_error_code, p_error_message, coalesce(p_diagnostics, '{}'::jsonb), v_now
+    ) on conflict (provider, provider_message_id) do update
+    set message_status = excluded.message_status,
+        to_phone_normalized = coalesce(excluded.to_phone_normalized, sms_unmatched_delivery_status_callbacks.to_phone_normalized),
+        error_code = excluded.error_code, error_message = excluded.error_message,
+        provider_diagnostics = excluded.provider_diagnostics,
+        callback_count = sms_unmatched_delivery_status_callbacks.callback_count + 1,
+        last_received_at = excluded.last_received_at, updated_at = v_now;
+    return query select false, true;
+    return;
+  end if;
+  if v_message.status in ('delivered', 'failed', 'skipped', 'cancelled') then
+    return query select false, false;
+    return;
+  end if;
+
+  v_internal_status := case lower(p_message_status)
+    when 'accepted' then 'sent' when 'queued' then 'sent' when 'sending' then 'sent'
+    when 'sent' then 'sent' when 'delivered' then 'delivered'
+    when 'failed' then 'failed' when 'undelivered' then 'failed' else null end;
+  if v_message.status = 'unknown' and v_internal_status = 'sent' then
+    return query select false, false;
+    return;
+  end if;
+
+  update public.sms_messages
+  set metadata = coalesce(v_message.metadata, '{}'::jsonb) || jsonb_build_object(
+        'twilio_last_status', lower(p_message_status), 'twilio_last_status_to', p_to,
+        'twilio_diagnostics', coalesce(p_diagnostics, '{}'::jsonb)
+      ),
+      status = coalesce(v_internal_status, v_message.status),
+      sent_at = case when v_internal_status = 'sent' then coalesce(v_message.sent_at, v_now) else v_message.sent_at end,
+      delivered_at = case when v_internal_status = 'delivered' then v_now else v_message.delivered_at end,
+      failed_at = case when v_internal_status = 'failed' then v_now else v_message.failed_at end,
+      error_code = case when v_internal_status in ('sent', 'delivered') then null when v_internal_status = 'failed' then coalesce(p_error_code, 'twilio_undelivered') else v_message.error_code end,
+      error_message = case when v_internal_status in ('sent', 'delivered') then null when v_internal_status = 'failed' then coalesce(p_error_message, 'Twilio reported that the SMS could not be delivered.') else v_message.error_message end,
+      next_attempt_at = case when v_internal_status is not null then null else v_message.next_attempt_at end
+  where id = v_message.id;
+
+  if v_internal_status in ('delivered', 'failed') then
+    insert into public.communication_events (
+      user_id, client_id, channel, message_type, to_address, to_normalized,
+      provider, provider_message_id, status, error_code, error_message, metadata
+    ) values (
+      v_message.user_id, v_message.client_id, 'sms', v_message.message_type,
+      v_message.recipient_phone, v_message.recipient_phone_normalized,
+      'twilio', p_provider_message_id, v_internal_status,
+      case when v_internal_status = 'failed' then coalesce(p_error_code, 'twilio_undelivered') else null end,
+      case when v_internal_status = 'failed' then coalesce(p_error_message, 'Twilio reported that the SMS could not be delivered.') else null end,
+      jsonb_build_object('sms_message_id', v_message.id, 'twilio_status', lower(p_message_status),
+        'twilio_error_code', p_error_code, 'twilio_diagnostics', coalesce(p_diagnostics, '{}'::jsonb))
+    ) on conflict do nothing;
+  end if;
+  return query select true, false;
+end;
+$$;
+
+revoke all on function public.apply_twilio_sms_delivery_status(text, text, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.apply_twilio_sms_delivery_status(text, text, text, text, text, jsonb) to service_role;
 
 create or replace function public.set_sms_template_settings_updated_at()
 returns trigger language plpgsql as $$

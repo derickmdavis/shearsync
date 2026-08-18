@@ -33,7 +33,11 @@ const topCampaignResult = (campaign: NonNullable<InsightsCampaignAggregate["topC
 };
 
 export const insightsCampaignPresentationService = {
-  build(aggregate: InsightsCampaignAggregate): InsightsCampaignPresentation {
+  build(aggregate: InsightsCampaignAggregate, content: Record<string, string> = {}): InsightsCampaignPresentation {
+    const text = (key: string, fallback: string, values: Record<string, string | number> = {}) =>
+      (content[key] ?? fallback).replace(/\{\{([a-z][a-zA-Z0-9]*)\}\}/g, (match, name: string) =>
+        Object.hasOwn(values, name) ? String(values[name]) : match
+      );
     const revenueDisplayValue = formatUsd(aggregate.attributedRevenueMinor);
     const topCampaign = aggregate.topCampaign;
     const topCampaignText = topCampaign ? topCampaignResult(topCampaign) : null;
@@ -45,7 +49,7 @@ export const insightsCampaignPresentationService = {
           id: "emails_sent",
           icon_key: "campaign_email",
           display_value: formatCount(aggregate.emailsSent),
-          label: "Emails sent",
+          label: text("campaigns.metric.emails_sent.label", "Emails sent"),
           supporting_text: null,
           semantic_tone: "default",
           accessibility_label: `${pluralize(aggregate.emailsSent, "email", "emails")} sent`
@@ -54,7 +58,7 @@ export const insightsCampaignPresentationService = {
           id: "appointments_booked",
           icon_key: "campaign_appointment",
           display_value: formatCount(aggregate.appointmentsBooked),
-          label: "Appointments booked",
+          label: text("campaigns.metric.appointments_booked.label", "Appointments booked"),
           supporting_text: null,
           semantic_tone: "default",
           accessibility_label: `${pluralize(aggregate.appointmentsBooked, "appointment", "appointments")} booked`
@@ -63,7 +67,7 @@ export const insightsCampaignPresentationService = {
           id: "attributed_revenue",
           icon_key: "campaign_revenue",
           display_value: revenueDisplayValue,
-          label: "Attributed revenue",
+          label: text("campaigns.metric.attributed_revenue.label", "Attributed revenue"),
           supporting_text: null,
           semantic_tone: aggregate.attributedRevenueMinor > 0 ? "positive" : "default",
           accessibility_label: `${revenueDisplayValue} attributed revenue`
@@ -72,16 +76,16 @@ export const insightsCampaignPresentationService = {
       top_campaign: topCampaign && topCampaignText ? {
         campaign_id: topCampaign.campaignId,
         icon_key: "campaign",
-        eyebrow: "Top campaign",
+        eyebrow: text("campaigns.top_campaign.eyebrow", "Top campaign"),
         title: topCampaign.name,
         result_text: topCampaignText,
         accessibility_label: `Top campaign: ${topCampaign.name}. ${topCampaignText}.`
       } : null,
       empty_state: {
         icon_key: "campaign",
-        title: "Send your first campaign",
-        body: "Reach more clients with a targeted email campaign.",
-        cta_label: "Create campaign"
+        title: text("campaigns.empty_state.title", "Send your first campaign"),
+        body: text("campaigns.empty_state.body", "Reach more clients with a targeted email campaign."),
+        cta_label: text("campaigns.empty_state.cta", "Create campaign")
       }
     };
   }

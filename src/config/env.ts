@@ -22,6 +22,8 @@ const envSchema = z.object({
   DEV_AUTH_USER_EMAIL: z.string().email().optional(),
   CLIENT_APP_URL: z.string().url().optional(),
   WEB_APP_URL: z.string().url().optional(),
+  RATE_LIMIT_REDIS_REST_URL: z.string().url().optional(),
+  RATE_LIMIT_REDIS_REST_TOKEN: z.string().min(1).optional(),
   INTERNAL_API_SECRET: z.string().min(16).optional(),
   ADMIN_API_KEY: z.string().min(16).optional(),
   API_REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
@@ -72,6 +74,29 @@ export const parseEnv = (rawEnv: NodeJS.ProcessEnv) => {
     throw new Error(
       "Invalid environment configuration: AUTH_MODE must be production when NODE_ENV is production"
     );
+  }
+
+  const hasRateLimitRedisUrl = Boolean(parsedEnv.data.RATE_LIMIT_REDIS_REST_URL);
+  const hasRateLimitRedisToken = Boolean(parsedEnv.data.RATE_LIMIT_REDIS_REST_TOKEN);
+
+  if (hasRateLimitRedisUrl !== hasRateLimitRedisToken) {
+    throw new Error(
+      "Invalid environment configuration: RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN must be configured together"
+    );
+  }
+
+  if (parsedEnv.data.NODE_ENV === "production") {
+    if (!parsedEnv.data.CLIENT_APP_URL && !parsedEnv.data.WEB_APP_URL) {
+      throw new Error(
+        "Invalid environment configuration: CLIENT_APP_URL or WEB_APP_URL is required when NODE_ENV is production"
+      );
+    }
+
+    if (!hasRateLimitRedisUrl) {
+      throw new Error(
+        "Invalid environment configuration: RATE_LIMIT_REDIS_REST_URL and RATE_LIMIT_REDIS_REST_TOKEN are required when NODE_ENV is production"
+      );
+    }
   }
 
   return parsedEnv.data;

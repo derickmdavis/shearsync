@@ -1,5 +1,6 @@
 import { env } from "../config/env";
 import { normalizePhone, type MessageType } from "../lib/communications";
+import { logger } from "../lib/logger";
 import { formatDateInTimeZone } from "../lib/timezone";
 import { supabaseAdmin } from "../lib/supabase";
 import { accountAccessService } from "./accountAccessService";
@@ -27,6 +28,31 @@ export interface AppointmentSmsReminderProcessingResult {
 }
 
 const text = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
+const errorText = (error: unknown): string =>
+  (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").slice(0, 2_000);
+
+const recordReminderFailure = async (appointment: Row, now: Date, error: unknown): Promise<void> => {
+  const appointmentId = text(appointment.id);
+  const userId = text(appointment.user_id);
+  const appointmentStartAt = text(appointment.appointment_date);
+  if (!appointmentId || !userId || !appointmentStartAt) {
+    logger.error("sms_appointment_reminder_failure_unpersistable", {
+      appointmentId: appointmentId ?? null,
+      userId: userId ?? null,
+      error: error instanceof Error ? error.name : "unknown_error"
+    });
+    return;
+  }
+  const { error: persistenceError } = await supabaseAdmin.from("appointment_sms_reminder_failures").insert({
+    appointment_id: appointmentId,
+    user_id: userId,
+    appointment_start_at: appointmentStartAt,
+    error_code: error instanceof Error ? error.name.slice(0, 120) : "unknown_error",
+    error_message: errorText(error),
+    occurred_at: now.toISOString()
+  });
+  handleSupabaseError(persistenceError, "Unable to record SMS appointment reminder failure");
+};
 
 const queueReminderForAppointment = async (appointment: Row): Promise<"queued" | "skipped"> => {
   const userId = text(appointment.user_id);
@@ -90,19 +116,51 @@ export const appointmentSmsRemindersService = {
     // Center a bounded overlap around the target so delayed scheduler runs do not miss reminders.
     const start = new Date(target.getTime() - Math.floor(scanMinutes / 2) * 60 * 1000);
     const end = new Date(start.getTime() + scanMinutes * 60 * 1000);
-    const { data, error } = await supabaseAdmin.from("appointments").select("*")
-      .eq("status", "scheduled").not("client_id", "is", null)
-      .gte("appointment_date", start.toISOString()).lt("appointment_date", end.toISOString())
-      .order("appointment_date", { ascending: true }).limit(Math.max(1, options.limit ?? 100));
-    handleSupabaseError(error, "Unable to load SMS appointment reminders");
-    for (const appointment of (data ?? []) as Row[]) {
-      result.considered += 1;
-      try {
-        if (await queueReminderForAppointment(appointment) === "queued") result.queued += 1;
-        else result.skipped += 1;
-      } catch {
-        result.errors += 1;
+    // `limit` is deliberately a page size, not a total-work limit. A stable keyset
+    // cursor drains the full static window without offset gaps as appointments change.
+    const pageSize = Math.max(1, options.limit ?? 100);
+    let cursor: { appointmentDate: string; appointmentId: string } | null = null;
+
+    while (true) {
+      let query = supabaseAdmin.from("appointments").select("*")
+        .eq("status", "scheduled").not("client_id", "is", null)
+        .gte("appointment_date", start.toISOString()).lt("appointment_date", end.toISOString())
+        .order("appointment_date", { ascending: true }).order("id", { ascending: true })
+        .limit(pageSize);
+      if (cursor) {
+        query = query.or(
+          `appointment_date.gt.${cursor.appointmentDate},and(appointment_date.eq.${cursor.appointmentDate},id.gt.${cursor.appointmentId})`
+        );
       }
+      const { data, error } = await query;
+      handleSupabaseError(error, "Unable to load SMS appointment reminders");
+      const appointments = (data ?? []) as Row[];
+      if (appointments.length === 0) break;
+
+      for (const appointment of appointments) {
+        result.considered += 1;
+        try {
+          if (await queueReminderForAppointment(appointment) === "queued") result.queued += 1;
+          else result.skipped += 1;
+        } catch (error) {
+          result.errors += 1;
+          try {
+            await recordReminderFailure(appointment, now, error);
+          } catch (persistenceError) {
+            logger.error("sms_appointment_reminder_failure_persist_failed", {
+              appointmentId: text(appointment.id),
+              userId: text(appointment.user_id),
+              error: persistenceError instanceof Error ? persistenceError.name : "unknown_error"
+            });
+          }
+        }
+      }
+
+      const last = appointments[appointments.length - 1];
+      const appointmentDate = last ? text(last.appointment_date) : null;
+      const appointmentId = last ? text(last.id) : null;
+      if (!appointmentDate || !appointmentId || appointments.length < pageSize) break;
+      cursor = { appointmentDate, appointmentId };
     }
     return result;
   }

@@ -27,11 +27,15 @@ const conversionSupportingText = (stats: InsightsReferralStats): string => {
 };
 
 export const insightsReferralPresentationService = {
-  build(stats: InsightsReferralStats): {
+  build(stats: InsightsReferralStats, content: Record<string, string> = {}): {
     has_successful_conversions: boolean;
     metrics: [InsightsReferralMetric, InsightsReferralMetric, InsightsReferralMetric];
     top_referrer: InsightsReferralHighlight | null;
   } {
+    const text = (key: string, fallback: string, values: Record<string, string | number> = {}) =>
+      (content[key] ?? fallback).replace(/\{\{([a-z][a-zA-Z0-9]*)\}\}/g, (match, name: string) =>
+        Object.hasOwn(values, name) ? String(values[name]) : match
+      );
     const conversionRate = stats.conversionRatePercent;
     const topReferrer = stats.topReferrer;
     const topReferrerText = topReferrer
@@ -47,7 +51,7 @@ export const insightsReferralPresentationService = {
           id: "new_clients",
           icon_key: "referral_clients",
           display_value: formatCount(stats.newClients),
-          label: "New clients",
+          label: text("referrals.metric.new_clients.label", "New clients"),
           supporting_text: `${pluralize(stats.linksSent, "link", "links")} sent`,
           semantic_tone: "positive",
           accessibility_label: `${pluralize(stats.newClients, "new client", "new clients")} from ${pluralize(stats.linksSent, "referral link", "referral links")} sent`
@@ -56,7 +60,7 @@ export const insightsReferralPresentationService = {
           id: "appointments_booked",
           icon_key: "referral_appointments",
           display_value: formatCount(stats.appointmentsBooked),
-          label: "Appointments",
+          label: text("referrals.metric.appointments_booked.label", "Appointments"),
           supporting_text: `${pluralize(stats.linksClicked, "click", "clicks")}`,
           semantic_tone: "positive",
           accessibility_label: `${pluralize(stats.appointmentsBooked, "referral appointment", "referral appointments")} from ${pluralize(stats.linksClicked, "click", "clicks")}`
@@ -65,7 +69,7 @@ export const insightsReferralPresentationService = {
           id: "conversion_rate",
           icon_key: "referral_conversion",
           display_value: `${formatCount(conversionRate)}%`,
-          label: "Conversion",
+          label: text("referrals.metric.conversion_rate.label", "Conversion"),
           supporting_text: conversionSupportingText(stats),
           semantic_tone: stats.appointmentsBooked > 0 ? "positive" : "neutral",
           accessibility_label: `${formatCount(conversionRate)} percent referral conversion, ${conversionSupportingText(stats).toLowerCase()}`
@@ -74,7 +78,7 @@ export const insightsReferralPresentationService = {
       top_referrer: topReferrer && topReferrerText ? {
         client_id: topReferrer.clientId,
         icon_key: "referral_top_referrer",
-        eyebrow: "Top referrer",
+        eyebrow: text("referrals.top_referrer.eyebrow", "Top referrer"),
         title: topReferrer.displayName,
         result_text: topReferrerText,
         accessibility_label: `Top referrer ${topReferrer.displayName}, ${topReferrerText}`

@@ -15,6 +15,8 @@ const { accountAccessService } = require("../services/accountAccessService") as 
 const { communicationPreferencesService } = require("../services/communicationPreferences") as typeof import("../services/communicationPreferences");
 const { smsDeliveryService } = require("../services/smsDeliveryService") as typeof import("../services/smsDeliveryService");
 const { businessTimeZoneService } = require("../services/businessTimeZoneService") as typeof import("../services/businessTimeZoneService");
+const { appointmentSmsConfirmationsService } = require("../services/appointmentSmsConfirmationsService") as typeof import("../services/appointmentSmsConfirmationsService");
+const { appointmentEmailEventsService } = require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { env } = require("../config/env") as typeof import("../config/env");
 
 const USER_ID = "11111111-1111-1111-1111-111111111111";
@@ -92,6 +94,59 @@ describe("appointment SMS confirmations", () => {
       }
     } finally {
       env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED = previous;
+    }
+  });
+
+  it("queues an SMS confirmation when a pending appointment is accepted", async () => {
+    const previous = env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED;
+    const setupResult = setup();
+    const emailQueue = mock.method(appointmentEmailEventsService, "queueAppointmentEmail", async () => ({} as never));
+    try {
+      env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED = true;
+      const pending = await appointmentsService.create(USER_ID, appointmentPayload("pending"));
+      const accepted = await appointmentsService.applyPendingDecision(USER_ID, String(pending.id), "accept");
+      assert.equal(accepted.status, "scheduled");
+      assert.equal(setupResult.supabase.state.sms_messages.length, 1);
+      assert.equal(setupResult.supabase.state.sms_messages[0]?.idempotency_key, `appointment-confirmation:${pending.id}`);
+    } finally {
+      env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED = previous;
+      emailQueue.mock.restore();
+      setupResult.restore();
+    }
+  });
+
+  it("retries a durable confirmation job after a transient queue failure", async () => {
+    const previous = env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED;
+    const setupResult = setup();
+    const appointment = {
+      id: "33333333-3333-3333-3333-333333333333", user_id: USER_ID,
+      ...appointmentPayload("scheduled")
+    };
+    setupResult.supabase.state.appointments.push(appointment);
+    setupResult.supabase.state.appointment_sms_confirmation_jobs = [{
+      id: "44444444-4444-4444-4444-444444444444", appointment_id: appointment.id, user_id: USER_ID,
+      status: "pending", attempt_count: 0, next_attempt_at: "2020-05-01T00:00:00.000Z", created_at: "2020-05-01T00:00:00.000Z"
+    }];
+    const queueFailure = mock.method(smsDeliveryService, "queueSms", async () => { throw new Error("queue unavailable"); });
+    let queueFailureActive = true;
+    try {
+      env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED = true;
+      const first = await appointmentSmsConfirmationsService.processPendingConfirmations({ now: new Date("2020-05-01T00:00:00.000Z") });
+      assert.deepEqual(first, { processed: 1, queued: 0, skipped: 0, errors: 1 });
+      assert.equal(setupResult.supabase.state.appointment_sms_confirmation_jobs[0]?.status, "pending");
+      assert.equal(setupResult.supabase.state.appointment_sms_confirmation_jobs[0]?.attempt_count, 1);
+      assert.equal(setupResult.supabase.state.appointment_sms_confirmation_jobs[0]?.next_attempt_at, "2020-05-01T00:01:00.000Z");
+      queueFailure.mock.restore();
+      queueFailureActive = false;
+
+      const second = await appointmentSmsConfirmationsService.processPendingConfirmations({ now: new Date("2020-05-01T00:05:00.000Z") });
+      assert.deepEqual(second, { processed: 1, queued: 1, skipped: 0, errors: 0 });
+      assert.equal(setupResult.supabase.state.appointment_sms_confirmation_jobs[0]?.status, "queued");
+      assert.equal(setupResult.supabase.state.sms_messages.length, 1);
+    } finally {
+      env.SMS_APPOINTMENT_CONFIRMATIONS_ENABLED = previous;
+      if (queueFailureActive) queueFailure.mock.restore();
+      setupResult.restore();
     }
   });
 

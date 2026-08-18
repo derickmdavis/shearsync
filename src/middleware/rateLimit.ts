@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import rateLimit, { ipKeyGenerator, type Store } from "express-rate-limit";
+import { env } from "../config/env";
+import { RedisRestRateLimitStore } from "./redisRateLimitStore";
 
 const minutes = (value: number): number => value * 60 * 1000;
 
@@ -36,6 +38,20 @@ interface PublicRateLimiterOptions {
   manageLinkResponse?: boolean;
 }
 
+const createRateLimitStore = (windowMs: number): Store | undefined => {
+  if (env.NODE_ENV !== "production") {
+    return undefined;
+  }
+
+  // Production configuration is validated in config/env before this module is used.
+  return new RedisRestRateLimitStore({
+    url: env.RATE_LIMIT_REDIS_REST_URL!,
+    token: env.RATE_LIMIT_REDIS_REST_TOKEN!,
+    prefix: "shearsync:rate-limit:",
+    windowMs
+  });
+};
+
 export const createPublicRateLimiter = ({
   policy,
   windowMs,
@@ -48,6 +64,8 @@ export const createPublicRateLimiter = ({
     standardHeaders: "draft-8",
     legacyHeaders: false,
     skipSuccessfulRequests: false,
+    passOnStoreError: false,
+    store: createRateLimitStore(windowMs),
     keyGenerator: (req: Request) => [
       policy,
       ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown")

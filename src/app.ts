@@ -8,6 +8,26 @@ import { apiRouter } from "./routes";
 
 const allowedOrigins = [env.CLIENT_APP_URL, env.WEB_APP_URL].filter(Boolean) as string[];
 
+export const isCorsOriginAllowed = ({
+  origin,
+  origins,
+  nodeEnv
+}: {
+  origin: string | undefined;
+  origins: string[];
+  nodeEnv: string;
+}): boolean => {
+  // Non-browser callers (Twilio, cron, and server-to-server requests) do not
+  // send Origin and are not subject to CORS.
+  if (!origin || origins.includes(origin)) {
+    return true;
+  }
+
+  // Local development remains convenient without a configured frontend. In
+  // production, env validation requires an allowlist and unknown origins fail closed.
+  return nodeEnv !== "production" && origins.length === 0;
+};
+
 export const app = express();
 
 app.set("trust proxy", 1);
@@ -16,7 +36,7 @@ app.use(requestObservability);
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      if (isCorsOriginAllowed({ origin, origins: allowedOrigins, nodeEnv: env.NODE_ENV })) {
         callback(null, true);
         return;
       }

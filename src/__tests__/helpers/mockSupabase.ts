@@ -649,7 +649,7 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
             changed = preference.opted_out_all_sms !== false || preference.sms_transactional_enabled !== true || preference.sms_reminders_enabled !== true || preference.sms_marketing_enabled !== false || preference.sms_rebooking_enabled !== false || !preference.sms_opted_in_at;
             if (changed) Object.assign(preference, { opted_out_all_sms: false, sms_transactional_enabled: true, sms_reminders_enabled: true, sms_marketing_enabled: false, sms_rebooking_enabled: false, sms_opted_in_at: timestamp, sms_opt_in_source: "inbound_sms", sms_opted_out_at: null, sms_opt_out_source: null });
           } else if (classification === "help") changed = true;
-          if (changed && !alreadyAudited) {
+          if (!alreadyAudited) {
             const eventType = `inbound_${classification}`;
             getRows(state, "communication_consent_events").push({ id: randomUUID(), user_id: preference.user_id, client_id: preference.client_id ?? null, channel: "sms", contact_value: args.p_from, contact_normalized: phoneNormalized, event_type: eventType, source: "inbound_sms", metadata: args.p_metadata ?? {}, sms_inbound_event_id: inboundEventId, created_at: timestamp });
             getRows(state, "communication_events").push({ id: randomUUID(), user_id: preference.user_id, client_id: preference.client_id ?? null, channel: "sms", to_address: args.p_from, to_normalized: phoneNormalized, provider: "twilio", provider_message_id: args.p_provider_message_id ?? null, status: eventType, metadata: args.p_metadata ?? {}, sms_inbound_event_id: inboundEventId, created_at: timestamp });
@@ -1280,11 +1280,29 @@ const executeTwilioSmsDeliveryStatusRpc = (state: TableState, args: Record<strin
   const messageSid = String(args.p_provider_message_id ?? "");
   const status = String(args.p_message_status ?? "").toLowerCase();
   const message = getRows(state, "sms_messages").find((row) => row.provider === "twilio" && row.provider_message_id === messageSid);
-  if (!message || ["delivered", "failed", "skipped", "cancelled"].includes(String(message.status))) {
-    return { data: [{ updated: false }], error: null };
+  if (!message) {
+    const callbacks = getRows(state, "sms_unmatched_delivery_status_callbacks");
+    const existing = callbacks.find((row) => row.provider === "twilio" && row.provider_message_id === messageSid);
+    const now = new Date().toISOString();
+    const payload = {
+      provider: "twilio", provider_message_id: messageSid, message_status: status,
+      to_phone_normalized: args.p_to ?? null, error_code: args.p_error_code ?? null,
+      error_message: args.p_error_message ?? null,
+      provider_diagnostics: args.p_diagnostics && typeof args.p_diagnostics === "object" ? args.p_diagnostics : {},
+      last_received_at: now
+    };
+    if (existing) {
+      Object.assign(existing, payload, { callback_count: Number(existing.callback_count ?? 1) + 1 });
+    } else {
+      callbacks.push({ id: randomUUID(), ...payload, callback_count: 1, first_received_at: now, created_at: now, updated_at: now });
+    }
+    return { data: [{ updated: false, unmatched: true }], error: null };
+  }
+  if (["delivered", "failed", "skipped", "cancelled"].includes(String(message.status))) {
+    return { data: [{ updated: false, unmatched: false }], error: null };
   }
   const mapped = ({ accepted: "sent", queued: "sent", sending: "sent", sent: "sent", delivered: "delivered", failed: "failed", undelivered: "failed" } as Record<string, string>)[status];
-  if (message.status === "unknown" && mapped === "sent") return { data: [{ updated: false }], error: null };
+  if (message.status === "unknown" && mapped === "sent") return { data: [{ updated: false, unmatched: false }], error: null };
   const now = new Date().toISOString();
   const diagnostics = args.p_diagnostics && typeof args.p_diagnostics === "object" ? args.p_diagnostics as TableRow : {};
   Object.assign(message, {
@@ -1307,7 +1325,47 @@ const executeTwilioSmsDeliveryStatusRpc = (state: TableState, args: Record<strin
       });
     }
   }
-  return { data: [{ updated: true }], error: null };
+  return { data: [{ updated: true, unmatched: false }], error: null };
+};
+
+const currentMonth = (): string => new Date().toISOString().slice(0, 7) + "-01";
+
+const executeSmsUsageRpc = (state: TableState, functionName: string, args: Record<string, unknown>) => {
+  const messageId = String(args.p_message_id ?? "");
+  const leaseToken = String(args.p_lease_token ?? "");
+  const message = getRows(state, "sms_messages").find((row) => row.id === messageId && row.lease_token === leaseToken);
+  if (!message) return { data: functionName === "reserve_sms_monthly_usage" ? "not_claimed" : false, error: null };
+
+  if (functionName === "release_sms_monthly_usage") {
+    const countedMonth = typeof message.sms_usage_counted_month === "string" ? message.sms_usage_counted_month : null;
+    if (!message.sms_usage_counted_at) return { data: false, error: null };
+    message.sms_usage_counted_at = null;
+    message.sms_usage_counted_month = null;
+    const user = getRows(state, "users").find((row) => row.id === message.user_id);
+    if (user && countedMonth === currentMonth() && user.sms_usage_period_started_at === countedMonth) {
+      user.sms_used_this_month = Math.max(0, Number(user.sms_used_this_month ?? 0) - 1);
+    }
+    return { data: true, error: null };
+  }
+
+  if (message.status !== "sending" || message.sms_usage_counted_at) return { data: "not_claimed", error: null };
+  const user = getRows(state, "users").find((row) => row.id === message.user_id);
+  // Older fixtures often omit users; real messages cannot because of the FK.
+  if (!user && process.env.NODE_ENV === "test") {
+    message.sms_usage_counted_at = new Date().toISOString();
+    message.sms_usage_counted_month = currentMonth();
+    return { data: "allowed", error: null };
+  }
+  if (!user) return { data: "not_available", error: null };
+  const month = currentMonth();
+  const used = user.sms_usage_period_started_at === month ? Number(user.sms_used_this_month ?? 0) : 0;
+  const limit = Number(user.sms_monthly_limit ?? 500);
+  if (used >= limit) return { data: "limit_reached", error: null };
+  user.sms_used_this_month = used + 1;
+  user.sms_usage_period_started_at = month;
+  message.sms_usage_counted_at = new Date().toISOString();
+  message.sms_usage_counted_month = month;
+  return { data: "allowed", error: null };
 };
 
 export const installMockSupabase = (initialState: TableState, options: MockSupabaseOptions = {}) => {
@@ -1322,6 +1380,8 @@ export const installMockSupabase = (initialState: TableState, options: MockSupab
   const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
     functionName === "apply_twilio_sms_delivery_status"
       ? executeTwilioSmsDeliveryStatusRpc(state, args)
+      : functionName === "reserve_sms_monthly_usage" || functionName === "release_sms_monthly_usage"
+      ? executeSmsUsageRpc(state, functionName, args)
       : functionName === "list_clients_with_summaries"
       ? executeClientsListRpc(state, args)
       : executeApprovalSettingsRpc(state, functionName, args)
