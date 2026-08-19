@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "process:appointment-emails": "node dist/scripts/processAppointmentEmails.js",
     "process:campaign-deliveries": "node dist/scripts/processCampaignDeliveries.js",
+    "expire:account-access": "node dist/scripts/expireAccountAccess.js",
     "cleanup:api-request-logs": "node dist/scripts/cleanupApiRequestLogs.js",
     "cleanup:sms-inbound-events": "node dist/scripts/cleanupSmsInboundEvents.js",
     "cleanup:archived-client-formulas": "node dist/scripts/purgeArchivedClientFormulas.js",

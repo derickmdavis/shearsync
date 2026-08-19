@@ -59,6 +59,8 @@ Keep `SMS_PROVIDER=none` until the Twilio Messaging Service/sender is approved. 
 
 When appointment reminders are enabled, schedule a trusted Railway Cron (every 5–10 minutes) to `POST /internal/sms/appointment-reminders/process` with `x-internal-api-secret: $INTERNAL_API_SECRET`. This endpoint only queues a capped reminder batch; keep SMS delivery as the separate `/internal/sms/process` job. The delivery job also drains durable appointment-confirmation queue jobs before sending the SMS outbox.
 
+Create a separate Railway Cron service from this repository with `RAILWAY_START_COMMAND=npm run expire:account-access`, a copy of the API's environment variables, and a daily schedule of `0 3 * * *` (UTC). It atomically moves active accounts whose `current_period_ends_at` has elapsed to `inactive`. Access checks also expire a past-due account synchronously, so a delayed daily job cannot grant product access.
+
 `SUPABASE_SERVICE_ROLE_KEY` is used only on the backend. Do not expose it to the mobile app, web app, public pages, or browser runtime.
 
 When `NODE_ENV=production`, configure at least one explicit browser origin with `CLIENT_APP_URL` or `WEB_APP_URL`, plus `REDIS_URL`. Add a Railway Redis service and set `REDIS_URL=${{Redis.REDIS_URL}}` on the API service. The API refuses to start without these safeguards.
@@ -397,7 +399,7 @@ Current limitations:
 - Thank-you emails use `/internal/thank-you-emails/queue` to create completed-appointment records, `/internal/thank-you-emails/process` to enqueue approved/automatic thank-you email events, and `/internal/appointment-emails/process` to deliver the resulting email events.
 - SMS preference/consent checks and STOP/START/HELP inbound handling exist for future SMS provider integration.
 - Billing-provider integration is not yet configured; only trusted server-side billing events may change account status.
-- No automated expiration or cleanup.
+- Account access expires automatically when the active billing period elapses. Future work will make inactive accounts read-only while still allowing selected historical data to be viewed.
 
 ## Availability Settings
 
@@ -455,6 +457,6 @@ Railway will run the build and start commands from `railway.json`.
 - Supabase project credentials are required before the API can run against real data.
 - Database migrations need to be applied in Supabase.
 - RLS policies should be added before production traffic. The API already scopes by `user_id`, but database policies are still recommended.
-- User profile creation after Supabase signup needs a trigger or app-side onboarding call.
+- Supabase signup provisioning requires the `auth_user_booking_bootstrap` trigger from the checked-in migrations. New accounts must supply a unique valid `phone_number` in auth metadata; it also stores the supplied `full_name` and `business_name`, creates the booking records, and starts a 15-day active trial. Legacy profiles without a number receive a non-routable `+999` placeholder during the one-time migration and should be corrected before phone-based outreach is enabled.
 - Photo upload currently stores metadata only. Storage bucket policy and signed upload flow are not wired yet.
 - Appointment-related day logic uses the business timezone stored on `users.timezone`. Availability uses `day_of_week` as `0` for Sunday through `6` for Saturday in that timezone.

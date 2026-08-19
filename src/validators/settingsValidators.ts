@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { timeZoneSchema } from "./common";
+import { normalizePhone } from "../lib/phone";
 
 export const updateProfileSchema = z.object({
   full_name: z.string().min(1).max(160).optional(),
-  phone_number: z.string().max(40).optional(),
+  phone_number: z.string().max(40)
+    .refine((value) => normalizePhone(value) !== null, "phone_number must be a valid E.164 phone number")
+    .transform((value) => normalizePhone(value)!)
+    .optional(),
   business_name: z.string().max(180).optional(),
   location_label: z.string().max(180).optional().or(z.literal("")),
   avatar_image_id: z.string().max(255).optional().or(z.literal("")),

@@ -23,6 +23,11 @@ import {
 export const internalRouter = Router();
 
 internalRouter.post(
+  "/account-access/expire",
+  requireInternalApiSecret,
+  asyncHandler(internalController.expireAccountAccess)
+);
+internalRouter.post(
   "/appointment-reminders/queue",
   requireInternalApiSecret,
   validate({ query: queueAppointmentRemindersQuerySchema }),

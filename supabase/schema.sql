@@ -44,7 +44,7 @@ create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   email text unique not null,
   full_name text,
-  phone_number text,
+  phone_number text not null,
   business_name text,
   location_label text,
   avatar_image_id text,
@@ -71,6 +71,8 @@ create table if not exists public.users (
       and char_length(trim(billing_customer_id)) > 0
     )
   ),
+  constraint users_phone_number_unique unique (phone_number),
+  constraint users_phone_number_e164_check check (phone_number ~ '^\+[1-9][0-9]{9,14}$'),
   constraint users_sms_monthly_limit_check check (sms_monthly_limit between 0 and 500),
   constraint users_sms_used_this_month_check check (sms_used_this_month >= 0)
 );

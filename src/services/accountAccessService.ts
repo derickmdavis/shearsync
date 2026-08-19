@@ -7,6 +7,20 @@ const ACCOUNT_ACCESS_COLUMNS = "account_status, activated_at, current_period_end
 
 const asIsoOrNull = (value: unknown): string | null => typeof value === "string" ? value : null;
 
+const isCurrentPeriodExpired = (user: Record<string, unknown> | null, now: Date): boolean => {
+  if (user?.account_status !== "active") {
+    return false;
+  }
+
+  const currentPeriodEndsAt = asIsoOrNull(user.current_period_ends_at);
+  if (!currentPeriodEndsAt) {
+    return false;
+  }
+
+  const endsAtMs = Date.parse(currentPeriodEndsAt);
+  return Number.isFinite(endsAtMs) && endsAtMs <= now.getTime();
+};
+
 const toAccountAccess = (user: Record<string, unknown> | null): AccountAccess => {
   // Fixtures that predate account access may omit the corresponding user row.
   // Production fails closed for missing accounts; this branch keeps unrelated
@@ -32,7 +46,51 @@ export const accountAccessService = {
       .eq("id", userId)
       .maybeSingle();
     handleSupabaseError(error, "Unable to load account access");
-    return toAccountAccess(data as Record<string, unknown> | null);
+
+    const user = data as Record<string, unknown> | null;
+    const now = new Date();
+    if (!isCurrentPeriodExpired(user, now)) {
+      return toAccountAccess(user);
+    }
+
+    // This conditional update is idempotent and prevents a stale access read
+    // from deactivating an account that a billing update has already renewed.
+    const { data: expiredUser, error: expireError } = await supabaseAdmin
+      .from("users")
+      .update({
+        account_status: "inactive",
+        deactivated_at: now.toISOString()
+      })
+      .eq("id", userId)
+      .eq("account_status", "active")
+      .lte("current_period_ends_at", now.toISOString())
+      .select(ACCOUNT_ACCESS_COLUMNS)
+      .maybeSingle();
+    handleSupabaseError(expireError, "Unable to expire account access");
+
+    // If a concurrent renewal won the conditional update, fail closed for
+    // this request; the subsequent access check will observe the renewal.
+    return toAccountAccess(expiredUser as Record<string, unknown> | null);
+  },
+
+  async expireEndedAccounts(now = new Date()): Promise<{ expired: number; processedAt: string }> {
+    const processedAt = now.toISOString();
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({
+        account_status: "inactive",
+        deactivated_at: processedAt
+      })
+      .eq("account_status", "active")
+      .not("current_period_ends_at", "is", null)
+      .lte("current_period_ends_at", processedAt)
+      .select("id");
+    handleSupabaseError(error, "Unable to expire elapsed account access");
+
+    return {
+      expired: Array.isArray(data) ? data.length : 0,
+      processedAt
+    };
   },
 
   async isAccountActive(userId: string): Promise<boolean> {

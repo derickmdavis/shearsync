@@ -8549,8 +8549,8 @@ describe("API handlers", () => {
           id: userId,
           email: "owner@example.com",
           account_status: "active",
-          activated_at: "2026-07-01T00:00:00.000Z",
-          current_period_ends_at: "2026-08-01T00:00:00.000Z"
+          activated_at: "2099-07-01T00:00:00.000Z",
+          current_period_ends_at: "2099-08-01T00:00:00.000Z"
         }
       ]
     });
@@ -8562,7 +8562,7 @@ describe("API handlers", () => {
 
       assert.equal(access.status, "active");
       assert.equal(access.isActive, true);
-      assert.equal(access.currentPeriodEndsAt, "2026-08-01T00:00:00.000Z");
+      assert.equal(access.currentPeriodEndsAt, "2099-08-01T00:00:00.000Z");
     } finally {
       supabase.restore();
     }
@@ -10258,6 +10258,16 @@ describe("API handlers", () => {
     } finally {
       supabase.restore();
     }
+  });
+
+  it("normalizes account phone numbers and rejects invalid values in profile settings", () => {
+    const parsed = updateProfileSchema.parse({ phone_number: "(303) 555-1234" });
+
+    assert.equal(parsed.phone_number, "+13035551234");
+    assert.throws(
+      () => updateProfileSchema.parse({ phone_number: "not a phone number" }),
+      /phone_number must be a valid E\.164 phone number/
+    );
   });
 
   it("allows the current user to toggle their waitlist setting through profile settings", async () => {

@@ -13,8 +13,15 @@ import { campaignDeliveryWorkerService } from "../services/campaignDeliveryWorke
 import { smsDeliveryService } from "../services/smsDeliveryService";
 import { appointmentSmsRemindersService } from "../services/appointmentSmsRemindersService";
 import { appointmentSmsConfirmationsService } from "../services/appointmentSmsConfirmationsService";
+import { accountAccessService } from "../services/accountAccessService";
 
 export const internalController = {
+  async expireAccountAccess(req: Request, res: Response) {
+    const result = await accountAccessService.expireEndedAccounts();
+    logger.info("account_access_expiration_completed", { requestId: req.requestId, ...result });
+    res.json({ data: result });
+  },
+
   async processSms(req: Request, res: Response) {
     const query = req.query as { limit?: number; allow_noop?: boolean };
     const confirmations = await appointmentSmsConfirmationsService.processPendingConfirmations({ limit: query.limit });
