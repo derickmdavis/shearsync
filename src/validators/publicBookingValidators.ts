@@ -22,6 +22,7 @@ export const createPublicBookingSchema = z.object({
   guest_phone: publicPhoneSchema,
   booking_context_token: bookingContextTokenSchema,
   referral_code: referralCodeSchema,
+  sms_opt_in: z.boolean().optional().default(false),
   notes: z.string().max(2000).optional()
 });
 

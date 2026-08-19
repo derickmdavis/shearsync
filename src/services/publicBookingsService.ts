@@ -14,6 +14,7 @@ import { stylistsService } from "./stylistsService";
 import { usersService } from "./usersService";
 import { publicBookingIntakeService } from "./publicBookingIntakeService";
 import { appointmentEmailEventsService } from "./appointmentEmailEventsService";
+import { queueAppointmentConfirmationSms } from "./appointmentSmsConfirmationsService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
 import { referralLinksService, type ReferralAttribution } from "./referralLinksService";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
@@ -24,6 +25,8 @@ import {
 import { bookingErrorEventsService } from "./bookingErrorEventsService";
 import { recordProductTelemetry } from "./productTelemetry";
 import { campaignAttributionService } from "./campaignAttributionService";
+import { communicationPreferencesService } from "./communicationPreferences";
+import { publicBookingSmsConsent } from "../lib/publicBookingSmsConsent";
 
 const requestedDateTimePattern = /^(?<date>\d{4}-\d{2}-\d{2})T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<millisecond>\d{1,3}))?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -203,8 +206,16 @@ const toNewClientReferralFields = (attribution: ReferralAttribution | null): Row
     }
   : {};
 
+export interface PublicBookingRequestContext {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
 export const publicBookingsService = {
-  async create(payload: Row): Promise<PublicBookingConfirmation> {
+  async create(
+    payload: Row,
+    requestContext: PublicBookingRequestContext = {}
+  ): Promise<PublicBookingConfirmation> {
     const stylist = await stylistsService.getBySlug(payload.stylist_slug as string);
     await stylistsService.assertPublicBookingEnabled(stylist);
 
@@ -242,6 +253,41 @@ export const publicBookingsService = {
       stylist.slug as string
     );
     const isExistingClient = bookingContext?.isExistingClient ?? Boolean(matchedClient);
+    const recordSmsOptIn = async (appointment: Row, fallbackClientId?: string | null): Promise<void> => {
+      if (payload.sms_opt_in !== true) {
+        return;
+      }
+
+      const clientId = typeof appointment.client_id === "string" ? appointment.client_id : fallbackClientId;
+      const appointmentId = typeof appointment.id === "string" ? appointment.id : null;
+      if (!clientId || !appointmentId) {
+        throw new ApiError(500, "Unable to record SMS consent for this booking");
+      }
+
+      await communicationPreferencesService.optInSmsForPublicBooking({
+        userId,
+        clientId,
+        phone: payload.guest_phone as string,
+        consentText: publicBookingSmsConsent.text,
+        appointmentId,
+        disclosureVersion: publicBookingSmsConsent.version,
+        ipAddress: requestContext.ipAddress,
+        userAgent: requestContext.userAgent
+      });
+
+      try {
+        // Appointment creation evaluates SMS eligibility before this public
+        // booking service can write consent. Re-queue after the audit write;
+        // the appointment-scoped outbox key makes this safe on retries.
+        await queueAppointmentConfirmationSms(userId, appointment);
+      } catch (error) {
+        console.error("public_booking_sms_confirmation_queue_failed", {
+          account_user_id: userId,
+          appointment_id: appointmentId,
+          error: error instanceof Error ? error.name : "unknown_error"
+        });
+      }
+    };
 
     const slotEvaluation = await schedulingPolicyService.evaluateRequestedSlot({
       userId,
@@ -281,6 +327,7 @@ export const publicBookingsService = {
         });
 
         if (existingAppointment) {
+          await recordSmsOptIn(existingAppointment, typeof matchedClient.id === "string" ? matchedClient.id : null);
           await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
 
           return buildConfirmation({
@@ -305,6 +352,7 @@ export const publicBookingsService = {
         });
 
         if (existingAppointment) {
+          await recordSmsOptIn(existingAppointment);
           await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
 
           return buildConfirmation({
@@ -368,6 +416,8 @@ export const publicBookingsService = {
         ...toAppointmentReferralFields(referralAttribution),
         ...campaignAttributionService.toAppointmentFields(bookingContext)
       });
+
+      await recordSmsOptIn(appointment, typeof client.id === "string" ? client.id : null);
 
       if (referralAttribution) {
         await referralLinksService.recordBookingAttributed(referralAttribution.referralCodeUsed, appointment.id as string, {
@@ -454,6 +504,7 @@ export const publicBookingsService = {
         });
       }
 
+      await recordSmsOptIn(existingAppointment, typeof client.id === "string" ? client.id : null);
       await queuePublicBookingEmail(userId, existingAppointment, normalizedGuestEmail);
 
       return buildConfirmation({

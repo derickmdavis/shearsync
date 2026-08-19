@@ -92,6 +92,17 @@ interface ManualSmsPreferenceUpdateOptions {
   rebookingEnabled?: boolean;
 }
 
+interface PublicBookingSmsOptInOptions {
+  userId: string;
+  clientId: string;
+  phone: string;
+  consentText: string;
+  appointmentId: string;
+  disclosureVersion: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
 interface InboundSmsConsentOptions {
   from: string;
   fromNormalized: string;
@@ -421,6 +432,45 @@ export const communicationPreferencesService = {
     });
     handleSupabaseError(error, "Unable to update SMS communication preferences");
     return toSmsConsentPreference(clientId, data as Row);
+  },
+
+  async optInSmsForPublicBooking(options: PublicBookingSmsOptInOptions): Promise<SmsConsentPreference> {
+    const consentText = options.consentText.trim();
+    if (!consentText) {
+      throw new ApiError(400, "SMS opt-in requires consent text");
+    }
+
+    const phoneNormalized = normalizePhone(options.phone);
+    if (!phoneNormalized) {
+      throw new ApiError(400, "SMS opt-in requires a valid phone number");
+    }
+
+    const { data, error } = await supabaseAdmin.rpc("apply_manual_sms_preference", {
+      p_user_id: options.userId,
+      p_client_id: options.clientId,
+      p_phone: options.phone,
+      p_phone_normalized: phoneNormalized,
+      p_action: "opt_in",
+      p_source: "booking_page",
+      p_consent_text: consentText,
+      p_has_transactional: true,
+      p_transactional_enabled: true,
+      p_has_reminders: true,
+      p_reminders_enabled: true,
+      p_has_marketing: false,
+      p_marketing_enabled: false,
+      p_has_rebooking: false,
+      p_rebooking_enabled: false,
+      p_ip_address: options.ipAddress ?? null,
+      p_user_agent: options.userAgent ?? null,
+      p_metadata: {
+        booking_source: "public",
+        appointment_id: options.appointmentId,
+        disclosure_version: options.disclosureVersion
+      }
+    });
+    handleSupabaseError(error, "Unable to record public-booking SMS consent");
+    return toSmsConsentPreference(options.clientId, data as Row);
   },
 
   async applyInboundSmsConsent(options: InboundSmsConsentOptions): Promise<void> {

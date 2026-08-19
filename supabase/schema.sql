@@ -1597,6 +1597,17 @@ create unique index if not exists communication_events_sms_inbound_event_user_st
 create unique index if not exists communication_consent_events_sms_inbound_event_user_type_unique
   on public.communication_consent_events(sms_inbound_event_id, user_id, event_type)
   where sms_inbound_event_id is not null;
+create unique index if not exists communication_consent_events_public_booking_sms_opt_in_unique
+  on public.communication_consent_events(
+    user_id,
+    client_id,
+    contact_normalized,
+    (metadata ->> 'appointment_id')
+  )
+  where channel = 'sms'
+    and event_type = 'opted_in'
+    and source = 'booking_page'
+    and metadata ? 'appointment_id';
 create unique index if not exists communication_events_twilio_final_status_unique
   on public.communication_events(provider, provider_message_id, status)
   where channel = 'sms'
@@ -1900,7 +1911,10 @@ create or replace function public.apply_manual_sms_preference(
   p_has_marketing boolean,
   p_marketing_enabled boolean,
   p_has_rebooking boolean,
-  p_rebooking_enabled boolean
+  p_rebooking_enabled boolean,
+  p_ip_address text default null,
+  p_user_agent text default null,
+  p_metadata jsonb default '{}'::jsonb
 )
 returns public.client_communication_preferences
 language plpgsql
@@ -1927,6 +1941,26 @@ begin
     phone = coalesce(client_communication_preferences.phone, excluded.phone),
     updated_at = now()
   returning * into preference;
+
+  if p_action = 'opt_in'
+    and p_source = 'booking_page'
+    and nullif(trim(coalesce(p_metadata ->> 'appointment_id', '')), '') is not null then
+    select id into event_id
+    from public.communication_consent_events
+    where user_id = p_user_id
+      and client_id = p_client_id
+      and channel = 'sms'
+      and contact_normalized = p_phone_normalized
+      and event_type = 'opted_in'
+      and source = 'booking_page'
+      and metadata ->> 'appointment_id' = p_metadata ->> 'appointment_id'
+    order by created_at desc
+    limit 1;
+
+    if event_id is not null then
+      return preference;
+    end if;
+  end if;
 
   if p_action = 'opt_in' then
     if nullif(trim(coalesce(p_consent_text, '')), '') is null then raise exception 'sms_opt_in_requires_consent_text'; end if;
@@ -1958,13 +1992,33 @@ begin
     event_type := 'preference_updated';
   end if;
 
-  insert into public.communication_consent_events (
-    user_id, client_id, channel, contact_value, contact_normalized, event_type, source, consent_text, metadata
-  ) values (
-    p_user_id, p_client_id, 'sms', p_phone, p_phone_normalized, event_type, p_source,
-    case when p_action = 'opt_in' then p_consent_text else null end,
-    jsonb_build_object('consent_scope', 'account', 'action', p_action)
-  ) returning id into event_id;
+  begin
+    insert into public.communication_consent_events (
+      user_id, client_id, channel, contact_value, contact_normalized,
+      event_type, source, consent_text, ip_address, user_agent, metadata
+    ) values (
+      p_user_id, p_client_id, 'sms', p_phone, p_phone_normalized,
+      event_type, p_source, case when p_action = 'opt_in' then p_consent_text else null end,
+      p_ip_address, p_user_agent,
+      jsonb_build_object('consent_scope', 'account', 'action', p_action) || coalesce(p_metadata, '{}'::jsonb)
+    ) returning id into event_id;
+  exception when unique_violation then
+    select id into event_id
+    from public.communication_consent_events
+    where user_id = p_user_id
+      and client_id = p_client_id
+      and channel = 'sms'
+      and contact_normalized = p_phone_normalized
+      and event_type = 'opted_in'
+      and source = 'booking_page'
+      and metadata ->> 'appointment_id' = p_metadata ->> 'appointment_id'
+    order by created_at desc
+    limit 1;
+
+    if event_id is null then
+      raise exception 'sms_consent_event_write_conflict';
+    end if;
+  end;
 
   update public.client_communication_preferences set sms_last_consent_event_id = event_id, updated_at = now()
   where id = preference.id returning * into preference;
@@ -1972,8 +2026,8 @@ begin
 end;
 $$;
 
-revoke all on function public.apply_manual_sms_preference(uuid, uuid, text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean) from public;
-grant execute on function public.apply_manual_sms_preference(uuid, uuid, text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean) to service_role;
+revoke all on function public.apply_manual_sms_preference(uuid, uuid, text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) from public;
+grant execute on function public.apply_manual_sms_preference(uuid, uuid, text, text, text, text, text, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, text, jsonb) to service_role;
 
 create or replace function public.set_early_access_requests_updated_at()
 returns trigger language plpgsql as $$

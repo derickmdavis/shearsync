@@ -158,7 +158,10 @@ export const publicController = {
     const serviceId = typeof req.body.service_id === "string" ? req.body.service_id : undefined;
 
     try {
-      const confirmation = await publicBookingsService.create(req.body);
+      const confirmation = await publicBookingsService.create(req.body, {
+        ipAddress: req.ip ?? null,
+        userAgent: typeof req.header === "function" ? req.header("user-agent") ?? null : null
+      });
       logger.info("public_booking_created", {
         requestId: req.requestId,
         publicStylistSlug: stylistSlug,

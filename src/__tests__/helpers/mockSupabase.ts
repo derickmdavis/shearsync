@@ -686,6 +686,9 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
         const phone = String(args.p_phone ?? "");
         const phoneNormalized = String(args.p_phone_normalized ?? "");
         const action = String(args.p_action ?? "");
+        const metadata = args.p_metadata && typeof args.p_metadata === "object" && !Array.isArray(args.p_metadata)
+          ? args.p_metadata as TableRow
+          : {};
         if (!getRows(state, "clients").some((client) => client.id === clientId && client.user_id === userId)) {
           throw new Error("client_not_found");
         }
@@ -699,6 +702,19 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
             created_at: timestamp, updated_at: timestamp
           };
           preferences.push(preference);
+        }
+        const appointmentId = typeof metadata.appointment_id === "string" ? metadata.appointment_id : null;
+        if (action === "opt_in" && args.p_source === "booking_page" && appointmentId) {
+          const existingEvent = getRows(state, "communication_consent_events").find((event) =>
+            event.user_id === userId
+            && event.client_id === clientId
+            && event.channel === "sms"
+            && event.contact_normalized === phoneNormalized
+            && event.event_type === "opted_in"
+            && event.source === "booking_page"
+            && (event.metadata as TableRow | undefined)?.appointment_id === appointmentId
+          );
+          if (existingEvent) return { data: cloneRow(preference), error: null };
         }
         if (action === "opt_in") {
           Object.assign(preference, {
@@ -730,7 +746,9 @@ const executeApprovalSettingsRpc = (state: TableState, functionName: string, arg
           id: randomUUID(), user_id: userId, client_id: clientId, channel: "sms", contact_value: phone,
           contact_normalized: phoneNormalized, event_type: eventType, source: args.p_source,
           consent_text: action === "opt_in" ? args.p_consent_text ?? null : null,
-          metadata: { consent_scope: "account", action }, created_at: timestamp
+          ip_address: args.p_ip_address ?? null,
+          user_agent: args.p_user_agent ?? null,
+          metadata: { consent_scope: "account", action, ...metadata }, created_at: timestamp
         };
         getRows(state, "communication_consent_events").push(event);
         preference.sms_last_consent_event_id = event.id;

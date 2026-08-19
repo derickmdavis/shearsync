@@ -122,6 +122,7 @@ Behavior:
 - Treat `booking_enabled` from the profile response and `bookingEnabled` from the intake response as hard stops for the booking flow.
 - If the backend returns `400` for an invalid or expired booking context token, rerun intake and retry the services or slots request with the fresh token.
 - `POST /api/public/bookings` accepts the same token as optional `booking_context_token`. Final booking creation still performs backend-side client matching, but it uses the token for the same new/returning-client rule validation used by services and slots.
+- Submit the confirmation checkbox as `sms_opt_in: boolean`. Omit it or submit `false` when unchecked. A `true` value grants appointment transactional and reminder SMS consent only; it does not grant marketing SMS consent.
 
 ## Suggested Web App State Shape
 

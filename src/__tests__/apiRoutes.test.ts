@@ -41,6 +41,8 @@ const { appointmentEmailEventsService } =
   require("../services/appointmentEmailEventsService") as typeof import("../services/appointmentEmailEventsService");
 const { parseEnv } = require("../config/env") as typeof import("../config/env");
 const { normalizePhone } = require("../lib/phone") as typeof import("../lib/phone");
+const { publicBookingSmsConsent } =
+  require("../lib/publicBookingSmsConsent") as typeof import("../lib/publicBookingSmsConsent");
 const { errorHandler } = require("../middleware/errorHandler") as typeof import("../middleware/errorHandler");
 const { requireAuth } = require("../middleware/auth") as typeof import("../middleware/auth");
 const { validate } = require("../middleware/validate") as typeof import("../middleware/validate");
@@ -775,6 +777,19 @@ describe("API handlers", () => {
     assert.equal(normalizePhone("abc"), null);
     assert.equal(normalizePhone("555-0102"), null);
     assert.equal(normalizePhone("++17205550148"), null);
+  });
+
+  it("defaults a public booking SMS opt-in to false", () => {
+    const booking = createPublicBookingSchema.parse({
+      stylist_slug: "maya-johnson",
+      service_id: ownedServiceId,
+      requested_datetime: "2030-05-05T09:00:00.000Z",
+      guest_first_name: "Jane",
+      guest_last_name: "Doe",
+      guest_phone: "720-555-0103"
+    });
+
+    assert.equal(booking.sms_opt_in, false);
   });
 
   it("lists services with the richer catalog shape", async () => {
@@ -6361,8 +6376,11 @@ describe("API handlers", () => {
           guest_last_name: "Doe",
           guest_email: "jane@example.com",
           guest_phone: "(720) 555-0103",
+          sms_opt_in: true,
           notes: "First available please"
-        })
+        }),
+        ip: "203.0.113.45",
+        headers: { "user-agent": "public-booking-test/1.0" }
       });
 
       const response = await runWithErrorHandler((request, res) => publicController.createBooking(request, res), req);
@@ -6396,6 +6414,30 @@ describe("API handlers", () => {
       assert.equal(supabase.state.appointments[0]?.client_id, "client-1");
       assert.equal(supabase.state.appointments[0]?.service_id, ownedServiceId);
       assert.equal(supabase.state.appointments[0]?.booking_source, "public");
+      const smsPreference = supabase.state.client_communication_preferences[0];
+      assert.equal(smsPreference?.user_id, userId);
+      assert.equal(smsPreference?.client_id, "client-1");
+      assert.equal(smsPreference?.phone_normalized, "+17205550103");
+      assert.equal(smsPreference?.sms_transactional_enabled, true);
+      assert.equal(smsPreference?.sms_reminders_enabled, true);
+      assert.equal(smsPreference?.sms_marketing_enabled, false);
+      assert.equal(smsPreference?.sms_rebooking_enabled, false);
+      const consentEvent = supabase.state.communication_consent_events[0];
+      assert.equal(consentEvent?.user_id, userId);
+      assert.equal(consentEvent?.client_id, "client-1");
+      assert.equal(consentEvent?.contact_normalized, "+17205550103");
+      assert.equal(consentEvent?.event_type, "opted_in");
+      assert.equal(consentEvent?.source, "booking_page");
+      assert.equal(consentEvent?.consent_text, publicBookingSmsConsent.text);
+      assert.equal(consentEvent?.ip_address, "203.0.113.45");
+      assert.equal(consentEvent?.user_agent, "public-booking-test/1.0");
+      assert.deepEqual(consentEvent?.metadata, {
+        consent_scope: "account",
+        action: "opt_in",
+        booking_source: "public",
+        appointment_id: supabase.state.appointments[0]?.id,
+        disclosure_version: publicBookingSmsConsent.version
+      });
       assert.equal(supabase.state.appointment_email_events.length, 1);
       assert.equal(supabase.state.appointment_email_events[0]?.email_type, "appointment_scheduled");
       assert.equal(supabase.state.appointment_email_events[0]?.recipient_email, "jane@example.com");
@@ -7886,6 +7928,7 @@ describe("API handlers", () => {
         guest_last_name: "Doe",
         guest_email: "jane@example.com",
         guest_phone: "720-555-0103",
+        sms_opt_in: true,
         notes: "Please keep volume."
       });
 
@@ -7914,6 +7957,8 @@ describe("API handlers", () => {
         })
       );
       assert.equal(supabase.state.appointments.length, 1);
+      assert.equal(supabase.state.communication_consent_events.length, 1);
+      assert.equal(supabase.state.client_communication_preferences.length, 1);
     } finally {
       supabase.restore();
     }

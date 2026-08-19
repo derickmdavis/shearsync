@@ -2378,6 +2378,7 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - `guest_phone`
   - optional `booking_context_token`
   - optional `referral_code`
+  - optional `sms_opt_in` (boolean, defaults to `false`)
   - optional `notes`
 - Purpose: final public booking creation
 - Main service: `publicBookingsService.create`
@@ -2388,6 +2389,8 @@ Intelligent Scheduling is a ranking/display feature, not a hard availability rul
   - otherwise rematches the client directly from submitted contact info
   - final booking matching tries phone first, then email
   - accepts but does not require `referral_code`
+  - a `true` `sms_opt_in` records the server-owned appointment-SMS disclosure, normalized phone, client/stylist identifiers, timestamp, request IP/User-Agent, and public-booking/appointment audit metadata
+  - an SMS booking opt-in enables appointment transactional and reminder messages only; it does not enable marketing or rebooking SMS
   - invalid, inactive, wrong-stylist, or self-referral codes do not block booking
   - valid non-self referrals write referral fields to the appointment
   - valid referrals also write original referral fields to a newly created client

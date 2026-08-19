@@ -168,6 +168,7 @@ const payload = {
   guest_phone: phone,
   booking_context_token: bookingContextToken || undefined,
   referral_code: referralCode || undefined,
+  sms_opt_in: smsOptIn,
   notes: notes || undefined
 };
 ```
