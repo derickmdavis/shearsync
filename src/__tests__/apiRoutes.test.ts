@@ -45,7 +45,10 @@ const { publicBookingSmsConsent } =
   require("../lib/publicBookingSmsConsent") as typeof import("../lib/publicBookingSmsConsent");
 const { errorHandler } = require("../middleware/errorHandler") as typeof import("../middleware/errorHandler");
 const { requireAuth } = require("../middleware/auth") as typeof import("../middleware/auth");
+const { requireActiveAccount } = require("../middleware/accountAccess") as typeof import("../middleware/accountAccess");
 const { validate } = require("../middleware/validate") as typeof import("../middleware/validate");
+const { apiRouter } = require("../routes") as typeof import("../routes");
+const { feedbackRouter } = require("../routes/feedbackRoutes") as typeof import("../routes/feedbackRoutes");
 const {
   createPublicBookingIntakeSchema,
   createPublicBookingSchema,
@@ -315,6 +318,17 @@ const runValidation = async (
 };
 
 describe("API handlers", () => {
+  it("mounts authenticated feedback before the active-account gate", () => {
+    const layers = (apiRouter as unknown as { stack: Array<{ handle: unknown }> }).stack;
+    const authIndex = layers.findIndex((layer) => layer.handle === requireAuth);
+    const feedbackIndex = layers.findIndex((layer) => layer.handle === feedbackRouter);
+    const activeAccountIndex = layers.findIndex((layer) => layer.handle === requireActiveAccount);
+
+    assert.ok(authIndex >= 0);
+    assert.ok(feedbackIndex > authIndex);
+    assert.ok(feedbackIndex < activeAccountIndex);
+  });
+
   it("defaults auth mode to production and disables dev auth fallback", () => {
     const parsed = parseEnv({
       SUPABASE_URL: env.SUPABASE_URL,

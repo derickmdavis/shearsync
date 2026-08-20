@@ -59,11 +59,19 @@ export type PublicRateLimitPolicy =
   | "manage_read"
   | "manage_mutation";
 
+export type AuthenticatedRateLimitPolicy = "feedback_submit";
+
 interface PublicRateLimiterOptions {
   policy: PublicRateLimitPolicy;
   windowMs: number;
   limit: number;
   manageLinkResponse?: boolean;
+}
+
+interface AuthenticatedRateLimiterOptions {
+  policy: AuthenticatedRateLimitPolicy;
+  windowMs: number;
+  limit: number;
 }
 
 const createRateLimitStore = (windowMs: number): Store | undefined => {
@@ -103,6 +111,25 @@ export const createPublicRateLimiter = ({
         429,
         manageLinkResponse ? manageLinkTooManyRequestsResponse : defaultTooManyRequestsResponse
       );
+    }
+  });
+
+export const createAuthenticatedRateLimiter = ({
+  policy,
+  windowMs,
+  limit
+}: AuthenticatedRateLimiterOptions) =>
+  rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    passOnStoreError: false,
+    store: createRateLimitStore(windowMs),
+    keyGenerator: (req: Request) => [policy, req.auth?.userId ?? "missing-auth"].join(":"),
+    handler: (_req, res) => {
+      sendJson(res, 429, defaultTooManyRequestsResponse);
     }
   });
 
@@ -154,4 +181,10 @@ export const appointmentManageMutationRateLimiter = createPublicRateLimiter({
   windowMs: minutes(15),
   limit: 5,
   manageLinkResponse: true
+});
+
+export const feedbackSubmissionRateLimiter = createAuthenticatedRateLimiter({
+  policy: "feedback_submit",
+  windowMs: minutes(60),
+  limit: 10
 });

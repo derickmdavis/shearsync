@@ -36,6 +36,14 @@ const REQUIRED_TABLE_COLUMNS = {
     "billing_customer_id",
     "sms_delivery_enabled"
   ],
+  in_app_feedback: [
+    "id",
+    "user_id",
+    "rating",
+    "feedback_text",
+    "source",
+    "created_at"
+  ],
   clients: [
     "id",
     "user_id",

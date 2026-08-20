@@ -8,7 +8,8 @@ process.env.SUPABASE_URL = process.env.SUPABASE_URL ?? "https://example.supabase
 process.env.SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "anon-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "service-role-key";
 
-const { createPublicRateLimiter } = require("../middleware/rateLimit") as typeof import("../middleware/rateLimit");
+const { createAuthenticatedRateLimiter, createPublicRateLimiter } =
+  require("../middleware/rateLimit") as typeof import("../middleware/rateLimit");
 const { app: apiApp } = require("../app") as typeof import("../app");
 
 interface CapturedResponse {
@@ -17,7 +18,7 @@ interface CapturedResponse {
   headers: Map<string, string | number | readonly string[]>;
 }
 
-const createMockRequest = (ip: string): Request => ({
+const createMockRequest = (ip: string, userId?: string): Request => ({
   ip,
   socket: {
     remoteAddress: ip
@@ -27,7 +28,8 @@ const createMockRequest = (ip: string): Request => ({
       return name === "trust proxy" ? 1 : undefined;
     }
   },
-  headers: {}
+  headers: {},
+  auth: userId ? { userId, source: "jwt" } : undefined
 }) as unknown as Request;
 
 const createMockResponse = (): { captured: CapturedResponse; res: Response } => {
@@ -69,10 +71,11 @@ const createMockResponse = (): { captured: CapturedResponse; res: Response } => 
 };
 
 const runLimiter = async (
-  limiter: ReturnType<typeof createPublicRateLimiter>,
-  ip = "203.0.113.10"
+  limiter: ReturnType<typeof createPublicRateLimiter> | ReturnType<typeof createAuthenticatedRateLimiter>,
+  ip = "203.0.113.10",
+  userId?: string
 ): Promise<CapturedResponse> => {
-  const req = createMockRequest(ip);
+  const req = createMockRequest(ip, userId);
   const { captured, res } = createMockResponse();
 
   await new Promise<void>((resolve, reject) => {
@@ -140,5 +143,21 @@ describe("public rate limiters", () => {
       reason: "unavailable",
       message: "This appointment link is invalid or expired. Please contact your stylist."
     });
+  });
+
+  it("limits feedback by authenticated user rather than IP address", async () => {
+    const limiter = createAuthenticatedRateLimiter({
+      policy: "feedback_submit",
+      windowMs: 60_000,
+      limit: 1
+    });
+
+    const firstResponse = await runLimiter(limiter, "203.0.113.10", "user-one");
+    const secondResponse = await runLimiter(limiter, "203.0.113.11", "user-one");
+    const otherUserResponse = await runLimiter(limiter, "203.0.113.10", "user-two");
+
+    assert.equal(firstResponse.statusCode, 200);
+    assert.equal(secondResponse.statusCode, 429);
+    assert.equal(otherUserResponse.statusCode, 200);
   });
 });

@@ -82,6 +82,26 @@ create unique index if not exists users_billing_provider_customer_unique_idx
   on public.users (billing_provider, billing_customer_id)
   where billing_provider is not null and billing_customer_id is not null;
 
+create table if not exists public.in_app_feedback (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  rating smallint not null,
+  feedback_text text,
+  source text not null default 'mobile_app',
+  created_at timestamptz not null default now(),
+  constraint in_app_feedback_rating_check check (rating between 1 and 3),
+  constraint in_app_feedback_text_length_check
+    check (feedback_text is null or char_length(feedback_text) <= 4000),
+  constraint in_app_feedback_source_check check (source in ('mobile_app'))
+);
+
+create index if not exists in_app_feedback_created_at_idx
+  on public.in_app_feedback(created_at desc);
+create index if not exists in_app_feedback_user_created_at_idx
+  on public.in_app_feedback(user_id, created_at desc);
+create index if not exists in_app_feedback_rating_created_at_idx
+  on public.in_app_feedback(rating, created_at desc);
+
 create table if not exists public.clients (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -1639,6 +1659,7 @@ create index if not exists global_email_unsubscribes_opted_out_at_idx
 create index if not exists automation_settings_user_id_idx on public.automation_settings(user_id);
 
 alter table public.users enable row level security;
+alter table public.in_app_feedback enable row level security;
 alter table public.clients enable row level security;
 alter table public.client_referral_links enable row level security;
 alter table public.referral_programs enable row level security;

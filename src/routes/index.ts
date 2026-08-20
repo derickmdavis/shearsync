@@ -19,6 +19,7 @@ import { campaignRouter } from "./campaignRoutes";
 import { clientRouter } from "./clientRoutes";
 import { communicationsRouter } from "./communicationsRoutes";
 import { dashboardRouter } from "./dashboardRoutes";
+import { feedbackRouter } from "./feedbackRoutes";
 import { healthRouter } from "./healthRoutes";
 import { internalRouter } from "./internalRoutes";
 import { insightsRouter } from "./insightsRoutes";
@@ -48,6 +49,8 @@ apiRouter.use("/me", requireAuth);
 apiRouter.use("/api", requireAuth);
 
 apiRouter.use(authRouter);
+// Feedback remains available to authenticated users whose account access has expired.
+apiRouter.use("/api/feedback", feedbackRouter);
 apiRouter.use("/api/account", accountRouter);
 apiRouter.use("/api/admin", adminRouter);
 apiRouter.use("/api", requireActiveAccount);

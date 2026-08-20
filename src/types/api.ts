@@ -313,6 +313,13 @@ export interface WaitlistEntry {
   updatedAt: string;
 }
 
+export interface InAppFeedback {
+  id: string;
+  rating: number;
+  feedbackText: string | null;
+  createdAt: string;
+}
+
 export interface PublicAvailabilitySlot {
   start: string;
   end: string;
