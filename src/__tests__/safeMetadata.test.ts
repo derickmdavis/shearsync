@@ -24,6 +24,7 @@ describe("safe metadata", () => {
       nested: {
         signedUrl: "https://example.supabase.co/object/sign/file.png?token=secret",
         payment_url: "https://venmo.com/example",
+        qr_image_display_url: "https://example.supabase.co/object/sign/file.png?token=secret",
         note: "Customer wrote jane@example.com from 10.1.2.3 with Bearer abc.def"
       }
     });
@@ -33,6 +34,7 @@ describe("safe metadata", () => {
     assert.deepEqual(sanitized.nested, {
       signedUrl: "[redacted]",
       payment_url: "[redacted]",
+      qr_image_display_url: "[redacted]",
       note: "Customer wrote [redacted] from [redacted] with [redacted]"
     });
   });

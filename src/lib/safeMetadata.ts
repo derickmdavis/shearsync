@@ -9,7 +9,7 @@ const MAX_STRING_LENGTH = 500;
 const MAX_SERIALIZED_BYTES = 16_000;
 
 const SENSITIVE_KEY_PATTERN =
-  /(^|_)(email|phone|message|body|token|authorization|ip)$|signed_?url$|payment_?url$|qr_image_(path|url)$/i;
+  /(^|_)(email|phone|message|body|token|authorization|ip)$|signed_?url$|payment_?url$|qr_image_(path|url|display_url)$/i;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const IP_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const PHONE_PATTERN = /(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/g;

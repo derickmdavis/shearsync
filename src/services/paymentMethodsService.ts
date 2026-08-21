@@ -3,7 +3,10 @@ import { supabaseAdmin } from "../lib/supabase";
 import type { PaymentProvider } from "../validators/paymentMethodsValidators";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
-import { paymentMethodQrStorageService } from "./paymentMethodQrStorageService";
+import {
+  PAYMENT_METHOD_QR_SIGNED_READ_EXPIRES_IN_SECONDS,
+  paymentMethodQrStorageService
+} from "./paymentMethodQrStorageService";
 import { recordProductTelemetry } from "./productTelemetry";
 
 type PaymentMethodPayload = {
@@ -33,12 +36,30 @@ const hasExternalPaymentTarget = (method: Row): boolean =>
   || Boolean(method.qr_image_url)
   || Boolean(method.qr_image_path);
 
-const normalizePaymentMethod = (method: Row): Row => ({
-  ...method,
-  payment_notice: "Payment is completed outside DripDesk. DripDesk does not process or verify this payment."
-});
+const normalizePaymentMethod = async (userId: string, method: Row): Promise<Row> => {
+  const qrImagePath = typeof method.qr_image_path === "string" && method.qr_image_path.length > 0
+    ? method.qr_image_path
+    : null;
+  if (qrImagePath) {
+    paymentMethodQrStorageService.assertQrPathMatches(userId, qrImagePath);
+  }
 
-const normalizePaymentMethods = (methods: RowList): RowList => methods.map(normalizePaymentMethod);
+  const qrImageDisplayUrl = qrImagePath
+    ? await paymentMethodQrStorageService.createSignedReadUrl(qrImagePath)
+    : null;
+
+  return {
+    ...method,
+    qr_image_display_url: qrImageDisplayUrl,
+    qr_image_display_url_expires_at: qrImagePath
+      ? new Date(Date.now() + PAYMENT_METHOD_QR_SIGNED_READ_EXPIRES_IN_SECONDS * 1000).toISOString()
+      : null,
+    payment_notice: "Payment is completed outside DripDesk. DripDesk does not process or verify this payment."
+  };
+};
+
+const normalizePaymentMethods = async (userId: string, methods: RowList): Promise<RowList> =>
+  Promise.all(methods.map((method) => normalizePaymentMethod(userId, method)));
 
 const withoutUndefined = (value: Row): Row =>
   Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined));
@@ -60,7 +81,7 @@ export const paymentMethodsService = {
       .order("created_at", { ascending: true });
 
     handleSupabaseError(error, "Unable to load payment shortcuts");
-    return normalizePaymentMethods(data ?? []);
+    return normalizePaymentMethods(userId, data ?? []);
   },
 
   async getOwned(userId: string, paymentMethodId: string): Promise<Row> {
@@ -127,7 +148,7 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to create payment shortcut");
-    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not created"));
+    const method = requireFound(data, "Payment shortcut was not created");
     await recordProductTelemetry({
       accountUserId: userId,
       actorUserId: userId,
@@ -142,7 +163,7 @@ export const paymentMethodsService = {
         is_default: method.is_default === true
       }
     });
-    return method;
+    return normalizePaymentMethod(userId, method);
   },
 
   async update(userId: string, paymentMethodId: string, updates: PaymentMethodUpdatePayload): Promise<Row> {
@@ -179,7 +200,7 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to update payment shortcut");
-    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not updated"));
+    const method = requireFound(data, "Payment shortcut was not updated");
     await recordProductTelemetry({
       accountUserId: userId,
       actorUserId: userId,
@@ -193,7 +214,7 @@ export const paymentMethodsService = {
         updated_fields: Object.keys(updates).filter((field) => !["payment_url", "qr_image_url", "qr_image_path", "instructions"].includes(field))
       }
     });
-    return method;
+    return normalizePaymentMethod(userId, method);
   },
 
   async remove(userId: string, paymentMethodId: string): Promise<Row> {
@@ -211,7 +232,7 @@ export const paymentMethodsService = {
       .single();
 
     handleSupabaseError(error, "Unable to deactivate payment shortcut");
-    const method = normalizePaymentMethod(requireFound(data, "Payment shortcut was not deactivated"));
+    const method = requireFound(data, "Payment shortcut was not deactivated");
     await recordProductTelemetry({
       accountUserId: userId,
       actorUserId: userId,
@@ -224,7 +245,7 @@ export const paymentMethodsService = {
         has_qr_image_path: Boolean(method.qr_image_path)
       }
     });
-    return method;
+    return normalizePaymentMethod(userId, method);
   },
 
   async reorder(userId: string, items: ReorderPaymentMethodItem[]): Promise<RowList> {
@@ -255,7 +276,7 @@ export const paymentMethodsService = {
       updatedMethods.push(requireFound(data, "Payment shortcut was not reordered"));
     }
 
-    return normalizePaymentMethods(updatedMethods);
+    return normalizePaymentMethods(userId, updatedMethods);
   },
 
   async createQrUploadIntent(userId: string, payload: {

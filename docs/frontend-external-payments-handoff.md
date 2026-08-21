@@ -51,7 +51,8 @@ Core UI:
 - Deactivate shortcut.
 - Mark one active shortcut as default.
 - Reorder shortcuts.
-- Upload or paste a QR image/link.
+- Enter a payment link and preview the QR code generated from that link.
+- Optionally support a legacy uploaded/external QR image as a fallback only.
 
 Do not add appointment-level payment-state controls.
 
@@ -75,8 +76,10 @@ type PaymentMethod = {
   provider: PaymentProvider;
   display_name: string;
   payment_url: string | null;
-  qr_image_url: string | null;
+  qr_image_url: string | null; // Persisted externally hosted QR image URL, if any.
   qr_image_path: string | null;
+  qr_image_display_url: string | null; // Response-only signed URL for a private uploaded QR image.
+  qr_image_display_url_expires_at: string | null;
   instructions: string | null;
   is_default: boolean;
   is_active: boolean;
@@ -86,6 +89,43 @@ type PaymentMethod = {
   payment_notice: string;
 };
 ```
+
+Compatibility and security rules:
+
+- `qr_image_url` is a durable external image URL and remains unchanged in responses.
+- `qr_image_display_url` is a short-lived, response-only URL generated from `qr_image_path`; it is never accepted or persisted by create/update requests.
+- Render uploaded private QR images with `qr_image_display_url ?? qr_image_url`.
+- Do not persist, log, send to analytics, or reuse an expired `qr_image_display_url`. Refetch the payment methods to receive a fresh URL.
+
+## Product Decision: Payment Links Generate QR Codes Locally
+
+The primary flow is link-first:
+
+1. The stylist enters a payment link in Settings.
+2. The app persists that link as `payment_url`.
+3. The appointment payment sheet generates and displays a QR code whose content is exactly `payment_url`.
+
+No QR image is uploaded, stored, or fetched for this primary flow. The backend does not generate QR codes; it validates and stores the payment link. Use a frontend QR-code component/library appropriate to the app platform and pass it the raw `payment_url` value.
+
+Private QR-image fields are supported only for older or custom uploaded QR assets:
+
+- `qr_image_display_url`: preferred, short-lived signed URL for a private uploaded QR image.
+- `qr_image_url`: durable externally hosted QR image URL.
+- `qr_image_path`: backend-managed private Storage object path; do not construct a URL from it.
+
+For the appointment sheet, use this precedence:
+
+```ts
+const qrSource = paymentMethod.payment_url
+  ? { kind: "generated" as const, value: paymentMethod.payment_url }
+  : paymentMethod.qr_image_display_url
+    ? { kind: "image" as const, value: paymentMethod.qr_image_display_url }
+    : paymentMethod.qr_image_url
+      ? { kind: "image" as const, value: paymentMethod.qr_image_url }
+      : null;
+```
+
+Generate the code only from a `payment_url`; do not try to generate a QR from `qr_image_path`, a signed image URL, or the payment method display name.
 
 ## Payment Method Endpoints
 
@@ -118,6 +158,8 @@ Frontend behavior:
 - Inactive methods should be hidden unless the settings UI has an include inactive or archive view.
 - Use `display_name` for the visible label.
 - Use provider-specific labels/icons in the UI, but keep the backend enum value as the persisted provider.
+- Render an uploaded private QR image from `qr_image_display_url`; use `qr_image_url` only as the externally hosted fallback.
+- Treat each list response as a fresh snapshot. If an uploaded QR image fails to load, refetch this endpoint once to refresh its signed display URL.
 
 ### Create Payment Shortcut
 
@@ -161,8 +203,9 @@ Validation notes:
 
 Recommended form behavior:
 
-- For link-based providers, show a URL field.
-- For QR-based setup, show QR upload.
+- For link-based providers, show a URL field and a local QR preview generated from the draft URL.
+- Save only `payment_url` for the normal link-first flow. Do not upload the generated QR image and do not send `qr_image_display_url` or `qr_image_display_url_expires_at`.
+- Keep QR upload as an optional compatibility feature only when the stylist explicitly supplies an image that cannot be represented by a link.
 - For `cash`, allow no URL/QR.
 - For `other`, allow no URL/QR but encourage instructions.
 - Include a default toggle.
@@ -252,7 +295,11 @@ Frontend behavior:
 - Optimistic drag-and-drop is fine, but reconcile from response.
 - Backend verifies every ID belongs to the authenticated stylist.
 
-## QR Upload Intent
+## Optional Uploaded QR Image Support
+
+Do not call this endpoint for the normal link-to-QR flow. It is only for a custom QR image that the frontend cannot generate from `payment_url`.
+
+### QR Upload Intent
 
 ### Create Upload Intent
 
@@ -323,7 +370,7 @@ await api.post("/api/payment-methods", {
 });
 ```
 
-Note: this endpoint creates a signed upload URL only. It does not create a public image URL. If the frontend needs to display saved QR images later, add a signed-read endpoint in a follow-up.
+The bucket remains private. Subsequent payment-method responses include a short-lived `qr_image_display_url` for an uploaded `qr_image_path`; refetch payment methods if that URL expires.
 
 ## Provider Labels
 
@@ -368,17 +415,56 @@ Unable to save payment shortcut. Please try again.
 
 Do not expose backend internals, storage paths, or stack traces.
 
+For the appointment sheet, distinguish these states:
+
+- `payment_url` present: generate the QR locally; no signed URL is required.
+- `qr_image_display_url` present: render the signed image; on a load failure refetch `GET /api/payment-methods` once.
+- Neither source present: show a concise unavailable state and a link back to payment-shortcut settings for the stylist. Do not display a QR for arbitrary text.
+
+## Appointment Sheet Implementation
+
+Load active payment methods through `GET /api/payment-methods` when the appointment payment sheet opens or when the screen becomes active. Select the default method when one exists; otherwise follow the app's existing chooser behavior.
+
+```ts
+const methods = (await api.get<ListPaymentMethodsResponse>("/api/payment-methods")).data;
+const selected = methods.find((method) => method.is_default) ?? methods[0] ?? null;
+
+if (selected?.payment_url) {
+  return <QrCode value={selected.payment_url} />;
+}
+
+const uploadedQrUrl = selected?.qr_image_display_url ?? selected?.qr_image_url;
+if (uploadedQrUrl) {
+  return <Image source={{ uri: uploadedQrUrl }} />;
+}
+
+return <PaymentMethodUnavailable />;
+```
+
+Do not cache signed image URLs as durable state. It is safe to keep them in in-memory screen state for the current session; replace them with the next API response. Never include payment URLs, signed URLs, or QR paths in analytics events or diagnostic logs.
+
+## Frontend Test Matrix
+
+1. Saving a valid `payment_url` creates/updates a shortcut and immediately renders a locally generated QR in the appointment sheet.
+2. The QR value exactly equals `payment_url`, including query parameters; it is not a QR of a provider label or image URL.
+3. Link-only methods do not call `qr-upload-intent` and do not require `qr_image_display_url`.
+4. An uploaded private QR image renders from `qr_image_display_url`.
+5. A failed private-image load causes one payment-method refetch, then shows a safe unavailable state if the refreshed image also fails.
+6. A response-only `qr_image_display_url` and expiry are never included in create/update payloads, persistent storage, analytics, or logs.
+7. An external `qr_image_url` continues to render as the fallback when no payment link or private display URL is available.
+8. Deactivated methods are not shown in the appointment payment sheet.
+
 ## Frontend Implementation Checklist
 
 1. Add API client methods for `/api/payment-methods`.
 2. Add `PaymentProvider` and `PaymentMethod` types.
-3. Build payment shortcuts settings UI.
-4. Add QR upload flow using `qr-upload-intent`.
-5. Preserve the external-payment copy boundary.
-6. Add frontend tests for create/edit/deactivate/reorder shortcut flows.
+3. Build a link-first payment-shortcuts settings UI with a local QR preview.
+4. Generate the appointment QR from `payment_url` and implement the uploaded-image fallback order above.
+5. Add QR upload only if custom uploaded QR images remain a product requirement.
+6. Preserve the external-payment copy boundary.
+7. Add the test matrix above.
 
 ## Known Follow-Ups
 
-- Add signed-read support for private QR images if the frontend needs to render uploaded QR files from `qr_image_path`.
 - Consider exposing a current default shortcut in appointment detail responses if the frontend wants fewer round trips.
 - Consider adding frontend analytics for payment shortcut creation.

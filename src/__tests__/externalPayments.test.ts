@@ -12,7 +12,10 @@ const { installMockSupabase } =
   require("./helpers/mockSupabase") as typeof import("./helpers/mockSupabase");
 const { paymentMethodsService } =
   require("../services/paymentMethodsService") as typeof import("../services/paymentMethodsService");
-const { qrUploadIntentSchema, createPaymentMethodSchema } =
+const { paymentMethodQrStorageService } =
+  require("../services/paymentMethodQrStorageService") as typeof import("../services/paymentMethodQrStorageService");
+const { ApiError } = require("../lib/errors") as typeof import("../lib/errors");
+const { qrUploadIntentSchema, createPaymentMethodSchema, updatePaymentMethodSchema } =
   require("../validators/paymentMethodsValidators") as typeof import("../validators/paymentMethodsValidators");
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -35,10 +38,11 @@ const baseState = () => ({
   product_events: [] as Record<string, unknown>[]
 });
 
-const installStorageMock = () => {
+const installStorageMock = (options: { signedReadError?: { message: string; statusCode?: string } } = {}) => {
   const calls = {
     bucket: [] as string[],
-    createSignedUploadUrl: [] as string[]
+    createSignedUploadUrl: [] as string[],
+    createSignedUrl: [] as Array<{ path: string; expiresInSeconds: number }>
   };
   const fromMock = mock.method(supabaseAdmin.storage, "from", (bucket: string) => {
     calls.bucket.push(bucket);
@@ -52,6 +56,15 @@ const installStorageMock = () => {
             path
           },
           error: null
+        };
+      },
+      createSignedUrl: async (path: string, expiresInSeconds: number) => {
+        calls.createSignedUrl.push({ path, expiresInSeconds });
+        return {
+          data: {
+            signedUrl: `https://example.supabase.co/read/${path}?token=test`
+          },
+          error: options.signedReadError ?? null
         };
       }
     };
@@ -95,17 +108,31 @@ describe("external payment shortcuts", () => {
 
   it("allows an authenticated user to create a payment shortcut with a QR image path", async () => {
     const db = installMockSupabase(baseState());
+    const storage = installStorageMock();
+    const storagePath = `${USER_ID}/${QR_IMAGE_ID}.png`;
 
     try {
       const method = await paymentMethodsService.create(USER_ID, {
         provider: "zelle",
         display_name: "Zelle QR",
-        qr_image_path: `${USER_ID}/${QR_IMAGE_ID}.png`
+        qr_image_path: storagePath
       });
 
       assert.equal(method.provider, "zelle");
-      assert.equal(method.qr_image_path, `${USER_ID}/${QR_IMAGE_ID}.png`);
+      assert.equal(method.qr_image_path, storagePath);
+      assert.equal(method.qr_image_url, null);
+      assert.equal(method.qr_image_display_url, `https://example.supabase.co/read/${storagePath}?token=test`);
+      assert.match(String(method.qr_image_display_url_expires_at), /^\d{4}-\d{2}-\d{2}T/);
+      assert.equal(db.state.payment_methods[0]?.qr_image_url, null);
+      assert.deepEqual(db.state.product_events[0]?.metadata, {
+        provider: "zelle",
+        has_payment_url: false,
+        has_qr_image_url: false,
+        has_qr_image_path: true,
+        is_default: false
+      });
     } finally {
+      storage.restore();
       db.restore();
     }
   });
@@ -325,6 +352,108 @@ describe("external payment shortcuts", () => {
     }
   });
 
+  it("returns fresh signed QR display URLs from list, update, and reorder responses", async () => {
+    const storagePath = `${USER_ID}/${QR_IMAGE_ID}.png`;
+    const state = baseState();
+    state.payment_methods.push({
+      id: PAYMENT_METHOD_ID,
+      user_id: USER_ID,
+      provider: "zelle",
+      display_name: "Zelle QR",
+      qr_image_url: null,
+      qr_image_path: storagePath,
+      is_active: true,
+      is_default: false,
+      sort_order: 0,
+      created_at: "2026-06-01T00:00:00.000Z"
+    });
+    const db = installMockSupabase(state);
+    const storage = installStorageMock();
+    const expectedUrl = `https://example.supabase.co/read/${storagePath}?token=test`;
+
+    try {
+      const listed = await paymentMethodsService.list(USER_ID);
+      const updated = await paymentMethodsService.update(USER_ID, PAYMENT_METHOD_ID, { instructions: "Scan to pay" });
+      const reordered = await paymentMethodsService.reorder(USER_ID, [{ id: PAYMENT_METHOD_ID, sort_order: 1 }]);
+
+      for (const method of [listed[0], updated, reordered[0]]) {
+        assert.equal(method?.qr_image_url, null);
+        assert.equal(method?.qr_image_display_url, expectedUrl);
+        assert.match(String(method?.qr_image_display_url_expires_at), /^\d{4}-\d{2}-\d{2}T/);
+      }
+      assert.deepEqual(storage.calls.createSignedUrl, [
+        { path: storagePath, expiresInSeconds: 300 },
+        { path: storagePath, expiresInSeconds: 300 },
+        { path: storagePath, expiresInSeconds: 300 }
+      ]);
+      assert.equal(db.state.payment_methods[0]?.qr_image_url, null);
+    } finally {
+      storage.restore();
+      db.restore();
+    }
+  });
+
+  it("preserves an externally hosted QR image URL without a signed display URL", async () => {
+    const db = installMockSupabase(baseState());
+
+    try {
+      const method = await paymentMethodsService.create(USER_ID, {
+        provider: "zelle",
+        display_name: "Hosted Zelle QR",
+        qr_image_url: "https://images.example.com/zelle-qr.png"
+      });
+
+      assert.equal(method.qr_image_url, "https://images.example.com/zelle-qr.png");
+      assert.equal(method.qr_image_display_url, null);
+      assert.equal(method.qr_image_display_url_expires_at, null);
+    } finally {
+      db.restore();
+    }
+  });
+
+  it("does not sign a QR path that does not belong to the authenticated owner", async () => {
+    const state = baseState();
+    state.payment_methods.push({
+      id: PAYMENT_METHOD_ID,
+      user_id: USER_ID,
+      provider: "zelle",
+      display_name: "Invalid QR ownership",
+      qr_image_path: `${OTHER_USER_ID}/${QR_IMAGE_ID}.png`,
+      is_active: true,
+      is_default: false,
+      sort_order: 0
+    });
+    const db = installMockSupabase(state);
+    const storage = installStorageMock();
+
+    try {
+      await assert.rejects(() => paymentMethodsService.list(USER_ID), /QR path must be generated by this account/);
+      assert.deepEqual(storage.calls.createSignedUrl, []);
+    } finally {
+      storage.restore();
+      db.restore();
+    }
+  });
+
+  it("does not accept response-only signed QR display fields in payment method requests", () => {
+    const created = createPaymentMethodSchema.parse({
+      provider: "zelle",
+      display_name: "Zelle QR",
+      qr_image_url: "https://images.example.com/zelle-qr.png",
+      qr_image_display_url: "https://example.supabase.co/read/private.png?token=secret",
+      qr_image_display_url_expires_at: "2026-08-20T00:05:00.000Z"
+    });
+    const updated = updatePaymentMethodSchema.parse({
+      qr_image_display_url: "https://example.supabase.co/read/private.png?token=secret",
+      qr_image_display_url_expires_at: "2026-08-20T00:05:00.000Z"
+    });
+
+    assert.equal("qr_image_display_url" in created, false);
+    assert.equal("qr_image_display_url_expires_at" in created, false);
+    assert.equal("qr_image_display_url" in updated, false);
+    assert.equal("qr_image_display_url_expires_at" in updated, false);
+  });
+
   it("QR upload intent rejects unsupported MIME types", () => {
     assert.throws(
       () => qrUploadIntentSchema.parse({
@@ -360,6 +489,39 @@ describe("external payment shortcuts", () => {
       assert.match(intent.storage_path, new RegExp(`^${USER_ID}/.+\\.png$`));
       assert.equal(intent.upload_url.includes(intent.storage_path), true);
       assert.equal(intent.expires_in, 7200);
+    } finally {
+      storage.restore();
+    }
+  });
+
+  it("creates a five-minute signed read URL for a private QR image", async () => {
+    const storage = installStorageMock();
+    const storagePath = `${USER_ID}/${QR_IMAGE_ID}.png`;
+
+    try {
+      const signedUrl = await paymentMethodQrStorageService.createSignedReadUrl(storagePath);
+
+      assert.equal(signedUrl, `https://example.supabase.co/read/${storagePath}?token=test`);
+      assert.deepEqual(storage.calls.bucket, ["payment-method-qrs"]);
+      assert.deepEqual(storage.calls.createSignedUrl, [{ path: storagePath, expiresInSeconds: 300 }]);
+    } finally {
+      storage.restore();
+    }
+  });
+
+  it("returns a safe API error when private QR read signing fails", async () => {
+    const storage = installStorageMock({
+      signedReadError: { message: "Storage unavailable", statusCode: "503" }
+    });
+    const storagePath = `${USER_ID}/${QR_IMAGE_ID}.png`;
+
+    try {
+      await assert.rejects(
+        () => paymentMethodQrStorageService.createSignedReadUrl(storagePath),
+        (error: unknown) => error instanceof ApiError
+          && error.statusCode === 500
+          && error.message === "Unable to create payment shortcut QR read URL"
+      );
     } finally {
       storage.restore();
     }
