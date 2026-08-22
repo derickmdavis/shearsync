@@ -173,6 +173,8 @@ describe("Account deletion requests", () => {
       assert.equal(supabase.state.account_deletion_requests.length, 1);
       assert.equal(supabase.state.account_deletion_requests[0].user_id, userId);
       assert.equal(supabase.state.account_deletion_requests[0].reason, "No longer need the app");
+      assert.equal(supabase.state.users[0].account_status, "inactive");
+      assert.equal(supabase.state.users[0].deletion_status, "pending");
       assert.equal(supabase.state.stylists.find((stylist) => stylist.user_id === userId)?.booking_enabled, false);
       assert.equal(supabase.state.stylists.find((stylist) => stylist.user_id === otherUserId)?.booking_enabled, true);
       assert.equal(supabase.state.rebook_nudges[0].status, "cancelled");
@@ -216,6 +218,9 @@ describe("Account deletion requests", () => {
         message: "Your account deletion request has already been received."
       });
       assert.equal(supabase.state.stylists.find((stylist) => stylist.user_id === userId)?.booking_enabled, false);
+      assert.equal(supabase.state.rebook_nudges[0].status, "cancelled");
+      assert.equal(supabase.state.birthday_reminders[0].status, "cancelled");
+      assert.equal(supabase.state.appointment_email_events[0].status, "skipped");
       assert.equal(supabase.state.account_deletion_audit_events.length, 1);
       assert.equal(supabase.state.account_deletion_audit_events[0].event_type, "duplicate_request");
     } finally {

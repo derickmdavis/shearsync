@@ -12,7 +12,8 @@ export const JOB_NAMES = [
   "api-request-logs-cleanup",
   "client-purge-worker",
   "appointment-image-cleanup-worker",
-  "campaign-delivery-worker"
+  "campaign-delivery-worker",
+  "account-deletion-worker"
 ] as const;
 
 export type JobName = typeof JOB_NAMES[number];

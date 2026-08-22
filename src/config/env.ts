@@ -24,6 +24,8 @@ const envSchema = z.object({
   WEB_APP_URL: z.string().url().optional(),
   REDIS_URL: z.string().url().optional(),
   INTERNAL_API_SECRET: z.string().min(16).optional(),
+  ACCOUNT_DELETION_PROCESSING_ENABLED: envBooleanSchema,
+  ACCOUNT_DELETION_AUDIT_HASH_SECRET: z.string().min(32).optional(),
   ADMIN_API_KEY: z.string().min(16).optional(),
   API_REQUEST_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   SMS_INBOUND_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(90),

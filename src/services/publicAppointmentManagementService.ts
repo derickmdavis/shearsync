@@ -17,6 +17,7 @@ import { businessTimeZoneService } from "./businessTimeZoneService";
 import { schedulingPolicyService } from "./schedulingPolicyService";
 import { usersService } from "./usersService";
 import { bookingErrorEventsService } from "./bookingErrorEventsService";
+import { accountAccessService } from "./accountAccessService";
 
 export interface PublicManagedAppointment {
   appointment_id: string;
@@ -475,6 +476,10 @@ export const publicAppointmentManagementService = {
       throw new ApiError(400, invalidManagementLinkMessage);
     }
 
+    if (!(await accountAccessService.isAccountActive(tokenContext.stylistId))) {
+      throw new ApiError(404, invalidManagementLinkMessage);
+    }
+
     assertManageableAppointment(resolvedAppointment);
 
     const [{ data: client, error: clientError }, { data: stylist, error: stylistError }, user, timeZone] =
@@ -530,6 +535,10 @@ export const publicAppointmentManagementService = {
 
     handleSupabaseError(appointmentError, "Unable to load managed appointment");
     if (!appointment || (clientId && appointment.client_id !== clientId)) {
+      return null;
+    }
+
+    if (!(await accountAccessService.isAccountActive(userId))) {
       return null;
     }
 

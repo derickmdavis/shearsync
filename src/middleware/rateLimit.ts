@@ -59,7 +59,7 @@ export type PublicRateLimitPolicy =
   | "manage_read"
   | "manage_mutation";
 
-export type AuthenticatedRateLimitPolicy = "feedback_submit";
+export type AuthenticatedRateLimitPolicy = "feedback_submit" | "account_deletion";
 
 interface PublicRateLimiterOptions {
   policy: PublicRateLimitPolicy;
@@ -187,4 +187,10 @@ export const feedbackSubmissionRateLimiter = createAuthenticatedRateLimiter({
   policy: "feedback_submit",
   windowMs: minutes(60),
   limit: 10
+});
+
+export const accountDeletionRateLimiter = createAuthenticatedRateLimiter({
+  policy: "account_deletion",
+  windowMs: minutes(60),
+  limit: 3
 });

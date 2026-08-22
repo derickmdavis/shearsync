@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { env } from "../config/env";
 import { hashToken } from "../lib/communications";
+import { CAMPAIGN_ATTRIBUTION_WINDOW_DAYS } from "../lib/outreachContracts";
 import { resolvePublicBookingContextToken } from "../lib/publicBookingContext";
 import { campaignAttributionService } from "../services/campaignAttributionService";
 import { installMockSupabase } from "./helpers/mockSupabase";
@@ -11,9 +12,13 @@ const campaignId = "22222222-2222-4222-8222-222222222222";
 const runId = "33333333-3333-4333-8333-333333333333";
 const recipientId = "44444444-4444-4444-8444-444444444444";
 const clientId = "55555555-5555-4555-8555-555555555555";
+const queuedAt = new Date(Date.now() - 60_000).toISOString();
+const campaignExpiresAt = new Date(
+  Date.parse(queuedAt) + CAMPAIGN_ATTRIBUTION_WINDOW_DAYS * 24 * 60 * 60 * 1000
+).toISOString();
 
 const state = (linkType: "booking_link" | "referral_link") => ({
-  users: [{ id: userId }],
+  users: [{ id: userId, account_status: "active" }],
   stylists: [{ id: "stylist-1", user_id: userId, slug: "sara-style", booking_enabled: true }],
   clients: [{ id: clientId, user_id: userId, first_name: "Sara", email: "sara@example.com", deleted_at: null }],
   campaigns: [{ id: campaignId, user_id: userId, status: "scheduled", link_type: linkType }],
@@ -21,7 +26,7 @@ const state = (linkType: "booking_link" | "referral_link") => ({
   campaign_recipients: [{
     id: recipientId, campaign_id: campaignId, campaign_run_id: runId, user_id: userId, client_id: clientId,
     eligibility_status: "eligible", booking_tracking_token_hash: hashToken("opaque-campaign-token"),
-    queued_at: "2026-07-01T00:00:00.000Z"
+    queued_at: queuedAt
   }],
   client_referral_links: [{
     id: "66666666-6666-4666-8666-666666666666", user_id: userId, client_id: clientId,
@@ -39,7 +44,7 @@ describe("campaign booking attribution", () => {
       const url = new URL(resolved.redirect_url);
       const context = resolvePublicBookingContextToken(url.searchParams.get("booking_context_token") ?? undefined, "sara-style");
       assert.deepEqual(context?.campaignAttribution, {
-        campaignId, campaignRunId: runId, campaignRecipientId: recipientId, expiresAt: "2026-07-31T00:00:00.000Z"
+        campaignId, campaignRunId: runId, campaignRecipientId: recipientId, expiresAt: campaignExpiresAt
       });
       assert.equal(url.searchParams.has("ref"), false);
       await assert.rejects(() => campaignAttributionService.resolvePublicLink("forged-campaign-id"), { statusCode: 404 });

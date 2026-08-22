@@ -3,7 +3,7 @@ import { isAccountStatus, type AccountAccess, type AccountStatus } from "../lib/
 import { supabaseAdmin } from "../lib/supabase";
 import { handleSupabaseError } from "./db";
 
-const ACCOUNT_ACCESS_COLUMNS = "account_status, activated_at, current_period_ends_at, deactivated_at";
+const ACCOUNT_ACCESS_COLUMNS = "account_status, deletion_status, activated_at, current_period_ends_at, deactivated_at";
 
 const asIsoOrNull = (value: unknown): string | null => typeof value === "string" ? value : null;
 
@@ -26,12 +26,19 @@ const toAccountAccess = (user: Record<string, unknown> | null): AccountAccess =>
   // Production fails closed for missing accounts; this branch keeps unrelated
   // unit fixtures from becoming billing fixtures.
   if (!user && process.env.NODE_ENV === "test") {
-    return { status: "active", isActive: true, activatedAt: null, currentPeriodEndsAt: null, deactivatedAt: null };
+    return {
+      status: "active", isActive: true, deletionStatus: "active",
+      activatedAt: null, currentPeriodEndsAt: null, deactivatedAt: null
+    };
   }
   const status: AccountStatus = isAccountStatus(user?.account_status) ? user.account_status : "inactive";
+  const deletionStatus = ["active", "pending", "processing", "failed"].includes(String(user?.deletion_status))
+    ? String(user?.deletion_status) as AccountAccess["deletionStatus"]
+    : "active";
   return {
     status,
     isActive: status === "active",
+    deletionStatus,
     activatedAt: asIsoOrNull(user?.activated_at),
     currentPeriodEndsAt: asIsoOrNull(user?.current_period_ends_at),
     deactivatedAt: asIsoOrNull(user?.deactivated_at)
@@ -98,7 +105,16 @@ export const accountAccessService = {
   },
 
   async assertAccountActive(userId: string): Promise<void> {
-    if (!(await this.isAccountActive(userId))) {
+    const access = await this.getAccountAccess(userId);
+    if (access.deletionStatus === "pending" || access.deletionStatus === "processing") {
+      throw new ApiError(
+        403,
+        "Account deletion is pending.",
+        { code: "account_deletion_pending" },
+        { exposeDetails: true }
+      );
+    }
+    if (!access.isActive) {
       throw new ApiError(
         403,
         "An active subscription is required to use ShearSync.",

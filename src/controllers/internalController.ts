@@ -14,8 +14,16 @@ import { smsDeliveryService } from "../services/smsDeliveryService";
 import { appointmentSmsRemindersService } from "../services/appointmentSmsRemindersService";
 import { appointmentSmsConfirmationsService } from "../services/appointmentSmsConfirmationsService";
 import { accountAccessService } from "../services/accountAccessService";
+import { accountDeletionProcessorService } from "../services/accountDeletionProcessorService";
 
 export const internalController = {
+  async processAccountDeletions(req: Request, res: Response) {
+    const query = req.query as { limit?: number };
+    const result = await accountDeletionProcessorService.processDue({ limit: query.limit });
+    logger.info("account_deletion_processing_completed", { requestId: req.requestId, ...result });
+    res.json({ data: result });
+  },
+
   async expireAccountAccess(req: Request, res: Response) {
     const result = await accountAccessService.expireEndedAccounts();
     logger.info("account_access_expiration_completed", { requestId: req.requestId, ...result });

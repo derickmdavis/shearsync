@@ -27,6 +27,13 @@ type StorageErrorShape = {
   error?: string;
 };
 
+const STORAGE_DELETE_BATCH_SIZE = 100;
+
+const isMissingObjectError = (error: StorageErrorShape | null): boolean => {
+  const statusCode = typeof error?.statusCode === "number" ? String(error.statusCode) : error?.statusCode;
+  return statusCode === "404" || /not found/i.test(error?.message ?? "");
+};
+
 const toStorageApiErrorDetails = (error: StorageErrorShape | null) =>
   error
     ? {
@@ -106,5 +113,44 @@ export const paymentMethodQrStorageService = {
       storage_path: storagePath,
       expires_in: PAYMENT_METHOD_QR_UPLOAD_EXPIRES_IN_SECONDS
     };
+  },
+
+  async deleteUserPrefix(userId: string): Promise<{ deletedPaths: string[]; failedPaths: string[] }> {
+    const prefix = userId;
+    const paths: string[] = [];
+    let offset = 0;
+
+    for (;;) {
+      const { data, error } = await supabaseAdmin.storage.from(PAYMENT_METHOD_QRS_BUCKET).list(prefix, {
+        limit: STORAGE_DELETE_BATCH_SIZE,
+        offset,
+        sortBy: { column: "name", order: "asc" }
+      });
+      if (error) throw new ApiError(500, "Unable to list payment shortcut QR objects", toStorageApiErrorDetails(error));
+      const objects = data ?? [];
+      if (objects.length === 0) break;
+      for (const object of objects) {
+        const record = object as unknown as Record<string, unknown>;
+        if (record.id !== null && record.id !== undefined && record.metadata) {
+          paths.push(`${prefix}/${String(record.name ?? "")}`);
+        }
+      }
+      if (objects.length < STORAGE_DELETE_BATCH_SIZE) break;
+      offset += objects.length;
+    }
+
+    const deletedPaths: string[] = [];
+    const failedPaths: string[] = [];
+    for (let index = 0; index < paths.length; index += STORAGE_DELETE_BATCH_SIZE) {
+      const batch = paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE);
+      const { error } = await supabaseAdmin.storage.from(PAYMENT_METHOD_QRS_BUCKET).remove(batch);
+      if (error && !isMissingObjectError(error)) {
+        failedPaths.push(...batch);
+      } else {
+        deletedPaths.push(...batch);
+      }
+    }
+
+    return { deletedPaths, failedPaths };
   }
 };

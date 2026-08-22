@@ -39,6 +39,8 @@ export type AppointmentImageStorageObject = {
   isFolder: boolean;
 };
 
+const STORAGE_DELETE_BATCH_SIZE = 100;
+
 type GeneratePathsInput = {
   userId: string;
   clientId?: string | null;
@@ -347,5 +349,42 @@ export const appointmentImageStorageService = {
         isFolder: record.id === null || record.id === undefined && !record.metadata
       };
     });
+  },
+
+  async deleteUserPrefix(userId: string): Promise<{ deletedPaths: string[]; failedPaths: string[] }> {
+    const prefix = `users/${requireSafeId("user ID", userId)}`;
+    const pendingPrefixes = [prefix];
+    const paths: string[] = [];
+
+    while (pendingPrefixes.length > 0) {
+      const currentPrefix = pendingPrefixes.pop() as string;
+      let offset = 0;
+      for (;;) {
+        const objects = await this.listObjects(currentPrefix, { limit: STORAGE_DELETE_BATCH_SIZE, offset });
+        if (objects.length === 0) break;
+        for (const object of objects) {
+          if (object.isFolder) pendingPrefixes.push(object.path);
+          else paths.push(object.path);
+        }
+        if (objects.length < STORAGE_DELETE_BATCH_SIZE) break;
+        offset += objects.length;
+      }
+    }
+
+    const deletedPaths: string[] = [];
+    const failedPaths: string[] = [];
+    for (let index = 0; index < paths.length; index += STORAGE_DELETE_BATCH_SIZE) {
+      const batch = paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE);
+      try {
+        const { error } = await supabaseAdmin.storage.from(APPOINTMENT_IMAGES_BUCKET).remove(batch);
+        if (error && !isMissingObjectError(error)) throw error;
+        deletedPaths.push(...batch);
+      } catch (error) {
+        logStorageFailure("account prefix delete failed", error);
+        failedPaths.push(...batch);
+      }
+    }
+
+    return { deletedPaths, failedPaths };
   }
 };

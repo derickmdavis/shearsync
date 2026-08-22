@@ -24,6 +24,10 @@ export const processCampaignDeliveriesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
+export const processAccountDeletionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional()
+});
+
 export const queueAppointmentRemindersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   user_limit: z.coerce.number().int().min(1).max(100).optional(),

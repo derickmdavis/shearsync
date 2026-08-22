@@ -31,6 +31,7 @@ export const campaignAttributionService = {
     if (!campaign || campaign.status === "cancelled") throw new ApiError(404, "Campaign link is invalid or expired");
 
     const stylist = requireFound(await stylistsService.getByUserId(String(recipient.user_id)), "Campaign stylist not found");
+    await stylistsService.assertPublicAccountActive(stylist);
     const context: PublicBookingContext = {
       stylistSlug: String(stylist.slug),
       isExistingClient: true,

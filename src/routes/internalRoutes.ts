@@ -5,6 +5,7 @@ import { requireInternalApiSecret } from "../middleware/internalAuth";
 import { validate } from "../middleware/validate";
 import {
   cleanupAppointmentImagesQuerySchema,
+  processAccountDeletionsQuerySchema,
   processCampaignDeliveriesQuerySchema,
   processAppointmentEmailsQuerySchema,
   processSmsAppointmentRemindersQuerySchema,
@@ -22,6 +23,12 @@ import {
 
 export const internalRouter = Router();
 
+internalRouter.post(
+  "/account-deletions/process",
+  requireInternalApiSecret,
+  validate({ query: processAccountDeletionsQuerySchema }),
+  asyncHandler(internalController.processAccountDeletions)
+);
 internalRouter.post(
   "/account-access/expire",
   requireInternalApiSecret,

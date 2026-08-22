@@ -6,6 +6,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import { getCurrentLocalDate, getStartOfLocalDayUtc } from "../lib/timezone";
 import { businessTimeZoneService } from "./businessTimeZoneService";
 import { clientsService } from "./clientsService";
+import { stylistsService } from "./stylistsService";
 import type { Row, RowList } from "./db";
 import { handleSupabaseError } from "./db";
 import { recordProductTelemetry } from "./productTelemetry";
@@ -874,6 +875,8 @@ export const referralLinksService = {
 
     const referrerClient = requireFound(clientResult.data, "Referral link not found");
     const stylist = requireFound(stylistResult.data, "Referral stylist not found");
+
+    await stylistsService.assertPublicAccountActive(stylist);
 
     if (options.requireBookingEnabled && stylist.booking_enabled !== true) {
       throw new ApiError(409, "Online booking is not enabled for this stylist");

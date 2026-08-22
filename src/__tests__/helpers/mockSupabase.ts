@@ -4,7 +4,9 @@ import { supabaseAdmin } from "../../lib/supabase";
 
 type TableRow = Record<string, unknown>;
 type TableState = Record<string, TableRow[]>;
-type QueryLogEntry = { table: string; operation: "in"; column: string; values: unknown[] };
+type QueryLogEntry =
+  | { table: string; operation: "in"; column: string; values: unknown[] }
+  | { table: string; operation: "range"; start: number; end: number };
 interface MockSupabaseOptions {
   queryLog?: QueryLogEntry[];
 }
@@ -214,6 +216,7 @@ class MockQueryBuilder implements PromiseLike<{ data: unknown; error: null; coun
   }
 
   range(start: number, end: number) {
+    this.options.queryLog?.push({ table: this.table, operation: "range", start, end });
     this.rangeStart = start;
     this.rangeEnd = end;
     return this;
@@ -1346,6 +1349,86 @@ const executeTwilioSmsDeliveryStatusRpc = (state: TableState, args: Record<strin
   return { data: [{ updated: true, unmatched: false }], error: null };
 };
 
+const executeRequestAccountDeletionRpc = (state: TableState, args: Record<string, unknown>) => {
+  const snapshot = cloneState(state);
+  const userId = String(args.p_user_id ?? "");
+  const requestedAt = String(args.p_requested_at ?? new Date().toISOString());
+
+  try {
+    const user = getRows(state, "users").find((row) => row.id === userId);
+    if (!user) throw new Error("account_not_found");
+    if (getRows(state, "admin_users").some((row) => row.user_id === userId && row.is_active === true)) {
+      return { data: { active_administrator: true }, error: null };
+    }
+
+    const activeStatuses = new Set(["pending", "processing", "failed_retryable"]);
+    const existing = getRows(state, "account_deletion_requests")
+      .filter((row) => row.user_id === userId && activeStatuses.has(String(row.status)))
+      .sort((left, right) => String(right.requested_at ?? "").localeCompare(String(left.requested_at ?? "")))[0];
+    const duplicate = Boolean(existing);
+    const request = existing ?? {
+      id: randomUUID(),
+      user_id: userId,
+      status: "pending",
+      reason: args.p_reason ?? null,
+      client_request_id: args.p_client_request_id ?? null,
+      requested_at: requestedAt,
+      scheduled_deletion_at: args.p_scheduled_deletion_at ?? null,
+      created_ip_hash: args.p_created_ip_hash ?? null,
+      created_user_agent: args.p_created_user_agent ?? null,
+      created_at: requestedAt,
+      updated_at: requestedAt
+    };
+    if (!existing) getRows(state, "account_deletion_requests").push(request);
+
+    Object.assign(user, {
+      account_status: "inactive",
+      deactivated_at: duplicate ? user.deactivated_at ?? requestedAt : requestedAt,
+      deletion_status: request.status === "processing" ? "processing" : "pending",
+      deletion_requested_at: user.deletion_requested_at ?? request.requested_at ?? requestedAt
+    });
+    for (const stylist of getRows(state, "stylists")) {
+      if (stylist.user_id === userId) stylist.booking_enabled = false;
+    }
+
+    const cancel = (table: string, statuses: string[], payload: TableRow) => {
+      for (const row of getRows(state, table)) {
+        if (row.user_id === userId && statuses.includes(String(row.status))) Object.assign(row, payload);
+      }
+    };
+    cancel("rebook_nudges", ["pending_approval", "queued", "sending", "failed"], { status: "cancelled", cancelled_at: requestedAt, cancelled_reason: "account_deletion_requested" });
+    cancel("birthday_reminders", ["queued", "sending", "failed"], { status: "cancelled", cancelled_at: requestedAt, cancelled_reason: "account_deletion_requested" });
+    cancel("appointment_email_events", ["queued", "sending", "failed"], { status: "skipped", error: "account_deletion_requested" });
+    cancel("sms_messages", ["queued", "sending", "failed"], { status: "cancelled", error_code: "account_deletion_requested", error_message: "Account deletion requested" });
+    cancel("appointment_sms_confirmation_jobs", ["pending", "queued"], { status: "skipped", error_code: "account_deletion_requested", error_message: "Account deletion requested" });
+    cancel("thank_you_emails", ["pending_approval", "queued", "sending", "failed"], { status: "cancelled", cancelled_at: requestedAt, cancelled_reason: "account_deletion_requested" });
+    cancel("campaigns", ["draft", "scheduled"], { status: "cancelled", cancelled_at: requestedAt, cancelled_reason: "account_deletion_requested" });
+    cancel("campaign_runs", ["draft", "scheduled", "queued"], { status: "cancelled", cancelled_at: requestedAt });
+    cancel("campaign_recipients", ["pending", "queued", "failed"], { status: "cancelled", cancelled_at: requestedAt, error_code: "account_deletion_requested" });
+
+    getRows(state, "account_deletion_audit_events").push({
+      id: randomUUID(),
+      request_id: request.id,
+      user_id: userId,
+      event_type: duplicate ? "duplicate_request" : "requested",
+      metadata: { clientRequestId: args.p_client_request_id ?? null, authSource: args.p_auth_source ?? null },
+      created_at: requestedAt
+    });
+    return { data: { request: cloneRow(request), duplicate }, error: null };
+  } catch (error) {
+    restoreState(state, snapshot);
+    return {
+      data: null,
+      error: {
+        message: error instanceof Error ? error.message : "Account deletion request mock RPC failed",
+        details: null,
+        hint: null,
+        code: "MOCK_RPC_FAILED"
+      }
+    };
+  }
+};
+
 const currentMonth = (): string => new Date().toISOString().slice(0, 7) + "-01";
 
 const executeSmsUsageRpc = (state: TableState, functionName: string, args: Record<string, unknown>) => {
@@ -1396,7 +1479,9 @@ export const installMockSupabase = (initialState: TableState, options: MockSupab
   );
   const fromRestore = mock.method(supabaseAdmin, "from", (table: string) => new MockQueryBuilder(state, table, options));
   const rpcRestore = mock.method(supabaseAdmin, "rpc", (functionName: string, args: Record<string, unknown> = {}) =>
-    functionName === "apply_twilio_sms_delivery_status"
+    functionName === "request_account_deletion"
+      ? executeRequestAccountDeletionRpc(state, args)
+      : functionName === "apply_twilio_sms_delivery_status"
       ? executeTwilioSmsDeliveryStatusRpc(state, args)
       : functionName === "reserve_sms_monthly_usage" || functionName === "release_sms_monthly_usage"
       ? executeSmsUsageRpc(state, functionName, args)
